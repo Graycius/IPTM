@@ -18,15 +18,12 @@ from pathlib import Path
 import re
 import secrets
 import shutil
-import socket
-import stat
 import subprocess
 import sys
 import tempfile
 import time
-from typing import Any
 
-VERSION = '5.20.22'
+VERSION = '5.20.25'
 ROOT = Path('/var/lib/iptm-network-runtime')
 STATE = ROOT / 'transaction.json'
 PLAN = ROOT / 'plan.json'
@@ -295,7 +292,7 @@ def validate_config(raw, live):
         uplink_names=set();default_names={x.get('dev') for x in live['default']}
         for idx,w in enumerate(uplinks):
             typed(w,{'interface','gateway','weight','address'},('interface','gateway','weight'))
-            dev=nic(w['interface']);gw=pure_ip(w['gateway']);weight=bounded(w['weight'],1,100)
+            dev=nic(w['interface']);gw=pure_ip(w['gateway']);bounded(w['weight'],1,100)
             if dev not in names or dev in uplink_names or dev==source:
                 raise NetworkError('WAN: interfaccia duplicata o assente')
             if idx==0 and dev not in default_names:raise NetworkError('WAN principale deve coincidere con route attuale')

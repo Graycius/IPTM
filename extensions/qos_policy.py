@@ -13,7 +13,7 @@ PLAN=BASE/'plan.json'; ACTIVE=BASE/'active.json'
 IFACE=re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$')
 TOKEN=re.compile(r'^[a-f0-9]{64}$')
 CHAIN=re.compile(r'^IPTM_QP_[A-F0-9]{8}$')
-VERSION='5.20.22'
+VERSION='5.20.25'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-policy-restore.service')
 SCRIPT=f'/usr/local/lib/iptables-manager/web/releases/{VERSION}/extensions/qos_policy.py'
 DSCP={'realtime':46,'interactive':34,'normal':0,'background':8}
@@ -259,18 +259,119 @@ def apply(sha):
         ipt('-F',new,check=False);ipt('-X',new,check=False)
         raise
 
+def live_chain_rules(chain, snapshot):
+    """Read live mangle rules; do not mistake a missing chain for an iptables failure."""
+    if not any(line == '-N '+chain for line in snapshot):
+        return None
+    result=ipt('-S',chain)
+    return [line for line in result.stdout.splitlines() if line.startswith('-A '+chain+' ')]
+
+
+def references(chain, snapshot):
+    """Find every jump/goto, not only the expected IPTM POSTROUTING hook."""
+    import shlex
+    refs=[]
+    for line in snapshot:
+        if not line.startswith('-A '):
+            continue
+        try:tokens=shlex.split(line)
+        except ValueError:raise PolicyError('regole iptables non leggibili: nessuna modifica')
+        if any(tokens[k] in ('-j','--jump','-g','--goto') and tokens[k+1]==chain
+               for k in range(len(tokens)-1)):
+            refs.append(line)
+    return refs
+
+
+def alternate_backend_present(chain):
+    """Do not forget a policy merely because the iptables backend switched."""
+    import shutil
+    for binary in ('iptables-nft','iptables-legacy'):
+        if not shutil.which(binary):continue
+        r=cmd(binary,'-w','5','-t','mangle','-S',chain,check=False)
+        if r.returncode==0:return binary
+    return None
+
+
+def retire_restore_unit():
+    """Stop future restoration only for a recognizably IPTM-owned unit."""
+    if UNIT.is_symlink():return 'unità di ripristino non verificata: conservata'
+    if not UNIT.exists():return None
+    try:content=UNIT.read_text()
+    except (OSError,UnicodeError):return 'unità di ripristino non leggibile: conservata'
+    if 'Description=IPTM QoS DSCP boot restore' not in content or 'qos_policy.py restore-boot' not in content:
+        return 'unità di ripristino non riconosciuta: conservata'
+    r=cmd('systemctl','disable',UNIT.name,check=False)
+    if r.returncode:return 'unità di ripristino non disabilitata: controllare systemd'
+    return None
+
+
 def disable():
+    """Idempotent, selective retirement of IPTM DSCP without flushing foreign rules.
+
+    A saved digest is an integrity diagnostic, not proof that everything in a
+    changed chain belongs to IPTM. Remove only rules described by the signed
+    local IPTM profile, keep all unrecognized rules, and retire a now-stale
+    state if iptables was reloaded without the chain. Never flush a chain.
+    """
     qos_state=pathlib.Path('/var/lib/iptm-qos-engine/active.json')
     if qos_state.exists() or qos_state.is_symlink():
         running=load(qos_state)
         if running and running.get('state') in ('pending','applying','confirmed','rollback-failed'):
             raise PolicyError('CAKE/IFB attivo: disabilitarlo in modo controllato prima della rimozione DSCP')
     old=load(ACTIVE)
-    if not old:return {'ok':True,'disabled':False}
-    if not matches_owned(old):raise PolicyError('catena modificata da terzi: arresto sicuro')
-    ipt('-D','POSTROUTING','-o',old['interface'],'-j',old['chain'])
-    ipt('-F',old['chain']);ipt('-X',old['chain']);ACTIVE.unlink()
-    return {'ok':True,'disabled':True}
+    if not old:return {'ok':True,'disabled':False,'reason':'già disattivato'}
+    data=validate_active(old)
+    chain=old['chain'];iface=data['interface']
+    # A full successful listing proves the mangle backend is available; no
+    # deletion of saved state on permissions/backend/iptables errors.
+    snapshot=ipt('-S').stdout.splitlines()
+    live=live_chain_rules(chain,snapshot)
+    refs=references(chain,snapshot)
+    if live is None:
+        if refs:raise PolicyError('riferimento a catena non presente: verifica firewall richiesta')
+        alternate=alternate_backend_present(chain)
+        if alternate:raise PolicyError('profilo ancora presente nel backend '+alternate+': nessuna modifica')
+        ACTIVE.unlink()
+        warning=retire_restore_unit()
+        result={'ok':True,'disabled':True,'stale':True,'removed_rules':0,
+                'foreign_preserved':False,'reason':'profilo non presente nel firewall: stato ripulito'}
+        if warning:result['warning']=warning
+        return result
+
+    # Only the exact IPTM rules from the validated local policy are eligible
+    # for deletion; other rules and foreign hooks always remain untouched.
+    removed=0
+    for rule in upload_rules(data['rules']):
+        args=rule_args(rule)
+        if ipt('-C',chain,*args,check=False).returncode==0:
+            ipt('-D',chain,*args)
+            removed+=1
+    # Refresh after each deletion; concurrent insertion of foreign rules is
+    # never a reason to flush the chain.
+    live=live_chain_rules(chain,ipt('-S').stdout.splitlines())
+    if live is None:raise PolicyError('catena eliminata durante la disattivazione: verifica firewall richiesta')
+    snapshot=ipt('-S').stdout.splitlines()
+    refs=references(chain,snapshot)
+    expected=f'-A POSTROUTING -o {iface} -j {chain}'
+    foreign=bool(live or any(ref != expected for ref in refs) or refs.count(expected)>1)
+    if not live:
+        # Only the exact IPTM hook may be removed, and only when the chain no
+        # longer contains any rule. This cannot interrupt third-party rules.
+        if refs==[expected]:
+            ipt('-D','POSTROUTING','-o',iface,'-j',chain)
+            refs=references(chain,ipt('-S').stdout.splitlines())
+        if not refs:
+            # -X refuses to delete a nonempty or referenced chain; no -F.
+            ipt('-X',chain)
+        else:
+            foreign=True
+    ACTIVE.unlink()
+    warning=retire_restore_unit()
+    result={'ok':True,'disabled':True,'removed_rules':removed,
+            'foreign_preserved':foreign,'reason':('regole IPTM rimosse; modifiche esterne conservate'
+                  if foreign else 'policy IPTM rimossa')}
+    if warning:result['warning']=warning
+    return result
 
 def main(args):
     secure()

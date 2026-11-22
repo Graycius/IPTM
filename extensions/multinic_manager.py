@@ -22,10 +22,10 @@ import time
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fabric_manager import FabricError, validate_fabric, plan_fabric, simulate_packet
+from fabric_manager import FabricError, validate_fabric, plan_fabric
 from traffic_fabric import propose as propose_traffic
 
-VERSION = '5.20.22'
+VERSION = '5.20.25'
 CONFIG_DIR = Path('/etc/iptables-manager')
 PROFILE_PATH = CONFIG_DIR / 'multinic-draft.json'
 IF_RX = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,14}$')

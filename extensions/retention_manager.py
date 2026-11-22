@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IPTM 5.20.22: conservative retention of IPTM-owned completed artifacts.
+"""IPTM 5.20.25: conservative retention of IPTM-owned completed artifacts.
 
 CLI is root-only. Preview and run share the SAME selection function. No deletion of
 live files, user-named backups, journals, locks, pending transactions or external logs.
@@ -15,7 +15,6 @@ import re
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 
 DATA = Path('/var/lib/iptables-manager')

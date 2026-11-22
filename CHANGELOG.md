@@ -1,5 +1,32 @@
+# IPTM 5.20.25 — DSCP selective safe disable
+
+- Disattivazione DSCP ripetibile anche dopo rigenerazione delle catene iptables: pulizia dello stato obsoleto quando la catena è assente e il backend mangle risponde regolarmente.
+- Rimozione esclusiva delle regole DSCP descritte dal profilo IPTM con controlli `iptables -C`; nessun flush o reset di tabelle/catene condivise.
+- Hook/catene/modifiche di terzi conservati quando contengono regole o riferimenti non riconosciuti; eliminata soltanto la catena rimasta vuota e senza riferimenti.
+- Persistenza systemd disabilitata solo quando la relativa unità è riconosciuta come IPTM; protezioni CAKE e controllo dei dati salvati conservati.
+- Messaggi di disattivazione differenziati tra profilo assente, rimozione completa e presenza di regole esterne.
+
+# IPTM 5.20.25 — CAKE senza blocco DSCP non verificato
+
+- Corretto il rifiuto «policy DSCP non verificata: classificazione ingresso sospesa» durante la prova CAKE: la classificazione download facoltativa viene esclusa, senza alterare le regole firewall esistenti.
+- CAKE/IFB conserva la gestione download e upload, incluso il redirect universale IFB e rollback.
+- Il controllo della proprietà DSCP viene eseguito prima di creare qdisc e IFB; le anomalie strutturali/di permessi continuano a bloccare in sicurezza.
+- Mostrato lo stato delle priorità download nella risposta della prova e nella pagina SQM.
+- Nessuna applicazione automatica di DSCP e nessuna disattivazione di servizi o catene di terze parti.
+
+# IPTM 5.20.25 — Aggiornamento versione Build 2
+
+- Incremento versione da 5.20.22 (Build 2) a 5.20.25 per aggiornamento web nativo.
+- Aggiornati loader, helper, riferimenti release, identificatori build e cache degli asset.
+- Nessuna modifica funzionale a firewall, DNS, servizi e interfaccia.
+
 ## IPTM 5.20.22 — UI chiara e navigazione senza sfondi blu
 
+- Build `20261122.2.iptm-5.20.22` (stessa versione 5.20.22): include le correzioni elencate di seguito.
+- Corretto un conflitto fatale con l'estensione PHP pgsql: la pagina Aggiornamenti usava la funzione `pg_update()`, omonima di una funzione di PHP; ora è `iptm_page_update()`.
+- Il pulsante «Copia dati CSV» dei grafici ora funziona: `charts.js` viene caricato e incluso nell'elenco degli asset consentiti.
+- Rimosso un `;;` residuo nel renderer; rimossi import e variabili inutilizzati nei moduli Python e due chiamate `tc filter show` eseguite a vuoto in `qos_engine.py`.
+- Rimossi dalla release i CSS sorgente `styles.css`, `networkui.css` e `console.css` (già contenuti in `app.css`, circa 187 KB in meno).
 - Corretto il selettore `nav` generico che applicava uno sfondo blu ai sei collegamenti della dashboard. Sfondo neutro e schede separate, con colori leggibili nei temi chiaro/scuro.
 - Semplificati i sei accessi principali: Interfacce, Zone, DNS, Accessi, Firewall e Applica. Conservate tutte le rotte e le azioni.
 - Rimossa la seconda navigazione ridondante nella pagina Stato; accessi essenziali all'inizio della dashboard.

@@ -6,13 +6,14 @@ A separately supervised systemd watchdog restores unconfirmed trials.
 Deliberately does not estimate internet bandwidth from NIC link speed.
 """
 from __future__ import annotations
-import fcntl, hashlib, ipaddress, json, os, pathlib, re, secrets, subprocess, sys, tempfile, time
+import fcntl, hashlib, json, os, pathlib, re, secrets, subprocess, sys, tempfile, time
 
-VERSION='5.20.22'
+VERSION='5.20.25'
 BASE=pathlib.Path('/var/lib/iptm-qos-engine')
 LOCK=BASE/'lock';STAGE=BASE/'stage.json';STATE=BASE/'active.json'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-watchdog.service')
 SCRIPT=f'/usr/local/lib/iptables-manager/web/releases/{VERSION}/extensions/qos_engine.py'
+POLICY_ACTIVE=pathlib.Path('/var/lib/iptm-qos-policy/active.json')
 CALIB=BASE/'calibration.json'
 CALIB_LOG=BASE/'calibration-history.json'
 ADAPT=BASE/'adaptive.json'
@@ -257,7 +258,6 @@ def restore(state):
         state['state']='rollback-failed';atom(STATE,state);raise
     iface=state['interface'];ifb=state['ifb']
     # Only delete ingress if IPTM added it and the filter still targets our IFB.
-    ing=run(['tc','filter','show','dev',iface,'parent','ffff:'],check=False).stdout
     if state.get('ingress_added'):
         expected=1+int(state.get('ingress_policy_count',0))
         # If an outside manager added actions, protect its filters. The
@@ -284,13 +284,21 @@ def restore(state):
     return {'ok':True,'state':'rolled-back','interface':iface}
 
 def ingress_policy(iface):
-    """Read the separately confirmed, owned IPTM policy; never trust a plan.
+    """Load only verifiably owned DSCP rules, otherwise use plain IFB ingress.
 
-    Port is the remote service port (TCP/UDP source port on ingress), while
-    a configured local source CIDR becomes destination CIDR on ingress.
+    CAKE shaping and the IFB catch-all redirect work without an optional
+    classification profile. A stale DSCP *ownership* record must never cause
+    CAKE to fail after qdiscs were created. We do not adopt, restore, remove
+    or rewrite the mismatching iptables chain. Unsafe/malformed state still
+    fails closed, rather than silently trusting attacker-supplied rules.
+
+    Remote service port is source port on ingress; a local source CIDR becomes
+    destination CIDR. Status is persisted for the UI and the watchdog.
     """
-    file=pathlib.Path('/var/lib/iptm-qos-policy/active.json')
-    if file.is_symlink() or not file.exists():return []
+    file=POLICY_ACTIVE
+    if file.is_symlink():
+        raise QosError('profilo DSCP simbolico: controllo manuale richiesto')
+    if not file.exists():return [],'not-configured'
     st=file.stat()
     if not file.is_file() or st.st_uid or (st.st_mode & 0o077):
         raise QosError('profilo DSCP persistente non protetto')
@@ -299,11 +307,18 @@ def ingress_policy(iface):
     spec=importlib.util.spec_from_file_location('iptm_qos_policy_ingress',policy_file)
     policy=importlib.util.module_from_spec(spec);spec.loader.exec_module(policy)
     raw=json.loads(file.read_text())
-    if raw.get('interface')!=iface:return []
+    if not isinstance(raw,dict):raise QosError('profilo DSCP non valido')
+    if raw.get('interface')!=iface:return [],'other-interface'
     normalized=policy.validate_active(raw)
     if not policy.matches_owned(raw):
-        raise QosError('policy DSCP non verificata: classificazione ingresso sospesa')
-    return [dict(item,dscp=policy.DSCP[item['priority']]) for item in normalized['rules'] if item.get('direction','both') in ('both','download') and policy.DSCP[item['priority']]]
+        # The on-disk profile is not proof of live kernel ownership. Preserve
+        # both the foreign chain and network connectivity. DSCP classification
+        # is disabled only for this CAKE transaction (not firewall egress).
+        return [],'unverified'
+    rules=[dict(item,dscp=policy.DSCP[item['priority']])
+           for item in normalized['rules']
+           if item.get('direction','both') in ('both','download') and policy.DSCP[item['priority']]]
+    return rules,'verified'
 
 def ingress_flower_args(iface,ifb,rule,order):
     """Preserve ECN on IPv4; checksum fix precedes redirect into IFB.
@@ -342,6 +357,12 @@ def install_topology(obj):
     The state file must already identify the new transaction and boot.
     """
     iface=obj['interface'];ifb=obj['ifb']
+    # Inspect the optional policy before any kernel mutation. Unknown ownership
+    # means no ingress DSCP filters, but CAKE/IFB still gets its catch-all.
+    rules,policy_status=ingress_policy(iface)
+    obj['ingress_policy_status']=policy_status
+    obj['ingress_policy_count']=len(rules)
+    atom(STATE,obj)
     run(['ip','link','add','dev',ifb,'type','ifb'])
     obj['ifb_ifindex']=identity(ifb)['ifindex'];atom(STATE,obj)
     run(['ip','link','set','dev',ifb,'up'])
@@ -351,15 +372,11 @@ def install_topology(obj):
     obj['ingress_added']=True;atom(STATE,obj)
     # Optional application-aware ingress classification must be installed
     # before the catch-all; any unsupported tc action aborts the entire trial.
-    rules=ingress_policy(iface)
-    obj['ingress_policy_count']=len(rules)
-    atom(STATE,obj)
     for n,rule in enumerate(rules):run(ingress_flower_args(iface,ifb,rule,n))
     run(['tc','filter','add','dev',iface,'parent','ffff:','protocol','all','pref','500',
          'u32','match','u32','0','0','action','mirred','egress','redirect','dev',ifb])
     if qroots(iface)[0].get('handle')!='5ca1:' or qroots(ifb)[0].get('handle')!='5ca2:':
         raise QosError('verifica CAKE root non superata')
-    out=run(['tc','filter','show','dev',iface,'parent','ffff:']).stdout
     if not ingress_filters_verified(iface,ifb,len(rules)):
         raise QosError('IFB redirect o filtri applicativi non verificati')
     return True
@@ -387,7 +404,9 @@ def activate(digest):
         install_topology(obj)
         obj['state']='pending';atom(STATE,obj);STAGE.unlink(missing_ok=True)
         return {'ok':True,'state':'pending','token':obj['token'],'deadline':obj['deadline'],
-                'interface':iface,'ifb':ifb,'up_mbit':obj['up_mbit'],'down_mbit':obj['down_mbit']}
+                'interface':iface,'ifb':ifb,'up_mbit':obj['up_mbit'],'down_mbit':obj['down_mbit'],
+                'ingress_policy_status':obj['ingress_policy_status'],
+                'ingress_policy_count':obj['ingress_policy_count']}
     except Exception:
         # Independent watcher will retry if direct cleanup fails.
         try:restore(obj)

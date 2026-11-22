@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""IPTM 5.20.22: non-invasive diagnostics adapted from IPTM 6.11.3.
+"""IPTM 5.20.25: non-invasive diagnostics adapted from IPTM 6.11.3.
 
 Concepts adopted from IPTM6 acceptance, external_checks, suricata_inspect
 and legacy_audit. This is NOT the IPTM6 root worker and deliberately has no
 mutation APIs. The report is local evidence, not proof of LAN/WAN reachability.
 """
-import ipaddress
 import json
 import os
 import pathlib
@@ -14,7 +13,6 @@ import socket
 import struct
 import subprocess
 import sys
-import time
 
 SERVICES=(('pihole-FTL','Pi-hole FTL'),('unbound','Unbound'),('crowdsec','CrowdSec'),('suricata','Suricata'))
 TX_PATHS=(('/var/lib/iptm-network-runtime/transaction.json','Rete'),

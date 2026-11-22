@@ -57,7 +57,14 @@ case 'qos_policy_apply': {
 case 'qos_policy_disable': {
     $back='p=sqm';if(($_SESSION['role']??'viewer')!=='admin'){flash('Admin richiesto','err');break;}
     [$c,$out,$err]=priv('qos-policy',null,['disable']);$j=json_decode($out,true);
-    flash($c===0&&!empty($j['ok'])?'Classificatore IPTM disattivato.':'Disattivazione non riuscita: '.herr((string)($j['error']??$err??$out)),$c===0&&!empty($j['ok'])?'ok':'err');break;
+    $ok=$c===0&&!empty($j['ok']);
+    if($ok){
+        $message=!empty($j['foreign_preserved'])?'Priorità IPTM rimosse. Regole esterne conservate.':
+            (!empty($j['stale'])?'Profilo DSCP non più presente: stato ripulito.':'Priorità IPTM disattivate.');
+        if(!empty($j['warning']))$message.=' '.herr((string)$j['warning']);
+        flash($message,'ok');
+    }else flash('Disattivazione DSCP non riuscita: '.herr((string)($j['error']??$err??$out)),'err');
+    break;
 }
 case 'qos_calibrate_start': {
     $back='p=sqm';
@@ -123,7 +130,9 @@ case 'qos_apply': {
     }
     $_SESSION['iptm_qos_active']=['token'=>$j['token'],'created'=>time(),'profile'=>$pending['profile']];
     unset($_SESSION['iptm_qos_stage']);
-    flash('CAKE + IFB in prova, rollback automatico alla scadenza. Verifica HTTPS, DNS e SSH prima di confermare.','ok');
+    $policyNotice=(($j['ingress_policy_status']??'')==='unverified')
+        ?' Priorità download non attive: policy DSCP da verificare; nessuna regola firewall modificata.' : '';
+    flash('CAKE/IFB in prova con rollback automatico. Verifica rete e accesso amministrativo.'.$policyNotice,'ok');
     break;
 }
 case 'qos_commit':case 'qos_revert': {

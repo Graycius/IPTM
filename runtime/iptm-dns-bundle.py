@@ -8,7 +8,6 @@ Never reload or restart DNS services automatically.
 import argparse
 import datetime as dt
 import hashlib
-import io
 import json
 import os
 from pathlib import Path

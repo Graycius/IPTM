@@ -4,7 +4,7 @@
 This NEVER routes or intercepts a device transparently. Each client must opt in
 by configuring its proxy and trusting a locally generated CA if HTTPS is needed.
 """
-import ipaddress,json,os,pathlib,re,stat,subprocess,sys,tempfile,time
+import ipaddress,json,os,pathlib,re,subprocess,sys,tempfile,time
 POLICY=pathlib.Path('/etc/iptables-manager/traffic-optin.json')
 BK=pathlib.Path('/var/lib/iptables-manager/backups/traffic-optin')
 

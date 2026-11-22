@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import json
 import re
-import ipaddress
-import os
 import pathlib
 import math
 import socket

@@ -5,7 +5,7 @@ Only curated ELF and standard Lua assets are copied from an official HTTPS
 GitHub release. Never run upstream shell installers or insert NFQUEUE rules.
 """
 from __future__ import annotations
-import hashlib,io,json,os,pathlib,re,sys,tarfile,tempfile,platform,subprocess,shutil
+import hashlib,json,os,pathlib,re,sys,tarfile,tempfile,subprocess,shutil
 import zapret_manager as classic
 
 API='https://api.github.com/repos/bol-van/zapret2/releases/latest'

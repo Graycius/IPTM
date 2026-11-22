@@ -7,7 +7,7 @@ checks integrity, not publisher identity; HTTP downloads and unsigned packages
 remain allowed by user request.
 """
 from __future__ import annotations
-import hashlib,json,os,pathlib,re,shutil,stat,subprocess,sys,tempfile,zipfile,tokenize,time,traceback
+import hashlib,json,os,pathlib,re,shutil,stat,subprocess,sys,tempfile,zipfile,tokenize,time
 
 VERSION_RX=re.compile(r'[0-9]+(?:\.[0-9]+){2,3}\Z')
 PATH_RX=re.compile(r'(?:modules/[0-9]{2}_[a-z0-9_]+\.php|actions/[a-z_]+\.php|assets/[a-z]+\.(?:css|js)|extensions/[a-z0-9_]+\.py|runtime/iptm-[a-z-]+(?:\.py)?|loader/iptables-manager\.php|CHANGELOG\.md)\Z')

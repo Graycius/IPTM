@@ -19,7 +19,7 @@ import subprocess
 import sys
 from typing import Any
 
-VERSION = '5.20.22'
+VERSION = '5.20.25'
 MAX_FILES = 384
 MAX_FILE_BYTES = 256 * 1024
 IFACE_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,14}$')

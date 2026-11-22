@@ -31,7 +31,11 @@ function pg_sqm() {
         if($admin)echo '<form method="post">'.fh('p=sqm').'<button class="s" name="action" value="qos_postinstall_ensure">Verifica e completa migrazione QoS</button></form>';
         echo '</div>';
     }
-    if(isset($state['ingress_policy_count'])) echo '<p class="mut">Filtri applicativi ingresso prima di IFB: <b>'.h((string)$state['ingress_policy_count']).'</b> (oltre al redirect generale). L’attivazione viene rifiutata quando il kernel non supporta la classificazione richiesta.</p>';
+    if(in_array((string)($state['state']??''),['pending','confirmed'],true)){
+        $dscpStatus=(string)($state['ingress_policy_status']??'');
+        if($dscpStatus==='unverified')echo '<div class="msg warn">CAKE attivo, priorità download sospese: policy DSCP non verificata. Il redirect IFB funziona; per ripristinare le priorità, disabilita CAKE in modo controllato e riconfigura la policy.</div>';
+        elseif($dscpStatus==='verified')echo '<p class="mut">Priorità download: '.h((string)($state['ingress_policy_count']??0)).' filtri verificati.</p>';
+    }
     echo '<section id="iptm-qos-calibration" class="iptm-qos-section"><div class="iptm-qos-section-heading"><h3>Calibrazione e controllo RTT</h3><p class="mut">Misure, automazione e latenza sotto carico</p></div><div class="iptm-qos-control-grid">';
     echo '<div class="card iptm-qos-panel"><h3>Calibrazione manuale · Download / Upload</h3>';
     echo '<p class="mut">Due speedtest reali bidirezionali: con Ookla CLI ufficiale. Job systemd separato; nessuna qdisc viene modificata. In caso di velocità peggiorata o prove incoerenti restano gli ultimi valori validi.</p>';

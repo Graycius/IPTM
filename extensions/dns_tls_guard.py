@@ -21,7 +21,7 @@ import time
 import secrets
 from datetime import datetime, timezone
 
-VERSION='5.20.22'
+VERSION='5.20.25'
 CONFIG_CANDIDATES=(Path('/etc/dnscrypt-proxy/dnscrypt-proxy.toml'),Path('/etc/dnscrypt-proxy.toml'))
 BACKUP=Path('/var/lib/iptables-manager/backups/dns-guard')
 EVE=Path('/var/log/suricata/eve.json')
@@ -356,7 +356,6 @@ def apply(plan):
     if not binary:fail('dnscrypt-proxy non installato')
     cfg=locate_config();file_is_safe(cfg)
     cfg_stat=cfg.stat()
-    original_mode=stat.S_IMODE(cfg_stat.st_mode)
     if shutil.which('systemctl') is None or subprocess.run(['systemctl','is-active','--quiet','dnscrypt-proxy'],timeout=8,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode!=0:
         fail('Il servizio dnscrypt-proxy non risulta attivo: nessuna modifica')
     for item in (plan['primary'],plan['secondary']):probe_stamp(item)

@@ -6,7 +6,7 @@ A distinct root-owned key encrypts the password on disk through GnuPG AES256.
 Encryption on the same host does not defend against root compromise.
 """
 from __future__ import annotations
-import base64, fcntl, json, os, pathlib, secrets, shutil, stat, subprocess, sys, tempfile
+import base64, fcntl, json, os, pathlib, secrets, shutil, subprocess, sys, tempfile
 
 STORE = pathlib.Path('/etc/iptables-manager-secrets')
 KEY = STORE/'storage.key'

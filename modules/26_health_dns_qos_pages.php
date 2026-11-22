@@ -413,7 +413,7 @@ function pg_status() {
     echo '</details>';
 }
 
-function pg_update(): void {   // distribuzione nativa modulare
+function iptm_page_update(): void {   // distribuzione nativa modulare
     $ro = ($_SESSION['role'] ?? 'viewer') === 'viewer'; [, $hv] = priv('version'); $hv = trim($hv) ?: '?';
     $bk = glob(DATA_DIR . '/iptables-manager.php.bak-*') ?: []; rsort($bk);
     echo '<div class=card><h2>Aggiornamento completo da web</h2><p>Versione installata: applicazione <code>' . h(APP_VERSION) . '</code> · build <code>' . h(APP_BUILD) . '</code> · helper <code>' . h($hv) . '</code>.</p>';

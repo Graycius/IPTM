@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Transactional Unbound hardening profiles for IPTM. All inputs are allowlisted."""
-import json,os,pathlib,re,shutil,stat,subprocess,sys,tempfile,time
+import json,os,pathlib,re,shutil,stat,subprocess,sys,tempfile
 from datetime import datetime,timezone
 PROFILES={
 'balanced':{'hide-identity':'yes','hide-version':'yes','harden-glue':'yes','harden-dnssec-stripped':'yes','qname-minimisation':'yes','qname-minimisation-strict':'no','aggressive-nsec':'yes','prefetch':'yes','minimal-responses':'yes','log-queries':'no','log-replies':'no'},

@@ -1,66 +1,98 @@
 # IPTM — Network Control
 
-**IPTM** è una console web per gestire e diagnosticare firewall, interfacce, rete locale, DNS e servizi di sicurezza su sistemi **DietPi / Debian**. L’interfaccia raggruppa le funzioni secondo il percorso della rete: connessione → dispositivi → DNS → accessi → firewall → applicazione delle modifiche.
+**Versione attuale: 5.20.25** · [Sorgenti](./) · [Pacchetti ZIP](release/) · [Novità](CHANGELOG.md)
 
-![Anteprima illustrativa dell'interfaccia IPTM](docs/images/dashboard-overview.svg)
+IPTM è una console web per amministrare **rete, iptables, DNS e servizi di sicurezza** su **DietPi/Debian**. L'interfaccia organizza le funzioni per percorso di rete: **Interfacce → Zone → DNS → Accessi → Firewall → Applica**.
 
-*Anteprima schematica della UI: non rappresenta dati live né lo stato di un dispositivo reale.*
+![Anteprima illustrativa della console IPTM](docs/images/dashboard-overview.svg)
+
+*Immagine schematica della console, non un'acquisizione di uno stato di rete reale.*
 
 ## Funzionalità
 
-- **Firewall:** gestione delle regole iptables, IPv4/IPv6, NAT, bozze, verifiche e applicazione con protezioni anti-lockout.
-- **Rete:** interfacce WAN/LAN, VLAN, zone IoT, inventario dei dispositivi e politiche di accesso.
-- **DNS e privacy:** strumenti e integrazioni per Pi-hole, Unbound e DNSCrypt, quando presenti sul sistema.
-- **Sicurezza:** diagnostica e integrazioni opzionali per CrowdSec e Suricata.
-- **Prestazioni:** monitoraggio della rete, strumenti QoS/SQM e diagnostica dei servizi.
-- **Manutenzione:** backup, import/export, aggiornamento web nativo con manifest SHA-256 e pulizia conservativa dei componenti obsoleti.
+- **Rete e firewall:** interfacce WAN/LAN, NAT Single-NIC, iptables, IPv4/IPv6, VLAN e zone IoT.
+- **DNS e privacy:** configurazione e controlli per Pi-hole, Unbound, DNSCrypt e protezione anti-bypass (quando disponibili).
+- **Sicurezza:** diagnostica e strumenti per CrowdSec, Suricata, monitoraggio e regole personalizzate.
+- **QoS:** CAKE/SQM, IFB e politiche DSCP, con disattivazione selettiva delle catene IPTM e conservazione delle regole di terzi (5.20.25).
+- **Manutenzione:** backup, import/export, diagnostica e aggiornamenti web con manifest SHA-256 e procedure di recupero.
 
-Le integrazioni opzionali **non sono incluse automaticamente**: il loro funzionamento dipende da software, servizi e configurazioni disponibili sulla macchina.
+Alcune funzioni dipendono da servizi esterni installati e configurati separatamente. Non tutte vengono abilitate automaticamente.
 
-## Installazione e aggiornamento
+## Download
+
+| Uso | Pacchetto | 
+| --- | --- |
+| **Prima installazione** su DietPi/Debian | [IPTM_5_20_25_FRESH_INSTALL_DIETPI.zip](release/IPTM_5_20_25_FRESH_INSTALL_DIETPI.zip) |
+| **Aggiornamento** di IPTM esistente | [IPTM_5_20_25_DSCP_SAFE_DISABLE_NATIVE_WEB_UPDATE.zip](release/IPTM_5_20_25_DSCP_SAFE_DISABLE_NATIVE_WEB_UPDATE.zip) |
+
+I due ZIP **non sono intercambiabili**: il pacchetto Fresh Install usa `install.sh` e configura le componenti iniziali; il pacchetto Native Update si importa solo dalla console IPTM già installata.
+
+## Prima installazione su DietPi / Debian
 
 ### Requisiti
 
-- Sistema di riferimento: **DietPi / Debian GNU/Linux**, con i componenti di rete richiesti dalle funzioni utilizzate.
-- Un'**installazione IPTM già funzionante**, con console PHP, helper privilegiato e meccanismo di recupero dell'aggiornamento.
-- Accesso alla console come **amministratore** e un backup recente della configurazione.
+- DietPi o Debian con **systemd**, **Python 3**, Bash, `sudo`, `visudo`, `iptables` e strumenti iproute2.
+- **PHP 8 o superiore** (inclusa CLI) e un **server web già configurato per eseguire PHP** (Apache, Lighttpd o nginx + PHP-FPM).
+- Document root esistente, di proprietà di root e non scrivibile da gruppo/altri; utente effettivo del processo PHP noto (valore predefinito `www-data`).
+- Permessi di amministratore (`sudo`/root) per eseguire la prima installazione.
 
-### Aggiornare IPTM dalla console web
+> **Attenzione Pi-hole:** il server web integrato di Pi-hole non garantisce l'esecuzione di PHP. L'installer **non installa né configura il web server**, non cambia porte e non riavvia Pi-hole.
 
-1. Apri la console IPTM e accedi come **amministratore**.
-2. Vai a **Sistema e strumenti → Aggiornamenti** (pagina `?p=update`).
-3. Scarica l'archivio **Native Update** dalla cartella [`release/`](release/). Il pacchetto attualmente pubblicato con questi sorgenti è [`IPTM_5_20_22_CLEAN_UI_NATIVE_WEB_UPDATE.zip`](release/IPTM_5_20_22_CLEAN_UI_NATIVE_WEB_UPDATE.zip).
-4. Nella pagina Aggiornamenti seleziona **solo il file ZIP Native Update** e premi **Installa pacchetto completo**.
-5. Al termine verifica la versione indicata nella console e consulta **Salute sistema** per controllare i servizi.
+### Installazione da ZIP
 
-Il sistema verifica automaticamente il formato, il manifest, gli hash dei file e i meccanismi di recupero; effettua anche copie di sicurezza prima dell'aggiornamento. Se una verifica fallisce, l'aggiornamento può essere rifiutato per proteggere la rete.
+1. [Scarica il pacchetto per la prima installazione](release/IPTM_5_20_25_FRESH_INSTALL_DIETPI.zip) e copialo sul server.
+2. Apri un terminale nel percorso dove si trova lo ZIP, quindi esegui:
 
-> **Importante:** non decomprimere manualmente lo ZIP nelle cartelle di sistema; non caricare un archivio sorgenti o uno ZIP che contiene altri ZIP. Non applicare modifiche al firewall su un server remoto senza avere un percorso di recupero.
+   ```bash
+   unzip IPTM_5_20_25_FRESH_INSTALL_DIETPI.zip -d iptm-installer
+   cd iptm-installer
+   sudo bash install.sh --dry-run
+   sudo bash install.sh
+   ```
 
-### Prima installazione su un sistema nuovo
+3. Apri **`https://IP_DEL_SERVER/iptables-manager.php`** sulla **porta configurata per il server PHP esistente**. Se il server non dispone di TLS, usa un tunnel SSH o limita l'accesso a una rete fidata.
+4. Al primo accesso usa l'utente **`admin`**, e il codice temporaneo generato sul server per impostare la password:
 
-Il file **Native Update non è un installer da zero**: richiede un'installazione IPTM preesistente e non configura autonomamente web server, privilegi, helper e recovery. Il repository non contiene attualmente una procedura di bootstrap completa, verificata e supportata per un host vuoto. Non usare lo ZIP come installer iniziale.
+   ```bash
+   sudo cat /var/lib/iptables-manager/setup-token.txt
+   ```
+
+   Il token viene eliminato dopo la configurazione della password.
+
+Se la document root o l'utente PHP sono diversi:
+
+```bash
+sudo bash install.sh --web-root /percorso/document-root --web-user nome-utente-php
+```
+
+L'installer colloca la console in `iptables-manager.php`, il runtime in `/usr/local/lib/iptables-manager/`, l'helper in `/usr/local/sbin/iptm-helper`, dati sotto `/var/lib/iptables-manager/` e una unità di recupero aggiornamenti. Predispone anche una regola sudo per consentire all'utente PHP di invocare l'helper privilegiato: **proteggi rigorosamente l'accesso alla console**.
+
+Non sovrascrive un'installazione IPTM esistente. Non applica regole iptables, DNS, NAT, QoS o routing in fase di prima installazione. La funzionalità del sistema è stata verificata mediante simulazioni e controlli sintattici, **non collaudata end-to-end su tutte le versioni DietPi**.
+
+## Aggiornamento di un'installazione esistente
+
+1. Salva un backup della configurazione e assicurati di avere accesso di recupero alla macchina.
+2. Apri la console IPTM come amministratore e vai in **Sistema e strumenti → Aggiornamenti** (`?p=update`).
+3. Carica **solo** [l'archivio Native Update 5.20.25](release/IPTM_5_20_25_DSCP_SAFE_DISABLE_NATIVE_WEB_UPDATE.zip).
+4. Esegui l'installazione con la procedura integrata e controlla versione e stato dei servizi.
+
+**Non** estrarre il Native Update direttamente nelle directory di sistema. Gli hash del manifest verificano la coerenza dei file rispetto al pacchetto, ma **non costituiscono una firma crittografica dell'autore**.
 
 ## Struttura del repository
 
 | Percorso | Contenuto |
 | --- | --- |
-| `loader/` | Punto d'ingresso PHP della console |
-| `modules/` | Pagine e logica applicativa |
-| `actions/` | Gestione delle azioni autenticate |
-| `assets/` | Interfaccia, CSS e JavaScript locali |
-| `extensions/` | Moduli operativi e diagnostici Python |
-| `runtime/` | Helper e strumenti di sistema |
-| `release/` | ZIP installabili tramite aggiornamento web |
-| `native-manifest.json` | Versione e hash SHA-256 dei componenti |
+| `loader/` | Punto d'accesso della console PHP |
+| `modules/`, `actions/` | Interfaccia, configurazioni e azioni |
+| `assets/` | CSS e JavaScript |
+| `extensions/`, `runtime/` | Componenti Python e helper |
+| `installer/` | Sorgenti dell'installer Fresh Install |
+| `release/` | Pacchetti ZIP di installazione e aggiornamento |
+| `native-manifest.json` | Manifest dei sorgenti versione 5.20.25 |
 | `CHANGELOG.md` | Cronologia delle modifiche |
 
-## Sicurezza e verifiche
+## Sicurezza e licenza
 
-L'accesso ai componenti privilegiati è mediato dall'helper di sistema. Le modifiche che possono interrompere la connettività utilizzano controlli automatici e percorsi di recupero. Il manifest SHA-256 verifica l'integrità del pacchetto, **non prova da solo l'identità dell'autore**: scarica gli aggiornamenti soltanto da fonti fidate, preferibilmente via HTTPS.
+Le operazioni su iptables e DNS possono interrompere la connettività; utilizzare sempre il rollback e una via di accesso indipendente quando si gestiscono sistemi remoti. Evitare di esporre la console amministrativa su Internet.
 
-**Stato dei test:** sintassi e integrità dei pacchetti sottoposte a verifiche locali; la distribuzione non dichiara un collaudo end-to-end su ogni installazione DietPi.
-
-## Licenza
-
-Il repository include la licenza [GNU GPL v3](LICENSE). Verificare separatamente gli avvisi e le licenze degli eventuali componenti esterni.
+Licenza del repository: [GNU GPL v3](LICENSE). Le dipendenze di terze parti possono avere licenze distinte.

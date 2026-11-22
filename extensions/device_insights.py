@@ -7,12 +7,10 @@ No firewall modification, packet payload capture or persistent activity log.
 import collections
 import ipaddress
 import json
-import pathlib
 import selectors
 import time
 import re
 import subprocess
-import sys
 
 MAX_DATA = 1_000_000
 MAX_ROWS = 3500

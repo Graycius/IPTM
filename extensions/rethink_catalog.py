@@ -5,11 +5,11 @@ Use the upstream catalogue as a list of selectable sources. Never probe the
 reachability of individual lists to decide whether checkboxes may be selected.
 Import is still validated and its real outcome reported after API operations.
 """
-import concurrent.futures,hashlib,json,os,pathlib,re,stat,sys,tempfile,time,urllib.error,urllib.parse,urllib.request
+import hashlib,json,os,pathlib,stat,sys,tempfile,time,urllib.error,urllib.parse,urllib.request
 
 URL='https://raw.githubusercontent.com/serverless-dns/blocklists/main/config.json'
 CACHE=pathlib.Path('/var/cache/iptm-rethinkdns/catalog.json')
-USER_AGENT='IPTM-catalog-check/5.20.22'
+USER_AGENT='IPTM-catalog-check/5.20.25'
 MAX_AGE=24*3600
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

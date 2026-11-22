@@ -1,7 +1,7 @@
 <?php
-// APP_VERSION = '5.20.22';
+// APP_VERSION = '5.20.25';
 // Physical modules: no executable code in a web-writable directory.
-define('IPTM_RELEASE_DIR', '/usr/local/lib/iptables-manager/web/releases/5.20.22');
+define('IPTM_RELEASE_DIR', '/usr/local/lib/iptables-manager/web/releases/5.20.25');
 // Small, public, version-pinned static resource endpoint. It reads ONLY known
 // CSS/JS files shipped in the root-owned, immutable native release directory.
 // No session, helper, network probe or config is needed to serve UI resources.
@@ -9,7 +9,7 @@ if (isset($_GET['iptm_asset'])) {
   $name = $_GET['iptm_asset'];
   $allowed = ['app.css','firewall.js','rules.js','wizard.js','forms.js',
     'interface.js','diagnostics.js','domains.js','topology.js',
-    'console.js','networkui.js','preferences.js'];
+    'console.js','networkui.js','preferences.js','charts.js'];
   if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET' && ($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') {
     header('Allow: GET, HEAD'); http_response_code(405); exit;
   }
@@ -25,7 +25,7 @@ if (isset($_GET['iptm_asset'])) {
   if (!is_int($size) || $size < 1 || $size > 1048576) {
     http_response_code(503); header('Cache-Control: no-store'); exit;
   }
-  $etag = '"iptm-5.20.22-' . $name . '-' . $size . '"';
+  $etag = '"iptm-5.20.25-' . $name . '-' . $size . '"';
   header('Content-Type: ' . $mime . '; charset=utf-8');
   header('X-Content-Type-Options: nosniff');
   header('Cross-Origin-Resource-Policy: same-origin');
