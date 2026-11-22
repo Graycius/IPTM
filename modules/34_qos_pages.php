@@ -108,7 +108,6 @@ function pg_sqm() {
             echo '<form method="post">'.fh('p=sqm').'<input type="hidden" name="action" value="qos_apply"><input type="hidden" name="plan_sha256" value="'.h($sha).'"><button class="g">Applica prova CAKE/IFB con rollback</button></form>';
         }
     }
-    if (function_exists('iptm_operator_insights')) iptm_operator_insights('qos');
     // IPTM-owned egress DSCP priorities. CAKE diffserv consumes these markings.
     [$pc,$pj,$pe]=priv('qos-policy',null,['status']);
     $policy=$pc===0?json_decode($pj,true):null;
