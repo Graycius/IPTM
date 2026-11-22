@@ -1,0 +1,21 @@
+# runtime, cache, log e credenziali
+__pycache__/
+*.py[cod]
+*.log
+*.bak
+*.backup
+*.swp
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.sqlite
+*.db
+*.pid
+*.sock
+*.tmp
+*.tar.gz
+# l'archivio originale si distribuisce come asset della release
+release/*.zip

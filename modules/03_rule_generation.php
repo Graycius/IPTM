@@ -1,0 +1,1053 @@
+<?php
+// ===================== IMPOSTAZIONI "STILE DD-WRT" -> REGOLE GESTITE =====================
+// Le impostazioni (settings.json) generano blocchi di regole delimitati da
+//   # >>> IPTM:<id> ...   /   # <<< IPTM:<id>
+// dentro rules.v4. Il resto del file (le tue regole) non viene toccato.
+function S_def(): array {
+    return ['iot_strategy' => 'auto', 'wan_if' => '', 'single_nic' => 0, 'lan_nets' => '', 'masq_ifs' => '', 'drop_chain' => '', 'nat_masq' => 0, 'mss' => 0, 'dns_redirect' => 0, 'dns_ip' => '', 'dot_block' => 0,
+        'spi' => 0, 'antispoof' => 0, 'antispoof_mc' => 0, 'spoof_on' => 0, 'spoof_if' => '', 'spoof_nets' => '', 'invalid' => 0, 'blockping' => 0, 'ident' => 0, 'multicast' => 0,
+        'icmp_limit' => 0, 'icmp_echo_rate' => '2/sec', 'icmp_echo_burst' => 5, 'icmp_other_rate' => '5/sec', 'icmp_other_burst' => 10, 'igmp_accept' => 0,
+        'lan_tcp_accept' => 0, 'docker_accept' => 0, 'docker_nets' => '172.16.0.0/12', 'bcast_accept' => 0, 'dhcp_accept' => 1, 'coap_accept' => 0, 'lan_out_fwd' => 0, 'cs_set_match' => 0,
+        'dos' => 0, 'dos_name' => 'synflood', 'dos_syn' => 50, 'dos_burst' => 100, 'ssh_limit' => 0, 'ssh_port' => 22, 'telnet_limit' => 0, 'telnet_port' => 23, 'lim_hits' => 4, 'lim_secs' => 60,
+        'ssh_acc' => 0, 'ssh_nets' => '', 'ssh_acc_port' => 22, 'ssh_conn' => 10, 'ssh_hits' => 15, 'ssh_secs' => 60, 'ssh_name' => 'sshbf',
+        'crowdsec' => 0, 'cs_set' => '', 'cs_in' => CS_CHAIN, 'cs_fwd' => CS_CHAIN, 'cs_docker' => 1, 'conn_limit' => 0, 'cl_max' => 50, 'rpfilter' => 0, 'bw_on' => 0, 'bw_up' => 2000, 'bw_down' => 10000, 'mac_only' => 0, 'mac_allow' => '', 'alg_ftp' => 0, 'alg_tftp' => 0, 'alg_sip' => 0, 'fqdn_rules' => '', 'wg_on' => 0, 'wg_port' => 51820, 'wg_if' => 'wg0', 'wg_input' => 0, 'wg_lan' => 1, 'wg_net' => '', 'iso_on' => 0, 'iso_nets' => '', 'guest_on' => 0, 'guest_nets' => '', 'guest_ports' => '53,67', 'guest_allow' => '', 'mac_block' => '', 'quic_block' => 0, 'lan_cl' => 0, 'lan_cl_max' => 1000, 'svc_ban' => 0, 'sb_ports' => '22,23,3389,5900', 'sb_hits' => 6, 'sb_secs' => 60, 'sb_ban' => 3600, 'ui_nets' => '', 'bad_mss' => 0, 'udp_rl' => 0, 'ul_rate' => 200, 'ul_burst' => 400, 'web_rl' => 0, 'wl_rate' => 50, 'wl_burst' => 100, 'wl_ports' => '80,443', 'amp_block' => 0, 'bl_log' => 0, 'manual_allow' => '',
+        'closeports' => 0, 'close_range' => '1:1023', 'final_drop' => 0, 'logdrop_on' => 0, 'ld_src_rate' => '10/sec', 'ld_src_burst' => 20, 'ld_glob_rate' => '200/sec', 'ld_glob_burst' => 400, 'ld_prefix' => 'IPT-DROP: ',
+        'raw_lo' => 0, 'raw_drop' => 0, 'raw_tcp' => '135,137,138,139,445', 'raw_udp' => '135,137,138,139,445,1900',
+        'log_in' => 0, 'log_out' => 0, 'log_drop' => 0, 'log_rate' => '10/min', 'loopback' => 0, 'dmz_on' => 0, 'dmz_ip' => '', 'dmz_excl' => '22', 'fwd' => [], 'acl' => [], 'svc_in' => [], 'svc_fwd' => [], 'apps' => [],
+        'lockout_on' => 0, 'mgmt_ports' => '22,80,443,8089,8489', 'drop_frag' => 0, 'portscan' => 0, 'ps_hits' => 14, 'ps_secs' => 60, 'ps_ban' => 3600, 'bogon_wan' => 0, 'lan_flood' => 0, 'lf_rate' => 200, 'lf_burst' => 400, 'egress_smtp' => 0, 'egress_allow' => '', 'egress_ports' => '',
+        'stealth' => 0, 'synproxy' => 0, 'sp_ports' => '', 'tarpit' => 0, 'dns_rebind' => 0, 'raw_invalid' => 0, 'arp_protect' => 0, 'tcp_fastopen_off' => 0, 'glob_new_limit' => 0, 'gn_rate' => 100, 'gn_burst' => 200,
+        'harden' => ['rpf' => '2'], 'custom_opts' => [], 'aliases' => [], 'blocklists' => [], 'geo_on' => 0, 'geo_codes' => '', 'geo_dir' => 'in', 'manual_block' => '', 'knock_on' => 0, 'knock_ports' => '7000,8000,9000', 'knock_target' => '22', 'knock_secs' => 30, 'knock_nets' => '',
+        'iot_devices' => [], 'iot_policies' => [], 'api_token' => '', 'notify' => ['tg_token' => '', 'tg_chat' => '', 'webhook' => '', 'ev' => ['apply', 'confirm', 'revert', 'rollback', 'loginfail'], 'rule_on' => 0, 'rule_min' => 20, 'rule_patterns' => 'DROP,REJECT,IPTM-DROP,IPTM-IN,IPTM-OUT,CROWDSEC'], 'ti' => ['abuseipdb' => '', 'greynoise' => '', 'otx' => '', 'virustotal' => '', 'urlscan' => '', 'ipapi' => 0, 'threatfox' => 1, 'urlhaus' => 1, 'cache_hours' => 24], 'v6' => ['on' => 0, 'mode' => 'host', 'lan_if' => '', 'wan_if' => '', 'lan_prefix' => 'fe80::/10', 'icmp' => 1, 'dhcp6' => 1, 'ssh' => 1, 'ssh_port' => 22, 'ports' => '', 'log' => 0], 'sqm' => ['on' => 0, 'iface' => '', 'down' => 0, 'up' => 0, 'mode' => 'cake', 'diffserv' => 'diffserv4', 'ack_filter' => 1, 'nat' => 1, 'wash' => 0, 'overhead' => 'ethernet', 'prio_interactive' => 1, 'prio_voip' => 1, 'prio_games' => 1, 'prio_bulk_low' => 1, 'game_ports' => '27000:27050,3074,7777,25565', 'voip_ports' => '5060,5061,10000:10100', 'bulk_ports' => '6881:6999', 'auto' => 0, 'autocal' => 0, 'interval_min' => 60, 'last_cal' => 0]];
+}
+function S_get(): array { return $GLOBALS['_Sc'] ??= S_load(); }
+
+/** Legacy "tcp,udp" / "udp,tcp" / "both" represents two distinct iptables rules. */
+function svc_proto_choices(string $proto): array {
+    $p = strtolower((string)preg_replace('/\s+/', '', $proto));
+    return in_array($p, ['tcp,udp', 'udp,tcp', 'both'], true) ? ['tcp', 'udp'] : [$proto];
+}
+/** Merge defaults anche nei sotto-array (ti, notify, v6, …) così le chiavi nuove sopravvivono agli upgrade. */
+function settings_with_defaults(array $s): array {
+    $d = S_def();
+    $s = array_merge($d, $s);
+    foreach (['ti', 'notify', 'v6', 'sqm', 'harden'] as $k) {
+        if (!isset($d[$k]) || !is_array($d[$k])) continue;
+        $cur = (isset($s[$k]) && is_array($s[$k])) ? $s[$k] : [];
+        $s[$k] = array_merge($d[$k], $cur);
+    }
+    foreach (['fwd', 'acl', 'svc_in', 'svc_fwd', 'custom_opts', 'aliases', 'blocklists', 'apps', 'iot_devices', 'iot_policies'] as $k) {
+        if (!isset($s[$k]) || !is_array($s[$k])) $s[$k] = $d[$k] ?? [];
+    }
+    // Legacy composite protocol is not a valid iptables -p argument. Expand
+    // only service rows, never arbitrary/manual firewall rules. The operation
+    // is idempotent and keeps settings_schema / on / after / source unchanged.
+    foreach (['svc_in', 'svc_fwd'] as $key) {
+        $expanded = [];
+        foreach ($s[$key] as $r) {
+            if (!is_array($r)) continue;
+            foreach (svc_proto_choices((string)($r['proto'] ?? '')) as $p) {
+                $copy = $r;
+                $copy['proto'] = $p;
+                $expanded[] = $copy;
+            }
+        }
+        $s[$key] = $expanded;
+    }
+    return $s;
+}
+
+/**
+ * Migrazioni cumulative settings.json → schema SETTINGS_SCHEMA.
+ * Ogni step riceve e restituisce l'array impostazioni; l'ordine è per chiave numerica crescente.
+ * @return array{0: array, 1: list<string>} [settings, log messaggi]
+ */
+function settings_migrate(array $s): array {
+    $log = [];
+    $from = (int)($s['settings_schema'] ?? 0);
+    if ($from > SETTINGS_SCHEMA) {
+        // file più nuovo dell'app: non degradare, solo normalizza
+        return [settings_with_defaults($s), ['schema file ' . $from . ' > app ' . SETTINGS_SCHEMA . ': nessuna migrazione discendente']];
+    }
+    // ---- step ≤ 30: normalizzazioni storiche (pre-schema) ----
+    $steps = [];
+    $steps[30] = function (array $s) use (&$log): array {
+        foreach (['ssh_hits', 'lim_hits'] as $k) {
+            $n = max(1, min(20, (int)($s[$k] ?? 4)));
+            if ((int)($s[$k] ?? 0) !== $n) { $s[$k] = $n; $log[] = "$k limitato a 1..20 (xt_recent)"; }
+        }
+        // set CrowdSec numerati non vanno in bozza
+        if (preg_match('/^crowdsec6?-blacklists(-\d+)?(,crowdsec6?-blacklists(-\d+)?)*$/', (string)($s['cs_set'] ?? ''))) {
+            $s['cs_set'] = ''; $log[] = 'cs_set: rimossi set crowdsec-blacklists automatici';
+        }
+        if (!empty($s['v6']['cs_sets']) && preg_match('/^crowdsec6?-blacklists(-\d+)?(,crowdsec6?-blacklists(-\d+)?)*$/', (string)$s['v6']['cs_sets'])) {
+            $s['v6']['cs_sets'] = ''; $log[] = 'v6.cs_sets: rimossi set automatici';
+        }
+        foreach (['cs_in', 'cs_fwd'] as $k) {
+            if (in_array($s[$k] ?? '', ['crowdsec-input', 'crowdsec-forward'], true)) {
+                $s[$k] = defined('CS_CHAIN') ? CS_CHAIN : 'CROWDSEC_CHAIN';
+                $log[] = "$k: catena legacy → " . $s[$k];
+            }
+        }
+        return $s;
+    };
+    // ---- 31..39: posti liberi per fix intermedi ----
+    $steps[36] = function (array $s) use (&$log): array {
+        // VirusTotal / TI: assicurati struttura array
+        if (isset($s['ti']) && !is_array($s['ti'])) { $s['ti'] = []; $log[] = 'ti: convertito in array'; }
+        if (isset($s['notify']) && !is_array($s['notify'])) { $s['notify'] = []; $log[] = 'notify: convertito in array'; }
+        return $s;
+    };
+    $steps[37] = function (array $s) use (&$log): array {
+        if (!isset($s['custom_opts']) || !is_array($s['custom_opts'])) { $s['custom_opts'] = []; $log[] = 'custom_opts inizializzato'; }
+        return $s;
+    };
+    $steps[40] = function (array $s) use (&$log): array {
+        // Porte software (3.9.40)
+        if (!isset($s['apps']) || !is_array($s['apps'])) {
+            $s['apps'] = [];
+            $log[] = 'apps[] (porte software) inizializzato';
+        } else {
+            $s['apps'] = array_values(array_unique(array_filter(array_map(
+                fn($x) => preg_replace('/[^a-z0-9_]/', '', (string)$x),
+                $s['apps']
+            ), fn($x) => $x !== '')));
+        }
+        return $s;
+    };
+    $steps[41] = function (array $s) use (&$log): array {
+        // schema esplicito + default annidati + tipi booleani comuni
+        $boolKeys = ['spi','antispoof','invalid','final_drop','lockout_on','crowdsec','dns_redirect','nat_masq','wg_on','portscan','stealth'];
+        foreach ($boolKeys as $k) {
+            if (array_key_exists($k, $s)) $s[$k] = empty($s[$k]) ? 0 : 1;
+        }
+        // svc_in / svc_fwd: ogni riga deve essere array con chiavi base
+        foreach (['svc_in', 'svc_fwd'] as $k) {
+            if (!is_array($s[$k] ?? null)) { $s[$k] = []; continue; }
+            $rows = [];
+            foreach ($s[$k] as $r) {
+                if (!is_array($r)) continue;
+                $rows[] = array_merge(['on' => 1, 'name' => '', 'iif' => '', 'src' => '', 'dst' => '', 'proto' => '', 'ports' => '', 'ct' => '', 'act' => 'ACCEPT', 'after' => 0], $r);
+            }
+            $s[$k] = $rows;
+        }
+        $log[] = 'schema 41: tipi booleani e servizi normalizzati';
+        return $s;
+    };
+
+    $steps[42] = function (array $s) use (&$log): array {
+        // Preserve legacy behaviour: migration never disables external IoT Warden.
+        if (!in_array($s['iot_strategy'] ?? 'auto', ['auto','warden','iptm_zone','iptm_mac','none'], true)) {
+            $s['iot_strategy'] = 'auto';
+            $log[] = 'strategia IoT sconosciuta: conservata modalità auto';
+        }
+        return $s;
+    };
+
+    ksort($steps, SORT_NUMERIC);
+    $cur = $from;
+    foreach ($steps as $ver => $fn) {
+        if ($ver <= $from) continue;
+        if ($ver > SETTINGS_SCHEMA) break;
+        $s = $fn($s);
+        $cur = $ver;
+        $log[] = "applicato step schema → $ver";
+    }
+    $s = settings_with_defaults($s);
+    $s['settings_schema'] = SETTINGS_SCHEMA;
+    if ($from < SETTINGS_SCHEMA) {
+        $log[] = "migrazione completata: schema $from → " . SETTINGS_SCHEMA . " (app " . APP_VERSION . ")";
+    }
+    return [$s, $log];
+}
+
+function S_load(): array {
+    $f = DATA_DIR . '/settings.json';
+    // Never treat unreadable, empty or malformed existing settings as a clean
+    // installation. Doing so could silently substitute the default policy.
+    if (is_link($f)) throw new RuntimeException('Impostazioni non leggibili: symlink rifiutato');
+    $present = is_file($f);
+    $rawText = $present ? @file_get_contents($f) : '';
+    if (!is_string($rawText) || ($present && (trim($rawText) === '' || strlen($rawText) > 2097152)))
+        throw new RuntimeException('Impostazioni preesistenti vuote, illeggibili o eccessive: nessuna migrazione');
+    $raw = [];
+    if ($present) {
+        try {
+            $decoded = json_decode($rawText, false, 256, JSON_THROW_ON_ERROR);
+            if (!$decoded instanceof stdClass)
+                throw new RuntimeException('settings.json deve contenere un oggetto: migrazione bloccata');
+            $raw = json_decode($rawText, true, 256, JSON_THROW_ON_ERROR);
+        } catch (JsonException $e) {
+            throw new RuntimeException('settings.json JSON malformato: migrazione bloccata', 0, $e);
+        }
+    }
+    $GLOBALS['_settings_read_sha'] = hash('sha256', $rawText);
+    $from = (int)($raw['settings_schema'] ?? 0);
+    [$s, $log] = settings_migrate($raw);
+    // persisti solo se c'era un file (o migrazione reale) e lo schema è cambiato / log non vuoto di migrazione
+    $needWrite = is_file($f) && ($from < SETTINGS_SCHEMA || (!empty($log) && $from !== SETTINGS_SCHEMA));
+    if (!$needWrite && !is_file($f) && $from === 0) {
+        // nuovo install: non scrivere finché l'utente non salva
+        $needWrite = false;
+    }
+    if ($needWrite) {
+        $backupDir = DATA_DIR . '/backups';
+        if (is_link($backupDir) || (!is_dir($backupDir) && !@mkdir($backupDir, 0700, true)) || !is_dir($backupDir))
+            throw new RuntimeException('Migrazione bloccata: directory backup non sicura o non disponibile');
+        if (is_link($f) || !is_file($f) || !is_readable($f))
+            throw new RuntimeException('Migrazione bloccata: origine impostazioni non leggibile o simbolica');
+        // Snapshot byte-for-byte, atomico, prima di qualsiasi conversione di schema.
+        $legacyRaw = @file_get_contents($f);
+        if (!is_string($legacyRaw) || $legacyRaw === '')
+            throw new RuntimeException('Migrazione bloccata: configurazione originale vuota o illeggibile');
+        $backupPath = $backupDir . '/settings.migrate-' . date('Ymd-His') . '-' . bin2hex(random_bytes(4)) . '.json';
+        if (!atomic_data_write($backupPath, $legacyRaw, 0600) ||
+            !hash_equals(hash('sha256', $legacyRaw), hash_file('sha256', $backupPath)))
+            throw new RuntimeException('Migrazione bloccata: backup originale assente o non verificato');
+        $s['_migrated_at'] = date('c');
+        $s['_migrated_from'] = $from;
+        S_put($s); // same lock + atomic update as every other settings write
+        if (function_exists('audit') && $from < SETTINGS_SCHEMA) {
+            audit('settings_migrate ' . $from . '→' . SETTINGS_SCHEMA . ' ' . implode('; ', array_slice($log, 0, 8)));
+        }
+        // avviso one-shot in sessione
+        if ($from < SETTINGS_SCHEMA && PHP_SAPI !== 'cli') {
+            $_SESSION['settings_migrated'] = ['from' => $from, 'to' => SETTINGS_SCHEMA, 'log' => $log];
+        }
+    }
+    return $s;
+}
+/** Rotazione conservativa: 10 backup automatici per tipologia. Le copie
+ * manuali etichettate, settings.prev.json e i journal di ripristino non sono
+ * soggetti a questa pulizia. Si toccano solo file regolari nel DATA_DIR locale. */
+function iptm_rotate_backups(string $kind, int $keep = 10, ?string $fresh = null): int {
+    if ($keep < 1 || $keep > 100 || !in_array($kind, ['settings', 'rules.v4', 'rules.v6', 'draft', 'draft6', 'settings-v6', 'live'], true)) return 0;
+    $dir = DATA_DIR . '/backups';
+    if (!is_dir($dir) || is_link($dir)) return 0;
+    $files = [];
+    foreach (scandir($dir) ?: [] as $name) {
+        if ($kind === 'settings') $valid = (bool)preg_match('/^settings\.[A-Za-z0-9._-]+\.json$/D', $name);
+        elseif (str_starts_with($kind, 'rules.v')) $valid = (bool)preg_match('/^' . preg_quote($kind, '/') . '\.\d{8}-\d{6}(?:-[a-fA-F0-9]{8})?$/D', $name);
+        elseif ($kind === 'live') $valid = (bool)preg_match('/^live\.minimal-\d{8}-\d{6}\.rules$/D', $name);
+        else $valid = (bool)preg_match('/^' . preg_quote($kind, '/') . '\.(?:minimal|reset)-\d{8}-\d{6}\.(?:json|rules)$/D', $name);
+        if (!$valid) continue;
+        $path = $dir . '/' . $name;
+        if (!is_file($path) || is_link($path)) continue;
+        $st = @lstat($path);
+        if (!is_array($st)) continue;
+        $files[] = ['path' => $path, 'name' => $name, 'mtime' => $st['mtime'], 'ino' => $st['ino'], 'fresh' => ($path === $fresh ? 1 : 0)];
+    }
+    usort($files, static fn($a, $b) => ($b['fresh'] <=> $a['fresh']) ?: (($b['mtime'] <=> $a['mtime']) ?: strcmp($b['name'], $a['name'])));
+    $deleted = 0;
+    foreach (array_slice($files, $keep) as $old) {
+        $st = @lstat($old['path']);
+        if (!is_array($st) || $st['ino'] !== $old['ino'] || is_link($old['path']) || !is_file($old['path'])) continue;
+        if (@unlink($old['path'])) $deleted++;
+    }
+    return $deleted;
+}
+
+/** Fail-closed snapshot before any destructive reset. All present files must
+ * be copied successfully. Missing optional files are harmless, symlinks aren't. */
+function iptm_backup_reset_files(array $mapping): void {
+    $dir = DATA_DIR . '/backups';
+    if (is_link($dir) || (!is_dir($dir) && !@mkdir($dir,0700,true)))
+        throw new RuntimeException('Directory backup non sicura o non scrivibile: reset annullato.');
+    foreach ($mapping as $src => $dest) {
+        if (!preg_match('/^[A-Za-z0-9_.-]{1,90}$/D', $src.$dest))
+            throw new RuntimeException('Nome backup non valido.');
+        $source = DATA_DIR . '/' . $src;
+        if (!file_exists($source) && !is_link($source)) continue;
+        if (!is_file($source) || is_link($source))
+            throw new RuntimeException('File originale non regolare: reset annullato.');
+        $content = @file_get_contents($source);
+        if (!is_string($content) || !atomic_data_write($dir . '/' . $dest,$content,0600))
+            throw new RuntimeException('Backup reset incompleto: nessun dato verrà cancellato.');
+    }
+}
+
+/** Elenco backup impostazioni (più recente prima). */
+function settings_backup_list(int $max = 30): array {
+    $dir = DATA_DIR . '/backups';
+    $files = glob($dir . '/settings.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].json') ?: [];
+    // anche migrate / reset / minimal
+    foreach (glob($dir . '/settings.*.json') ?: [] as $f) {
+        if (!in_array($f, $files, true)) $files[] = $f;
+    }
+    usort($files, fn($a, $b) => filemtime($b) <=> filemtime($a));
+    return array_slice(array_values(array_unique($files)), 0, $max);
+}
+
+/** Copia settings.json in prev + archivio: la rotazione avviene dopo il commit. */
+function settings_snapshot(string $reason = ''): ?string {
+    $f = DATA_DIR . '/settings.json';
+    if (!is_file($f)) return null;
+    $raw = @file_get_contents($f);
+    if (!is_string($raw) || $raw === '') return null;
+    $backupDir = DATA_DIR . '/backups';
+    if (is_link($backupDir) || (!is_dir($backupDir) && !@mkdir($backupDir, 0700, true))) return null;
+    // Archive name includes random bytes: two writes in the same second may not
+    // replace each other's recovery point. Backups contain credentials (0600).
+    $ts = date('Ymd-His');
+    $tag = $reason !== '' ? substr((string)preg_replace('/[^a-z0-9_-]/i', '', $reason), 0, 32) : '';
+    $suffix = bin2hex(random_bytes(5));
+    $name = 'settings.' . $ts . ($tag !== '' ? '-' . $tag : '') . '-' . $suffix . '.json';
+    $dest = $backupDir . '/' . $name;
+    $written = @file_put_contents($dest, $raw, LOCK_EX);
+    if ($written !== strlen($raw) || !@chmod($dest, 0600)) { @unlink($dest); return null; }
+    // One-step recovery remains stable for the existing UI; its failure does
+    // not invalidate the independent timestamped snapshot above.
+    @file_put_contents(DATA_DIR . '/settings.prev.json', $raw, LOCK_EX);
+    @chmod(DATA_DIR . '/settings.prev.json', 0600);
+    return $dest;
+}
+
+/** Ripristina impostazioni da un file di backup (path assoluto o basename in backups/). */
+function settings_restore_from(string $path): array {
+    $base = basename($path);
+    if ($path === 'prev' || $base === 'settings.prev.json') {
+        $file = DATA_DIR . '/settings.prev.json';
+    } elseif ($base === $path || !str_contains($path, '/')) {
+        $file = DATA_DIR . '/backups/' . $base;
+    } else {
+        $file = $path;
+    }
+    // sicurezza: solo dentro DATA_DIR
+    $real = realpath($file);
+    $root = realpath(DATA_DIR);
+    if ($real === false || $root === false ||
+        !str_starts_with($real, rtrim($root, '/') . '/') || !is_file($real)) {
+        return ['ok' => false, 'msg' => 'Backup impostazioni non trovato.'];
+    }
+    $backupDir = realpath(DATA_DIR . '/backups');
+    $isPrev = ($real === $root . '/settings.prev.json');
+    $inBackups = ($backupDir !== false && str_starts_with($real, $backupDir . '/') &&
+        preg_match('/^settings\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.json$/D', basename($real)));
+    if (!$isPrev && !$inBackups) {
+        return ['ok' => false, 'msg' => 'Nome file non valido per un backup impostazioni.'];
+    }
+    $j = json_decode((string)file_get_contents($real), true);
+    if (!is_array($j) || $j === []) return ['ok' => false, 'msg' => 'Backup illeggibile o vuoto.'];
+    // Usa lo stesso lock/snapshot/rename atomico del normale salvataggio.
+    [$s, $log] = settings_migrate($j);
+    $s['settings_schema'] = SETTINGS_SCHEMA;
+    $s['_restored_from'] = basename($real);
+    $s['_restored_at'] = date('c');
+    S_put($s);
+    // rigenera bozza dai settings ripristinati
+    global $M;
+    if (!isset($M) || !is_array($M)) {
+        $M = function_exists('get_draft') ? parse_rules(get_draft()) : parse_rules(function_exists('zero_skeleton') ? zero_skeleton() : "*filter\n:INPUT ACCEPT [0:0]\nCOMMIT\n");
+    }
+    $w = [];
+    if (function_exists('regen')) {
+        // bozza: mantieni regole manuali, rigenera blocchi gestiti
+        $w = regen($M, $s);
+        if (function_exists('save_model')) save_model();
+    }
+    if (function_exists('audit')) audit('settings_rollback from=' . basename($real));
+    return ['ok' => true, 'msg' => 'Impostazioni ripristinate da «' . basename($real) . '». Bozza aggiornata (non ancora applicata al kernel).'
+        . ($w ? ' Avvisi: ' . implode('; ', $w) : ''), 'S' => $s];
+}
+
+function S_put(array $s) {
+    $s['settings_schema'] = SETTINGS_SCHEMA;
+    $json = json_encode($s, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    if (!is_string($json)) throw new RuntimeException('Impossibile serializzare le impostazioni');
+    $f = DATA_DIR . '/settings.json';
+    $lock = fopen(DATA_DIR . '/settings.lock', 'c');
+    if (!$lock || !flock($lock, LOCK_EX)) { if (is_resource($lock)) fclose($lock); throw new RuntimeException('Lock impostazioni non disponibile'); }
+    try {
+        $prev = is_file($f) ? (string)file_get_contents($f) : '';
+        $expected = $GLOBALS['_settings_read_sha'] ?? null;
+        if ($expected !== null && !hash_equals($expected, hash('sha256', $prev))) {
+            throw new RuntimeException('Conflitto: impostazioni modificate da un’altra richiesta. Ricarica la pagina.');
+        }
+        $snapshotPath = null;
+        if ($prev !== '' && $prev !== $json && ($snapshotPath = settings_snapshot()) === null) {
+            throw new RuntimeException('Backup impostazioni non riuscito: salvataggio annullato.');
+        }
+        $tmp = DATA_DIR . '/.settings.' . bin2hex(random_bytes(6)) . '.tmp';
+        $written = file_put_contents($tmp, $json, LOCK_EX);
+        if ($written === false || $written !== strlen($json)) { @unlink($tmp); throw new RuntimeException('Scrittura impostazioni incompleta'); }
+        @chmod($tmp, 0600);
+        if (!rename($tmp, $f)) { @unlink($tmp); throw new RuntimeException('Sostituzione atomica impostazioni fallita'); }
+        iptm_rotate_backups('settings', 10, $snapshotPath); // dopo commit, preserva la nuova copia anche con timestamp uguale
+        $GLOBALS['_settings_read_sha'] = hash('sha256', $json);
+        $GLOBALS['_Sc'] = $s;
+    } finally {
+        flock($lock, LOCK_UN); fclose($lock);
+    }
+}
+const CHAIN_RESERVED = ['ACCEPT', 'DROP', 'REJECT', 'RETURN', 'QUEUE', 'LOG', 'ULOG', 'NFLOG', 'NFQUEUE', 'DNAT', 'SNAT', 'MASQUERADE', 'REDIRECT', 'NETMAP', 'TCPMSS', 'TARPIT', 'SYNPROXY', 'CT', 'NOTRACK', 'MARK', 'CONNMARK', 'CLASSIFY', 'TOS', 'TTL', 'HL', 'DSCP', 'ECN', 'TRACE', 'TPROXY', 'AUDIT', 'CHECKSUM', 'SET', 'INPUT', 'FORWARD', 'OUTPUT', 'PREROUTING', 'POSTROUTING'];
+function v_ok(string $t, string $v): bool {
+    switch ($t) {
+        case 'if': return $v === '' || (bool)preg_match('/^[A-Za-z0-9_.+-]{1,15}$/', $v);
+        case 'nets':
+            if ($v === '') return true;
+            foreach (explode(',', $v) as $n) { [$b, $m] = array_pad(explode('/', $n, 2), 2, '32'); if (!filter_var($b, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || !preg_match('/^\d{1,2}$/', $m) || (int)$m > 32) return false; }
+            return true;
+        case 'ip': return $v === '' || (bool)filter_var($v, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
+        case 'port': return $v === '' || (preg_match('/^[1-9]\d{0,4}$/', $v) && (int)$v <= 65535);   // niente zeri iniziali: iptables li rifiuta ("080")
+        case 'ports':
+            if ($v === '') return true;
+            $w = 0;   // multiport accetta al massimo 15 porte e un intervallo ne conta 2; niente zeri iniziali né intervalli a=b
+            foreach (explode(',', $v) as $x) { if (!preg_match('/^([1-9]\d{0,4})(?::([1-9]\d{0,4}))?$/', $x, $m)) return false; $a = (int)$m[1]; $b = isset($m[2]) ? (int)$m[2] : $a; if ($b > 65535 || $a > $b || (isset($m[2]) && $a === $b)) return false; $w += isset($m[2]) ? 2 : 1; }
+            return $w <= 15;
+        case 'lrate': return (bool)preg_match('/^[1-9]\d{0,4}\/(sec|min|hour|day)$/', $v) && (substr($v, -4) !== '/sec' || (int)$v <= 10000);   // -m limit: max 10000/sec
+        case 'rate': return (bool)preg_match('/^[1-9]\d{0,4}\/(sec|min|hour|day)$/', $v);
+        case 'name': return (bool)preg_match('/^[\p{L}\p{N} _.\-()\/:+,→]{0,40}$/u', $v);
+        case 'macs': return $v === '' || (bool)preg_match('/^([0-9a-f]{2}(:[0-9a-f]{2}){5})(,[0-9a-f]{2}(:[0-9a-f]{2}){5})*$/', $v);
+        case 'ifs': return $v === '' || (bool)preg_match('/^[A-Za-z0-9_.+-]{1,15}(,[A-Za-z0-9_.+-]{1,15})*$/', $v);
+        case 'chain': return $v === '' || (preg_match('/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,27}$/', $v) && !in_array($v, CHAIN_RESERVED, true));   // niente "-" iniziale né nomi di target/catene built-in
+        case 'setlist': return (bool)preg_match('/^([A-Za-z0-9_.-]{1,31}(,[A-Za-z0-9_.-]{1,31})*)?$/', $v);
+        case 'setname': return (bool)preg_match('/^[A-Za-z0-9_.-]{1,31}$/', $v);
+        case 'prefix': return (bool)preg_match('/^[A-Za-z0-9 _:.\-]{0,28}$/', $v);
+        case 'ct': return $v === '' || (bool)preg_match('/^(NEW|ESTABLISHED|RELATED|INVALID|UNTRACKED)(,(NEW|ESTABLISHED|RELATED|INVALID|UNTRACKED))*$/', $v);
+        case 'cc': return $v === '' || (bool)preg_match('/^([A-Za-z]{2})(,[A-Za-z]{2})*$/', $v);
+        case 'dir': return in_array($v, ['in', 'out', 'both'], true);
+        case 'time': return (bool)preg_match('/^(([01]\d|2[0-3]):[0-5]\d|24:00)$/', $v);
+    }
+    return false;
+}
+function port_opt(string $p, string $f = 'dport'): string { return str_contains($p, ',') ? "-m multiport --{$f}s $p" : "--$f $p"; }
+function acl_clients(string $txt): array {
+    $ok = []; $bad = [];
+    foreach (preg_split('/[\s,;]+/', trim($txt), -1, PREG_SPLIT_NO_EMPTY) as $t) {
+        if (preg_match('/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/', $t)) $ok[] = '-m mac --mac-source ' . strtoupper($t);
+        elseif (preg_match('/^@([A-Za-z][A-Za-z0-9_-]{1,24})$/', $t, $m) && isset(alias_map(S_get())['nets'][$m[1]])) $ok[] = '-m set --match-set al_' . $m[1] . ' src';
+        elseif (preg_match('/^([\d.]+)-([\d.]+)$/', $t, $m) && v_ok('ip', $m[1]) && v_ok('ip', $m[2])) $ok[] = '-m iprange --src-range ' . $t;
+        elseif (v_ok('nets', $t) && strpos($t, ',') === false) $ok[] = '-s ' . $t;
+        else $bad[] = $t;
+    }
+    return [$ok, $bad];
+}
+function acl_time(array $p): array {   // finestre orarie -> frammenti "-m time" in UTC (xt_time lavora in UTC)
+    $names = array_keys(DAYS); $days = array_values(array_intersect($names, (array)($p['days'] ?? []))); if (!$days) $days = $names;
+    $m = fn($s) => (int)substr($s, 0, 2) * 60 + (int)substr($s, 3, 2);
+    $a = $m($p['from'] ?? '00:00'); $b = $m($p['to'] ?? '24:00'); if ($b <= $a) $b += 1440;
+    if (count($days) === 7 && $a === 0 && $b === 1440) return [''];
+    $off = intdiv((int)date('Z'), 60); $seg = [];
+    foreach ($days as $d) {
+        $di = array_search($d, $names, true); $s0 = $a - $off; $e0 = $b - $off;
+        for ($k = (int)floor($s0 / 1440); $k <= (int)floor(($e0 - 1) / 1440); $k++) {
+            $ss = max($s0, $k * 1440) - $k * 1440; $ee = min($e0, ($k + 1) * 1440) - $k * 1440;
+            $seg["$ss-$ee"][$names[(($di + $k) % 7 + 7) % 7]] = 1;
+        }
+    }
+    $o = []; $hm = fn($x) => $x >= 1440 ? '23:59:59' : sprintf('%02d:%02d', intdiv($x, 60), $x % 60);
+    foreach ($seg as $k => $wd) {
+        [$ss, $ee] = array_map('intval', explode('-', $k)); $f = '-m time';
+        if (!($ss === 0 && $ee >= 1440)) $f .= ' --timestart ' . $hm($ss) . ' --timestop ' . $hm($ee);
+        if (count($wd) < 7) $f .= ' --weekdays ' . implode(',', array_filter($names, fn($n) => isset($wd[$n])));
+        $o[] = $f;
+    }
+    return $o ?: [''];
+}
+function acl_targets(array $p): array {
+    $o = [];
+    foreach ((array)($p['svc'] ?? []) as $k) {
+        if (!isset(SVC[$k])) continue;
+        if ($k === 'all') { $o[] = ''; continue; }
+        [$pp, $ports] = explode(':', SVC[$k][1], 2);
+        foreach (explode(',', $pp) as $proto) $o[] = "-p $proto " . port_opt($ports);
+    }
+    foreach (preg_split('/[\s;]+/', trim((string)($p['custom'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) as $c)
+        if (preg_match('/^(tcp|udp):(.+)$/', $c, $mm) && v_ok('ports', $mm[2])) $o[] = "-p {$mm[1]} " . port_opt($mm[2]);
+    foreach (preg_split('/\R/', trim((string)($p['urls'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) as $u) {
+        $u = trim($u); if (preg_match('/^[A-Za-z0-9._\/ -]{2,60}$/', $u)) $o[] = '-p tcp -m multiport --dports 80,443 -m string --string "' . $u . '" --algo bm --icase';
+    }
+    return $o;
+}
+function wan_ready(array $S): bool { return !empty($S['single_nic']) ? $S['lan_nets'] !== '' : $S['wan_if'] !== ''; }
+function sec_opt(string $id): string {   // sezione generata -> opzione che la produce (usato dall'import)
+    foreach (['antispoof-' => 'antispoof', 'spoof-' => 'spoof_on', 'cs-' => 'crowdsec', 'spi-' => 'spi', 'invalid-' => 'invalid', 'icmp' => 'icmp_limit', 'igmp' => 'igmp_accept', 'dos' => 'dos',
+        'ssh-acc' => 'ssh_acc', 'close-' => 'closeports', 'final-' => 'final_drop', 'logdrop' => 'logdrop_on', 'raw-lo-' => 'raw_lo', 'raw-drop' => 'raw_drop', 'dot' => 'dot_block',
+        'mss' => 'mss', 'connlimit' => 'conn_limit', 'isolate' => 'iso_on', 'guest-' => 'guest_on', 'quic' => 'quic_block', 'lancl' => 'lan_cl', 'svcban' => 'svc_ban', 'raw-rpf' => 'rpfilter', 'badmss' => 'bad_mss', 'bw-up' => 'bw_on', 'bw-down' => 'bw_on', 'mac-only' => 'mac_only', 'udprl' => 'udp_rl', 'webrl' => 'web_rl', 'amp' => 'amp_block', 'dns-redir' => 'dns_redirect', 'nat-masq' => 'nat_masq', 'lan-tcp' => 'lan_tcp_accept', 'docker-net' => 'docker_accept', 'bcast' => 'bcast_accept', 'dhcp-in' => 'dhcp_accept', 'coap-mdns' => 'coap_accept', 'lan-out' => 'lan_out_fwd', 'cs-set' => 'cs_set_match'] as $p => $o) if (str_starts_with($id, $p)) return $o;
+    return '';
+}
+function svc_rule(string $chain, array $r, array $AL = []): string {
+    $p = $r['proto'] ?? ''; $ports = $r['ports'] ?? ''; $s = $r['src'] ?? ''; $d = $r['dst'] ?? ''; $ex = [];
+    if (str_starts_with($ports, '@')) $ports = $AL['ports'][substr($ports, 1)] ?? '';
+    if (str_starts_with($s, '@')) { $ex[] = '-m set --match-set al_' . substr($s, 1) . ' src'; $s = ''; }
+    if (str_starts_with($d, '@')) { $ex[] = '-m set --match-set al_' . substr($d, 1) . ' dst'; $d = ''; }
+    $f = ['chain' => $chain, 'i' => $r['iif'] ?? '', 'o' => $r['oif'] ?? '', 's' => $s, 'd' => $d, 'p' => $p, 'sport' => '', 'dport' => '', 'sports' => '', 'dports' => '', 'ports' => '', 'ctstate' => $r['ct'] ?? '', 'extra' => implode(' ', $ex), 'target' => ($r['act'] ?? 'ACCEPT'), 'targs' => ''];
+    if ($ports !== '' && in_array($p, ['tcp', 'udp'], true)) { if (str_contains($ports, ',')) $f['dports'] = $ports; else $f['dport'] = $ports; }
+    return rule_build($f);
+}
+/** Expand composite protocol rows into distinct IPv4 service rules.
+ * This also handles old drafts regenerated from settings that predate 3.9.93.
+ * The original single-protocol rule builder remains unchanged.
+ */
+function svc_rules(string $chain, array $rows, array $AL = []): array {
+    $out = [];
+    foreach ($rows as $r) {
+        if (!is_array($r)) continue;
+        foreach (svc_proto_choices((string)($r['proto'] ?? '')) as $p) {
+            $one = $r;
+            $one['proto'] = $p;
+            $out[] = svc_rule($chain, $one, $AL);
+        }
+    }
+    return $out;
+}
+/**
+ * IPTM 3.9.98: invariant for the shared bond0 WAN/LAN and for VPN/Docker.
+ * Legacy keys remain in settings for safe upgrades but cannot emit hazardous rules.
+ * No live changes; this function only transforms proposed settings.
+ */
+function iptm_unsafe_flag_keys(): array {
+    return ['rpfilter','synproxy','raw_lo','raw_invalid','bogon_wan','spoof_on',
+            'drop_frag','bad_mss','tarpit','svc_ban','mac_only'];
+}
+function iptm_safe_settings(array $S, array &$notes = []): array {
+    foreach (iptm_unsafe_flag_keys() as $key) {
+        if (!empty($S[$key])) $notes[] = 'Protezione anti-lockout: opzione ' . $key . ' ignorata nella nuova bozza.';
+        $S[$key] = 0;
+    }
+    // Shared-interface WAN identification is ambiguous on bond0. Unscoped WAN
+    // chains can match LAN packets; disable those optional filters in such setups.
+    // A WAN bridge/bond may have both LAN and upstream IPv4 addresses on one NIC.
+    // Detect this even when legacy settings did not mark single_nic or lan_if.
+    $wan = (string)($S['wan_if'] ?? '');
+    $wanAddrs = ($wan !== '' && function_exists('sys_ifaces')) ? (sys_ifaces()[$wan] ?? []) : [];
+    $sharedWan = !empty($S['single_nic']) || ($wan !== '' && $wan === (string)($S['lan_if'] ?? '')) || count($wanAddrs) > 1;
+    if ($sharedWan) {
+        foreach (['multicast','web_rl','blockping','ident','amp_block','log_out','portscan'] as $key) {
+            if (!empty($S[$key])) $notes[] = 'WAN e LAN condividono l’interfaccia: ' . $key . ' non generata.';
+            $S[$key] = 0;
+        }
+    }
+    if (!empty($S['lan_nets']) && (!empty($S['spi']) || !empty($S['final_drop']))) {
+        $S['lockout_on'] = 1;
+        $must = ['22', '80', '443', '8089', '8489'];
+        $ports = array_filter(array_map('trim', explode(',', (string)($S['mgmt_ports'] ?? ''))),
+                              fn($p) => preg_match('/^[0-9]{1,5}$/D', $p) && (int)$p >= 1 && (int)$p <= 65535);
+        $ports = array_values(array_diff(array_unique(array_map(fn($p) => (string)(int)$p, $ports)), $must));   // normalizza ("080" -> "80") ed evita doppioni
+        $S['mgmt_ports'] = implode(',', array_merge(array_slice($ports, 0, 15 - count($must)), $must));        // multiport: max 15 porte in tutto
+    }
+    return $S;
+}
+/** Reject even forced or imported unsafe raw rules; never silently alter unknown rules. */
+function iptm_reject_unsafe_rules(string $txt): string {
+    $lines = explode("\n", $txt);
+    foreach ($lines as $n => $line) {
+        if (!preg_match('/^\s*-A\s+\S+\s+/', $line)) continue;
+        $unsafe = (
+            (str_contains($line, '--invert') && str_contains($line, '-m rpfilter')) ||
+            (bool)preg_match('/\s-j\s+SYNPROXY(?:\s|$)/', $line) ||
+            (bool)preg_match('/\s-j\s+TARPIT(?:\s|$)/', $line) ||
+            (bool)preg_match('/^-A\s+(PREROUTING|OUTPUT)\b.*\s-j\s+CT\s+--notrack\b/', $line) ||
+            (bool)preg_match('/^-A\s+PREROUTING\b.*--ctstate\s+INVALID\b.*\s-j\s+DROP\b/', $line) ||
+            (bool)preg_match('/^-A\s+FORWARD\s+-j\s+IPTM-WAN-FWI\s*$/', trim($line))
+        );
+        if ($unsafe) return 'Bozza IPv4 non applicabile: regola ad alto rischio alla riga ' . ($n+1)
+            . ' (' . trim($line) . '). Eliminala o rigenera la bozza protetta. “Forza” non aggira questo controllo.';
+    }
+    return '';
+}
+function gen_sections(array $S): array {
+    $sec = []; $warn = []; $S = iptm_safe_settings($S, $warn); $lan = array_values(array_filter(explode(',', $S['lan_nets']))); $single = !empty($S['single_nic']); $ready = wan_ready($S); $wanc = [];
+    // Non applica correzioni implicite: segnala combinazioni che possono
+    // impedire la navigazione ai client quando il gateway conserva OUTPUT.
+    if (!empty($S['final_drop']) && $lan && empty($S['lan_out_fwd']))
+        $warn[] = 'Navigazione client: final_drop attivo senza lan_out_fwd. Il preflight controllerà anche eventuali regole FORWARD manuali, le risposte ESTABLISHED e ogni subnet LAN.';
+    if (!empty($S['dns_redirect']) && empty($S['dhcp_accept']))
+        $warn[] = 'DNS/DHCP: redirect DNS attivo con eccezione DHCP INPUT disabilitata; verificare porta UDP 67/68 per Pi-hole DHCP.';
+    if (empty($S['nat_masq']) && $lan && $S['wan_if'] !== '')
+        $warn[] = 'Navigazione client: NAT/MASQUERADE disabilitato. Serve un percorso di ritorno esplicito sul router a monte, altrimenti i client non navigano.';
+    $DT = $S['drop_chain'] !== '' ? $S['drop_chain'] : 'DROP'; $AL = alias_map($S);
+    $add = function (string $id, string $title, string $t, string $c, string $an, int $pr, array $rules) use (&$sec) {
+        $rules = array_values(array_filter($rules, fn($r) => $r !== '' && ($r[0] === '#' || lint_rule($r))));
+        // Only exact duplicates inside one IPTM-owned generated section.
+        // Never deduplicate across owners or reorder user/CrowdSec/Docker rules.
+        if (!str_starts_with($id, 'cust-')) $rules = array_values(array_unique($rules));
+        if ($rules) $sec[] = compact('id', 'title', 't', 'c', 'an', 'pr', 'rules');
+    };
+    // $W: regole "solo dal/verso il lato WAN" (segnaposto {W}). Interfacce separate -> -i/-o WAN; interfaccia unica -> catena IPTM-WAN-* con RETURN per le LAN.
+    $W = function (string $id, string $title, string $t, string $c, string $an, int $pr, array $bodies, string $d = 'i') use (&$wanc, $S, $single, $add) {
+        if (!$single) { $m = $S['wan_if'] !== '' ? '-' . $d . ' ' . $S['wan_if'] : ''; $add($id, $title, $t, $c, $an, $pr, array_map(fn($b) => preg_replace('/ {2,}/', ' ', str_replace('{W}', $m, $b)), $bodies)); return; }
+        $wanc["$t|$c|$d"][] = compact('id', 'title', 'an', 'pr', 'bodies');
+    };
+    $J = fn(...$a) => implode(' ', array_filter($a, fn($x) => $x !== '' && $x !== null));
+    $needw = function (string $what) use (&$warn, $ready) { if (!$ready) { $warn[] = "$what: definisci la WAN (o LAN + «interfaccia unica») in Setup."; return false; } return true; };
+    // ---------- DHCP: il DISCOVER/REQUEST dei client ha sorgente 0.0.0.0 e destinazione 255.255.255.255,
+    // quindi non combacia con nessuna regola «-s LAN» e con policy DROP / SPI / porte privilegiate chiuse viene scartato.
+    if (!empty($S['dhcp_accept'])) {
+        $dni = (!$single && $S['wan_if'] !== '') ? '! -i ' . $S['wan_if'] . ' ' : '';   // il server DHCP non va esposto al WAN
+        $add('dhcp-in', 'DHCP: client → server (UDP 68→67) e risposte server → client (UDP 67→68)', 'filter', 'INPUT', 'top', 2,
+            ["-A INPUT {$dni}-p udp --sport 68 --dport 67 -j ACCEPT", '-A INPUT -p udp --sport 67 --dport 68 -j ACCEPT']);
+    }
+    // ---------- raw
+    if ($S['raw_lo']) { $add('raw-lo-pre', 'raw: il loopback non viene tracciato', 'raw', 'PREROUTING', 'top', 10, ['-A PREROUTING -i lo -j CT --notrack', '-A PREROUTING -i lo -j ACCEPT']); $add('raw-lo-out', 'raw: loopback in uscita non tracciato', 'raw', 'OUTPUT', 'top', 10, ['-A OUTPUT -o lo -j CT --notrack']); }
+    if ($S['raw_drop']) { $r = []; if ($S['raw_tcp'] !== '') $r[] = '-A PREROUTING -p tcp ' . port_opt($S['raw_tcp']) . ' -j DROP'; if ($S['raw_udp'] !== '') $r[] = '-A PREROUTING -p udp ' . port_opt($S['raw_udp']) . ' -j DROP'; $add('raw-drop', 'raw: scarta porte Windows/SSDP prima del tracking', 'raw', 'PREROUTING', 'top', 20, $r); }
+    // ---------- catena di log
+    if ($S['logdrop_on'] && $S['drop_chain'] !== '') {
+        $add('logdrop', 'Catena ' . $DT . ' (log con limiti per sorgente)', 'filter', $DT, 'top', 10, [
+            "-A $DT -m hashlimit --hashlimit-name logdrop --hashlimit-mode srcip --hashlimit-upto {$S['ld_src_rate']} --hashlimit-burst {$S['ld_src_burst']} -m limit --limit {$S['ld_glob_rate']} --limit-burst {$S['ld_glob_burst']} -j LOG --log-prefix \"{$S['ld_prefix']}\" --log-level 4",
+            "-A $DT -j DROP"]);
+    }
+    // ---------- anti-spoofing / SPI / blacklist
+    if ($S['antispoof']) foreach (['INPUT', 'FORWARD'] as $c) $add('antispoof-' . strtolower($c), "Anti-spoofing ($c)", 'filter', $c, 'top', 5, array_merge(["-A $c ! -i lo -s 127.0.0.0/8 -j DROP"], $S['antispoof_mc'] ? ["-A $c -s 224.0.0.0/4 -j DROP"] : []));
+    if ($S['spoof_on'] && $S['spoof_if'] !== '' && $S['spoof_nets'] !== '') foreach (['INPUT', 'FORWARD'] as $c) $add('spoof-' . strtolower($c), "Sorgenti spoofate su {$S['spoof_if']} ($c)", 'filter', $c, 'top', 6, ["-A $c -i {$S['spoof_if']} -s {$S['spoof_nets']} -j $DT"]);
+    // ---------- CrowdSec: nessuna regola generata. Gli agganci (INPUT/FORWARD/DOCKER-USER -> CROWDSEC_CHAIN) li crea e li reinserisce il bouncer a ogni avvio:
+    // salti scritti qui lo costringerebbero a fallire («Too many links») e lascerebbero INPUT senza protezione. L'app gli indica le catene (cs_sync) e lo riavvia dopo «Applica».
+    // ---------- liste, GeoIP, blocco manuale. Le reti private/LAN sono SEMPRE escluse: firehol_level1 contiene i «bogons» e bloccherebbe la tua LAN
+    $PRIV = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '127.0.0.0/8', '169.254.0.0/16', '100.64.0.0/10', '224.0.0.0/4']; $nlr = [];
+    $NL = function (string $chain, string $flag) use (&$add, &$nlr, $lan, $PRIV) {   // catena "solo traffico non locale"
+        if (isset($nlr[$chain])) return; $nlr[$chain] = 1; $ex = $PRIV; foreach ($lan as $n) if (!in_array($n, $ex, true)) $ex[] = $n;
+        $add($chain . '-ret', "Esclusioni LAN e reti private ($chain)", 'filter', $chain, 'top', 0, array_map(fn($n) => "-A $chain $flag $n -j RETURN", $ex));
+    };
+    $alw = preg_split('/[\s,;]+/', trim((string)$S['manual_allow']), -1, PREG_SPLIT_NO_EMPTY);
+    if ($alw) {   // lista bianca: valutata PRIMA di CrowdSec, liste e blocco manuale
+        $add('allow-in', 'Lista bianca IP (INPUT)', 'filter', 'INPUT', 'top', 1, ['-A INPUT -m set --match-set iptm_allow src -j ACCEPT']);
+        $add('allow-fw', 'Lista bianca IP (FORWARD)', 'filter', 'FORWARD', 'top', 1, ['-A FORWARD -m set --match-set iptm_allow src -j ACCEPT']);
+    }
+    $man = preg_split('/[\s,;]+/', trim($S['manual_block']), -1, PREG_SPLIT_NO_EMPTY);
+    if ($man) {
+        $add('manual-in', 'Blocco manuale IP (INPUT)', 'filter', 'INPUT', 'top', 3, ['-A INPUT -m set --match-set iptm_manual src -j DROP']);
+        $add('manual-fw', 'Blocco manuale IP (FORWARD)', 'filter', 'FORWARD', 'top', 3, ['-A FORWARD -m set --match-set iptm_manual src -j DROP', '-A FORWARD -m set --match-set iptm_manual dst -j DROP']);
+        $add('manual-out', 'Blocco manuale IP (OUTPUT)', 'filter', 'OUTPUT', 'top', 3, ['-A OUTPUT -m set --match-set iptm_manual dst -j DROP']);
+    }
+    $bin = []; $bout = [];
+    $blg = fn($c, $set, $d) => !empty($S['bl_log']) ? ["-A $c -m set --match-set $set $d -m limit --limit 5/min --limit-burst 10 -j LOG --log-prefix \"IPTM-BL: \" --log-level 4"] : [];
+    foreach (list_sets($S) as $set => $dir) { if ($dir !== 'out') { array_push($bin, ...$blg('IPTM-BL', $set, 'src')); $bin[] = "-A IPTM-BL -m set --match-set $set src -j DROP"; } if ($dir !== 'in') { array_push($bout, ...$blg('IPTM-BLD', $set, 'dst')); $bout[] = "-A IPTM-BLD -m set --match-set $set dst -j DROP"; } }
+    if ($bin) { $NL('IPTM-BL', '-s'); $add('bl-sets', 'Liste IP: scarto delle sorgenti', 'filter', 'IPTM-BL', 'top', 10, $bin); $add('bl-jump-in', 'Liste IP (INPUT)', 'filter', 'INPUT', 'est', 2, ['-A INPUT -j IPTM-BL']); $add('bl-jump-fw', 'Liste IP (FORWARD)', 'filter', 'FORWARD', 'top', 9, ['-A FORWARD -j IPTM-BL']); }
+    if ($bout) { $NL('IPTM-BLD', '-d'); $add('bl-sets-d', 'Liste IP: scarto delle destinazioni', 'filter', 'IPTM-BLD', 'top', 10, $bout); $add('bl-jump-fw-d', 'Liste IP (FORWARD, uscita)', 'filter', 'FORWARD', 'top', 9, ['-A FORWARD -j IPTM-BLD']); $add('bl-jump-out', 'Liste IP (OUTPUT)', 'filter', 'OUTPUT', 'top', 9, ['-A OUTPUT -j IPTM-BLD']); }
+    if ($S['lockout_on'] && $lan && $S['mgmt_ports'] !== '') $add('lockout', 'Anti-lockout: gestione sempre raggiungibile dalla LAN', 'filter', 'INPUT', 'top', 7, array_map(fn($n) => '-A INPUT -s ' . $n . ' -p tcp ' . port_opt($S['mgmt_ports']) . ' -j ACCEPT', $lan));
+    if ($S['knock_on']) {
+        $kp = array_values(array_filter(explode(',', $S['knock_ports']))); $kt = $S['knock_target']; $ks = $S['knock_nets'] !== '' ? '-s ' . $S['knock_nets'] . ' ' : '';
+        if (count($kp) < 2 || $kt === '') $warn[] = 'Port knocking: servono almeno 2 porte e la porta da aprire.';
+        else {
+            $r = ["-A INPUT {$ks}-p tcp --dport $kt -m recent --rcheck --seconds {$S['knock_secs']} --name KNOCKOK -j ACCEPT"];
+            foreach ($kp as $i => $pt) { $last = $i === count($kp) - 1; $chk = $i ? "-m recent --rcheck --seconds 15 --name KNOCK$i " : ''; $set = '-m recent --set --name ' . ($last ? 'KNOCKOK' : 'KNOCK' . ($i + 1));
+                $r[] = "-A INPUT {$ks}-p tcp --dport $pt {$chk}{$set} -j DROP"; }
+            $add('knock', 'Port knocking verso la porta ' . $kt, 'filter', 'INPUT', 'est', 12, $r);
+        }
+    }
+    if ($S['spi']) {
+        $add('spi-in', 'SPI Firewall (INPUT)', 'filter', 'INPUT', 'top', 10, ['-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT', '-A INPUT -i lo -j ACCEPT']);
+        $add('spi-fw', 'SPI Firewall (FORWARD)', 'filter', 'FORWARD', 'top', 10, ['-A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT']);
+    }
+    // ---------- pacchetti non validi, ICMP, flood
+    if ($S['invalid']) {
+        $badflags = ['ALL NONE', 'ALL ALL', 'ALL FIN,URG,PSH', 'SYN,RST SYN,RST', 'SYN,FIN SYN,FIN', 'FIN,RST FIN,RST', 'FIN,SYN FIN,SYN', 'SYN,URG SYN,URG', 'FIN,ACK FIN'];
+        $add('invalid-in', 'Scarta pacchetti non validi / scansioni', 'filter', 'INPUT', 'est', 10, array_merge([
+            '-A INPUT -p tcp --tcp-flags FIN,ACK FIN,ACK -m conntrack --ctstate INVALID -j DROP',
+            '-A INPUT -p tcp --tcp-flags RST,ACK RST,ACK -m conntrack --ctstate INVALID -j DROP',
+            "-A INPUT -m conntrack --ctstate INVALID -j $DT",
+            "-A INPUT -p tcp ! --syn -m conntrack --ctstate NEW -j $DT"],
+            array_map(fn($x) => "-A INPUT -p tcp --tcp-flags $x -j $DT", $badflags)));
+        $add('invalid-fw', 'Scarta pacchetti non validi (FORWARD)', 'filter', 'FORWARD', 'est', 10, [
+            '-A FORWARD -p tcp --tcp-flags RST RST -m conntrack --ctstate INVALID -j DROP',
+            '-A FORWARD -p tcp --tcp-flags FIN FIN -m conntrack --ctstate INVALID -j DROP',
+            "-A FORWARD -m conntrack --ctstate INVALID -j $DT"]);
+    }
+    if ($S['icmp_limit']) $add('icmp', 'ICMP: ping con limite per sorgente', 'filter', 'INPUT', 'est', 15, [
+        "-A INPUT -p icmp --icmp-type echo-request -m hashlimit --hashlimit-name icmp-echo --hashlimit-mode srcip --hashlimit-upto {$S['icmp_echo_rate']} --hashlimit-burst {$S['icmp_echo_burst']} -j ACCEPT", '-A INPUT -p icmp --icmp-type echo-request -j DROP',
+        "-A INPUT -p icmp -m hashlimit --hashlimit-name icmp-other --hashlimit-mode srcip --hashlimit-upto {$S['icmp_other_rate']} --hashlimit-burst {$S['icmp_other_burst']} -j ACCEPT", '-A INPUT -p icmp -j DROP']);
+    if ($S['igmp_accept']) $add('igmp', 'Accetta IGMP multicast (query del modem)', 'filter', 'INPUT', 'est', 16, ['-A INPUT -p igmp -m addrtype --dst-type MULTICAST -j ACCEPT']);
+    // --- servizi opzionali LAN, Docker, multicast e CoAP ---
+    if (!empty($S['cs_set_match']) && ($S['cs_set'] ?? '') === '') {
+        // match-set classico crowdsec-blacklists (oltre al jump del bouncer)
+        $add('cs-set-in', 'CrowdSec set diretto (INPUT)', 'filter', 'INPUT', 'est', 3, ['-A INPUT -m set --match-set crowdsec-blacklists src -j DROP']);
+        $add('cs-set-fw', 'CrowdSec set diretto (FORWARD)', 'filter', 'FORWARD', 'top', 2, ['-A FORWARD -m set --match-set crowdsec-blacklists src -j DROP']);
+        if (!empty($S['cs_docker'])) $add('cs-set-du', 'CrowdSec set su DOCKER-USER', 'filter', 'DOCKER-USER', 'top', 2, ['-A DOCKER-USER -m set --match-set crowdsec-blacklists src -j DROP', '-A DOCKER-USER -j RETURN']);
+    }
+    if (!empty($S['coap_accept']) && $lan) {
+        $r = [];
+        $iif = trim((string)($S['wan_if'] ?? '')); // spesso bond0 è LAN+WAN bridge; preferisci iface LAN se single_nic
+        foreach ($lan as $n) {
+            $r[] = "-A INPUT -s $n -p udp --dport 5353 -d 224.0.0.251 -j ACCEPT";
+        }
+        if ($iif !== '') {
+            $r[] = "-A INPUT -i $iif -p udp --dport 5683 -d 224.0.1.187 -j ACCEPT";
+            $r[] = "-A INPUT -i $iif -p udp --dport 5683 -d 255.255.255.255 -j ACCEPT";
+        }
+        $add('coap-mdns', 'mDNS e CoAP (Shelly / discovery) dalla LAN', 'filter', 'INPUT', 'est', 35, $r);
+    }
+    if (!empty($S['bcast_accept']) && $lan) {
+        $r = [];
+        foreach ($lan as $n) $r[] = "-A INPUT -s $n -p udp -d 255.255.255.255 -j ACCEPT";
+        $add('bcast', 'Broadcast UDP dalla LAN', 'filter', 'INPUT', 'est', 36, $r);
+    }
+    if (!empty($S['docker_accept']) && trim((string)($S['docker_nets'] ?? '')) !== '') {
+        $ri = []; $rf = [];
+        foreach (preg_split('/[\s,;]+/', $S['docker_nets'], -1, PREG_SPLIT_NO_EMPTY) as $n) {
+            $ri[] = "-A INPUT -s $n -j ACCEPT";
+            $rf[] = "-A FORWARD -d $n -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT";
+        }
+        if ($ri) $add('docker-net', 'Rete Docker: accesso all\'host (INPUT)', 'filter', 'INPUT', 'est', 37, $ri);
+        if ($rf) $add('docker-fwd', 'Rete Docker: risposte verso container (FORWARD)', 'filter', 'FORWARD', 'est', 38, $rf);
+    }
+    if (!empty($S['lan_tcp_accept']) && $lan) {
+        $r = [];
+        foreach ($lan as $n) $r[] = "-A INPUT -s $n -p tcp -j ACCEPT";
+        $add('lan-tcp', 'Tutto il TCP dalla LAN verso l\'host (come FIX 1 rules.v4)', 'filter', 'INPUT', 'end', 55, $r);
+    }
+    if (!empty($S['lan_out_fwd']) && $lan) {
+        $outs = array_filter(array_map('trim', explode(',', (string)($S['masq_ifs'] !== '' ? $S['masq_ifs'] : ($S['wan_if'] ?? '')))));
+        $r = [];
+        foreach ($lan as $n) {
+            if ($outs) foreach ($outs as $o) $r[] = "-A FORWARD -s $n -o $o -j ACCEPT";
+            else $r[] = "-A FORWARD -s $n -j ACCEPT";
+        }
+        if ($r) $add('lan-out', 'FORWARD: LAN verso uscita (WAN/masq)', 'filter', 'FORWARD', 'est', 40, $r);
+    }
+
+    if ($S['blockping'] && $needw('Blocco ping WAN')) $W('blockping', 'Blocca richieste anonime dal WAN (ping)', 'filter', 'INPUT', 'est', 20, ['-A INPUT {W} -p icmp --icmp-type echo-request -j DROP']);
+    if ($S['ident'] && $needw('Filtro IDENT')) {
+        $idact = !empty($S['stealth']) ? 'DROP' : 'REJECT --reject-with tcp-reset';
+        $W('ident', 'Filtro IDENT (porta 113)', 'filter', 'INPUT', 'est', 30, ["-A INPUT {W} -p tcp --dport 113 -j $idact"]);
+    }
+    if ($S['multicast'] && $needw('Filtro multicast')) {
+        $W('mcast-in', 'Filtra multicast dal WAN (INPUT)', 'filter', 'INPUT', 'est', 40, ['-A INPUT {W} -d 224.0.0.0/4 -j DROP', '-A INPUT {W} -p igmp -j DROP']);
+        $W('mcast-fw', 'Filtra multicast dal WAN (FORWARD)', 'filter', 'FORWARD', 'est', 40, ['-A FORWARD {W} -d 224.0.0.0/4 -j DROP']);
+    }
+    foreach (['ssh' => ['SSH', 'ssh_limit', 'ssh_port'], 'telnet' => ['Telnet', 'telnet_limit', 'telnet_port']] as $k => [$lbl, $on, $pt]) if ($S[$on] && $needw("Limite $lbl")) {
+        $b = '-A INPUT {W} -p tcp --dport ' . $S[$pt] . ' -m conntrack --ctstate NEW -m recent --name IPTM-' . strtoupper($k);
+        $W('limit-' . $k, "Limita accesso $lbl dal WAN", 'filter', 'INPUT', 'est', $k === 'ssh' ? 50 : 51, ["$b --update --seconds {$S['lim_secs']} --hitcount {$S['lim_hits']} -j DROP", "$b --set"]);
+    }
+    if ($S['dos']) $add('dos', 'Anti DoS: SYN flood per sorgente', 'filter', 'INPUT', 'est', 60, ["-A INPUT -p tcp --syn -m hashlimit --hashlimit-name {$S['dos_name']} --hashlimit-mode srcip --hashlimit-above {$S['dos_syn']}/sec --hashlimit-burst {$S['dos_burst']} -j $DT"]);
+    if (!empty($S['conn_limit'])) $add('connlimit', 'Limite di connessioni simultanee per IP (INPUT)', 'filter', 'INPUT', 'est', 61, ["-A INPUT -p tcp --syn -m connlimit --connlimit-above {$S['cl_max']} --connlimit-mask 32 -j $DT"]);
+    foreach (fq_parse((string)($S['fqdn_rules'] ?? '')) as $id => $q) {   // regole per nome di dominio (alias FQDN risolti dall'helper ogni 1 ora)
+        if ($q['act'] === 'block') $add('fqb-' . $id, "Blocca domini «{$id}»: " . implode(', ', array_slice($q['hosts'], 0, 4)), 'filter', 'FORWARD', 'est', 8, ["-A FORWARD -m set --match-set fq_$id dst -j DROP"]);
+        else $add('fqa-' . $id, "Consenti domini «{$id}»: " . implode(', ', array_slice($q['hosts'], 0, 4)), 'filter', 'FORWARD', 'top', 4, ["-A FORWARD -m set --match-set fq_$id dst -j ACCEPT"]);
+    }
+    $macs2 = array_slice(array_values(array_filter(explode(',', (string)$S['mac_allow']))), 0, 40);
+    if (!empty($S['mac_only']) && $macs2 && $S['lan_nets'] !== '') $add('mac-only', 'Solo i dispositivi autorizzati (MAC) dalla LAN', 'filter', 'FORWARD', 'top', 3, array_map(fn($n) => "-A FORWARD -s $n" . implode('', array_map(fn($m) => " -m mac ! --mac-source $m", $macs2)) . ' -j DROP', $lan));
+    if (!empty($S['bw_on']) && $S['wan_if'] !== '' && empty($S['single_nic'])) {   // policer per host (scarta oltre la soglia; TCP si adatta)
+        $add('bw-up', 'Limite di banda in uscita per host', 'filter', 'FORWARD', 'est', 17, array_map(fn($n) => $J('-A FORWARD', "-s $n -o {$S['wan_if']}", "-m hashlimit --hashlimit-above {$S['bw_up']}kb/s --hashlimit-mode srcip --hashlimit-name bwup -j DROP"), $lan ?: ['0.0.0.0/0']));
+        $add('bw-down', 'Limite di banda in ingresso per host', 'filter', 'FORWARD', 'est', 18, array_map(fn($n) => $J('-A FORWARD', "-d $n -i {$S['wan_if']}", "-m hashlimit --hashlimit-above {$S['bw_down']}kb/s --hashlimit-mode dstip --hashlimit-name bwdown -j DROP"), $lan ?: ['0.0.0.0/0']));
+    }
+    $alg = []; if (!empty($S['alg_ftp'])) $alg[] = '-A PREROUTING -p tcp --dport 21 -j CT --helper ftp'; if (!empty($S['alg_tftp'])) $alg[] = '-A PREROUTING -p udp --dport 69 -j CT --helper tftp'; if (!empty($S['alg_sip'])) $alg[] = '-A PREROUTING -p udp --dport 5060 -j CT --helper sip';
+    if ($alg) $add('raw-alg', 'raw: helper ALG (FTP/TFTP/SIP) per connessioni correlate', 'raw', 'PREROUTING', 'top', 40, $alg);
+    if (!empty($S['wg_on']) && (int)$S['wg_port'] > 0) {   // VPN WireGuard: interfaccia selezionabile (wg0, wg1, ...)
+        $wgIf = preg_match('/^[A-Za-z0-9_.-]{1,15}$/', (string)($S['wg_if'] ?? '')) ? $S['wg_if'] : 'wg0';
+        if ($needw('VPN WireGuard')) $W('wg-in', 'VPN WireGuard: porta UDP dal WAN', 'filter', 'INPUT', 'est', 30, ["-A INPUT {W} -p udp --dport {$S['wg_port']} -j ACCEPT"]);
+        if (!empty($S['wg_input'])) $add('wg-rin', 'VPN WireGuard (' . $wgIf . '): i client raggiungono il router', 'filter', 'INPUT', 'est', 31, ["-A INPUT -i $wgIf -j ACCEPT"]);
+        if (!empty($S['wg_lan'])) $add('wg-fwd', 'VPN WireGuard (' . $wgIf . '): i client raggiungono LAN e Internet', 'filter', 'FORWARD', 'est', 27, ["-A FORWARD -i $wgIf -j ACCEPT", "-A FORWARD -o $wgIf -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"]);
+    }
+    // ---------- segmentazione (zone/VLAN come UniFi, Fortinet, pfSense)
+    $iso = array_values(array_filter(explode(',', (string)$S['iso_nets'])));
+    if (!empty($S['iso_on']) && count($iso) >= 2) { $r = []; foreach ($iso as $a) foreach ($iso as $b) if ($a !== $b) $r[] = "-A FORWARD -s $a -d $b -j $DT"; $add('isolate', 'Isolamento tra le reti indicate', 'filter', 'FORWARD', 'top', 6, $r); }
+    $gn = array_values(array_filter(explode(',', (string)$S['guest_nets'])));
+    if (!empty($S['guest_on']) && $gn) {
+        $fr = []; $ir = [];
+        foreach ($gn as $g) {
+            $fr[] = "-A FORWARD -s $g -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT";
+            foreach (array_filter(explode(',', (string)$S['guest_allow'])) as $x) $fr[] = "-A FORWARD -s $g -d $x -j ACCEPT";
+            foreach (['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'] as $pv) $fr[] = "-A FORWARD -s $g -d $pv -j $DT";
+            $ir[] = "-A INPUT -s $g -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT";
+            if ($S['guest_ports'] !== '') foreach (['udp', 'tcp'] as $pr) $ir[] = "-A INPUT -s $g -p $pr " . port_opt($S['guest_ports']) . ' -j ACCEPT';
+            $ir[] = "-A INPUT -s $g -j $DT";
+        }
+        $add('guest-fw', 'Rete ospiti: niente accesso alle reti private (FORWARD)', 'filter', 'FORWARD', 'top', 5, $fr);
+        $add('guest-in', 'Rete ospiti: al router solo i servizi indicati (INPUT)', 'filter', 'INPUT', 'est', 5, $ir);
+    }
+    // Per-device MAC policies. Match only packets entering through the LAN and
+    // crossing the gateway, never output packets generated by DietPi itself.
+    // Without WAN/LAN separation, 'internet' is skipped: -o bond0 alone can
+    // also match traffic for local clients and cut their connection.
+    foreach ((array)($S['iot_policies'] ?? []) as $mac => $flags) {
+        if (!is_string($mac) || !preg_match('/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/D', $mac)
+            || !is_array($flags)) continue;
+        $on = array_values(array_intersect($flags, array_keys(iptm_iot_policy_options())));
+        if (!$on) continue;
+        $match = '-m mac --mac-source ' . $mac;
+        $r = [];
+        if (in_array('forward', $on, true)) $r[] = '-A FORWARD ' . $match . ' -j DROP';
+        else {
+            if (in_array('internet', $on, true)) {
+                if ($single || empty($S['wan_if'])) $warn[] = 'IoT ' . $mac . ': blocco Internet ignorato: WAN non isolabile dalla LAN. Usa VLAN o due interfacce.';
+                else $r[] = '-A FORWARD ' . $match . ' -o ' . $S['wan_if'] . ' -j DROP';
+            }
+            if (in_array('lan', $on, true)) foreach ($lan as $net)
+                if (v_ok('nets', $net)) $r[] = '-A FORWARD ' . $match . ' -d ' . $net . ' -j DROP';
+            if (in_array('dns', $on, true)) foreach (['tcp','udp'] as $proto)
+                $r[] = '-A FORWARD ' . $match . ' -p ' . $proto . ' --dport 53 -j DROP';
+            if (in_array('dot', $on, true)) foreach (['tcp','udp'] as $proto)
+                $r[] = '-A FORWARD ' . $match . ' -p ' . $proto . ' --dport 853 -j DROP';
+            if (in_array('quic', $on, true)) $r[] = '-A FORWARD ' . $match . ' -p udp --dport 443 -j DROP';
+            if (in_array('vpn', $on, true)) {
+                $r[] = '-A FORWARD ' . $match . ' -p udp -m multiport --dports 500,4500,1194,51820 -j DROP';
+                $r[] = '-A FORWARD ' . $match . ' -p tcp --dport 1723 -j DROP';
+            }
+        }
+        if ($r) $add('iot-' . str_replace(':','',$mac), 'IoT ' . $mac . ': filtri selezionati', 'filter', 'FORWARD', 'top', 1, $r);
+    }
+    $macs = array_values(array_filter(explode(',', (string)$S['mac_block'])));
+    if ($macs) foreach (['INPUT', 'FORWARD'] as $c) $add('mac-' . strtolower($c), "Quarantena dispositivi per MAC ($c)", 'filter', $c, 'top', 2, array_map(fn($m) => "-A $c -m mac --mac-source $m -j DROP", $macs));
+    if (!empty($S['quic_block'])) $add('quic', 'Blocca QUIC/HTTP3 (i browser ripiegano su TCP)', 'filter', 'FORWARD', 'est', 26, array_map(fn($n) => $J('-A FORWARD', "-s $n", '-p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable'), $lan ?: ['0.0.0.0/0']));
+    if (!empty($S['lan_cl'])) $add('lancl', 'Limite connessioni simultanee per client', 'filter', 'FORWARD', 'est', 16, array_map(fn($n) => $J('-A FORWARD', "-s $n", "-p tcp --syn -m connlimit --connlimit-above {$S['lan_cl_max']} --connlimit-mask 32 -j $DT"), $lan ?: ['0.0.0.0/0']));
+    if (!empty($S['svc_ban']) && $S['sb_ports'] !== '' && $needw('Ban automatico servizi')) foreach (['INPUT' => 'in', 'FORWARD' => 'fwd'] as $c => $k) {   // come l'«overload table» di pfSense
+        $det = "-A $c {W} -p tcp " . port_opt($S['sb_ports']) . ' -m conntrack --ctstate NEW -m recent --name IPTM-SVC' . $k;
+        $W('svcban-chk-' . $k, "Ban automatico: sorgenti già bannate ($c)", 'filter', $c, 'est', 19, ["-A $c {W} -m recent --name IPTM-BAN --rcheck --seconds {$S['sb_ban']} -j DROP"]);
+        $W('svcban-' . $k, "Ban automatico: troppi tentativi sui servizi indicati ($c)", 'filter', $c, 'est', 52, ["$det --update --seconds {$S['sb_secs']} --hitcount {$S['sb_hits']} -m recent --name IPTM-BAN --set -j DROP", "$det --set"]);
+    }
+    if (!empty($S['bad_mss'])) foreach (['INPUT', 'FORWARD'] as $c) $add('badmss-' . strtolower($c), "Scarta SYN con MSS anomalo ($c)", 'filter', $c, 'est', 11, ["-A $c -p tcp --syn -m tcpmss --mss 0:535 -j $DT"]);
+    if (!empty($S['udp_rl'])) $add('udprl', 'Limite nuovi flussi UDP per sorgente (INPUT)', 'filter', 'INPUT', 'est', 62, ["-A INPUT -p udp -m conntrack --ctstate NEW -m hashlimit --hashlimit-name udpflood --hashlimit-mode srcip --hashlimit-above {$S['ul_rate']}/sec --hashlimit-burst {$S['ul_burst']} -j $DT"]);
+    if (!empty($S['web_rl']) && $S['wl_ports'] !== '' && $needw('Limite connessioni web dal WAN')) foreach (['INPUT' => 'in', 'FORWARD' => 'fwd'] as $c => $k)
+        $W('webrl-' . $k, "Limite nuove connessioni web dal WAN ($c)", 'filter', $c, 'est', 63, ["-A $c {W} -p tcp " . port_opt($S['wl_ports']) . " -m conntrack --ctstate NEW -m hashlimit --hashlimit-name webrl$k --hashlimit-mode srcip --hashlimit-above {$S['wl_rate']}/sec --hashlimit-burst {$S['wl_burst']} -j $DT"]);
+    if (!empty($S['amp_block']) && $needw('Blocco amplificazione UDP')) $W('amp', 'Scarta risposte UDP non richieste da servizi di amplificazione (WAN)', 'filter', 'INPUT', 'est', 35, ['-A INPUT {W} -p udp -m multiport --sports 19,53,111,123,137,161,389,1900,5353,11211 -m conntrack --ctstate NEW -j DROP']);
+    if (!empty($S['rpfilter'])) $add('raw-rpf', 'raw: reverse path filter (sorgenti incoerenti con il routing)', 'raw', 'PREROUTING', 'top', 30, ['-A PREROUTING -p udp --sport 68 --dport 67 -j ACCEPT', '-A PREROUTING -m rpfilter --invert -j DROP']);
+    if ($S['dot_block']) $add('dot', 'Blocco DNS-over-TLS (853)', 'filter', 'FORWARD', 'est', 70, ['-A FORWARD -p tcp --dport 853 -j REJECT --reject-with tcp-reset', '-A FORWARD -p udp --dport 853 -j REJECT --reject-with icmp-port-unreachable']);
+    // ---------- protezioni aggiuntive (da pfSense/OPNsense, CIS, iptables-essentials)
+    if ($S['drop_frag']) foreach (['INPUT', 'FORWARD'] as $c) $add('frag-' . strtolower($c), "Scarta frammenti IP ($c)", 'filter', $c, 'est', 9, ["-A $c -f -j DROP"]);
+    if ($S['bogon_wan']) {
+        if ($single || $S['wan_if'] === '') $warn[] = 'Filtro bogon WAN: serve una WAN su interfaccia dedicata (non «interfaccia unica»). Non usarlo se il modem ha un IP privato (doppio NAT).';
+        else foreach (['INPUT', 'FORWARD'] as $c) $add('bogon-' . strtolower($c), "Scarta sorgenti private/bogon dal WAN ($c)", 'filter', $c, 'top', 4, array_merge(["-A $c -i {$S['wan_if']} -p udp --sport 67:68 --dport 67:68 -j ACCEPT"], array_map(fn($n) => "-A $c -i {$S['wan_if']} -s $n -j DROP", ['0.0.0.0/8', '10.0.0.0/8', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16', '224.0.0.0/3'])));
+    }
+    if ($S['portscan']) {
+        $ps_hits = max(5, min(50, (int)($S['ps_hits'] ?? 14)));
+        $ps_secs = max(10, min(600, (int)($S['ps_secs'] ?? 60)));
+        $ps_ban  = max(60, min(86400, (int)($S['ps_ban'] ?? 3600)));
+        $NL('IPTM-PS', '-s'); $NL('IPTM-PSD', '-s');
+        $add('ps-chk', 'Port scan: sorgenti già segnalate (ban ' . $ps_ban . 's)', 'filter', 'IPTM-PS', 'top', 10, ["-A IPTM-PS -m recent --name IPTM-PSCAN --rcheck --seconds $ps_ban -j DROP"]);
+        $add('ps-chk-jump', 'Port scan (controllo)', 'filter', 'INPUT', 'est', 4, ['-A INPUT -j IPTM-PS']);
+        $add('ps-det', 'Port scan: rilevamento su porte chiuse (≥' . $ps_hits . ' in ' . $ps_secs . 's)', 'filter', 'IPTM-PSD', 'top', 10, [
+            "-A IPTM-PSD -p tcp --syn -m recent --name IPTM-PSHIT --rcheck --seconds $ps_secs --hitcount $ps_hits -m recent --name IPTM-PSCAN --set -j $DT",
+            '-A IPTM-PSD -p tcp --syn -m recent --name IPTM-PSHIT --set']);
+        $add('ps-det-jump', 'Port scan (rilevamento)', 'filter', 'INPUT', 'end', 85, ['-A INPUT -j IPTM-PSD']);
+    }
+    // Stealth: prefer pure DROP (no ICMP unreachable / TCP reset) – inspired by stealth options in commercial firewalls
+    if (!empty($S['stealth'])) {
+        // Override common REJECT with DROP where we previously used REJECT for visibility reduction
+        // (ident is kept as REJECT because some clients hang without a response; blockping already DROP)
+    }
+    // SYNPROXY – modern SYN flood protection (kernel ≥ 3.12, requires nf_synproxy_core)
+    // Inspired by FortiGate DoS profiles and Linux SYNPROXY best practices.
+    // Empty sp_ports = all NEW SYN; otherwise only the listed ports (web/SSH typically).
+    if (!empty($S['synproxy'])) {
+        $sp = [];
+        $ports = trim((string)($S['sp_ports'] ?? ''));
+        if ($ports !== '') {
+            $sp[] = '-A INPUT -p tcp ' . port_opt($ports) . ' -m conntrack --ctstate INVALID,UNTRACKED -j SYNPROXY --sack-perm --timestamp --wscale 7 --mss 1460';
+        } else {
+            $sp[] = '-A INPUT -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -m conntrack --ctstate INVALID,UNTRACKED -j SYNPROXY --sack-perm --timestamp --wscale 7 --mss 1460';
+        }
+        $sp[] = '-A INPUT -m conntrack --ctstate INVALID -j DROP';
+        $add('synproxy', 'SYNPROXY (anti SYN flood avanzato' . ($ports !== '' ? ', porte ' . $ports : '') . ')', 'filter', 'INPUT', 'est', 11, $sp);
+    }
+    // TARPIT on closed privileged ports (slows scanners dramatically) – inspired by advanced iptables setups
+    if (!empty($S['tarpit']) && !empty($S['closeports']) && $S['close_range'] !== '') {
+        $add('tarpit', 'TARPIT su porte privilegiate chiuse', 'filter', 'INPUT', 'end', 81, [
+            "-A INPUT -p tcp " . port_opt($S['close_range']) . " -j TARPIT"]);
+    }
+    // Rebinding is about addresses *inside DNS answers*, not the IP destination
+    // of the packet. A legacy FORWARD --sport 53 -d RFC1918 DROP rule broke
+    // legitimate DNS replies to LAN clients. Never synthesize that rule.
+    if (!empty($S['dns_rebind'])) {
+        $warn[] = 'DNS rebinding: proteggi le risposte nel resolver Pi-hole/Unbound/DNSCrypt, NON con una regola FORWARD basata sull’IP di destinazione.';
+    }
+    // Scarta INVALID il prima possibile (raw PREROUTING) – riduce carico conntrack
+    if (!empty($S['raw_invalid'])) {
+        $add('raw-inv', 'Scarta INVALID in raw (prima del tracking)', 'raw', 'PREROUTING', 'top', 5, [
+            '-A PREROUTING -m conntrack --ctstate INVALID -j DROP']);
+    }
+    // Limite globale di nuove connessioni verso il router (protezione da flood distribuiti)
+    if (!empty($S['glob_new_limit'])) {
+        $gr = max(1, (int)($S['gn_rate'] ?? 100)); $gb = max(1, (int)($S['gn_burst'] ?? 200));
+        $add('glob-new', 'Limite globale nuove connessioni (INPUT)', 'filter', 'INPUT', 'est', 13, [
+            "-A INPUT -p tcp --syn -m conntrack --ctstate NEW -m hashlimit --hashlimit-name globnew --hashlimit-mode dstip --hashlimit-above {$gr}/sec --hashlimit-burst $gb -j $DT"]);
+    }
+    if ($S['lan_flood']) $add('lanflood', 'Limite di nuove connessioni per client', 'filter', 'FORWARD', 'est', 15, ["-A FORWARD -p tcp --syn -m hashlimit --hashlimit-name lanflood --hashlimit-mode srcip --hashlimit-above {$S['lf_rate']}/sec --hashlimit-burst {$S['lf_burst']} -j $DT"]);
+    if ($S['egress_smtp'] || $S['egress_ports'] !== '') {
+        $r = []; if ($S['egress_smtp']) { if ($S['egress_allow'] !== '') $r[] = "-A FORWARD -s {$S['egress_allow']} -p tcp --dport 25 -j ACCEPT"; $r[] = "-A FORWARD -p tcp --dport 25 -j $DT"; }
+        if ($S['egress_ports'] !== '') foreach (['tcp', 'udp'] as $p) $r[] = "-A FORWARD -p $p " . port_opt($S['egress_ports']) . " -j $DT";
+        $add('egress', 'Filtro in uscita (SMTP e porte indicate)', 'filter', 'FORWARD', 'est', 25, $r);
+    }
+    // ---------- servizi del router, SSH per reti, chiusura
+    $sin = fn($after) => svc_rules('INPUT', array_values(array_filter($S['svc_in'], fn($r) => !empty($r['on']) && (!empty($r['after'])) === $after)), $AL);
+    if ($x = $sin(false)) $add('svc-in-a', 'Servizi del router (INPUT)', 'filter', 'INPUT', 'end', 40, $x);
+    if ($S['ssh_acc'] && $S['ssh_nets'] !== '') {
+        $r = []; foreach (explode(',', $S['ssh_nets']) as $n) { $b = "-A INPUT -s $n -p tcp --dport {$S['ssh_acc_port']}";
+            $r[] = "$b -m connlimit --connlimit-above {$S['ssh_conn']} --connlimit-mask 32 -j $DT"; $r[] = "$b -m recent --name {$S['ssh_name']} --update --seconds {$S['ssh_secs']} --hitcount {$S['ssh_hits']} -j $DT"; $r[] = "$b -m recent --name {$S['ssh_name']} --set -j ACCEPT"; }
+        $add('ssh-acc', 'SSH: limiti di connessioni e tentativi per rete', 'filter', 'INPUT', 'end', 50, $r);
+    }
+    if ($x = $sin(true)) $add('svc-in-b', 'Servizi del router (INPUT, dopo SSH)', 'filter', 'INPUT', 'end', 60, $x);
+    if (function_exists('apps_rules') && ($ar = apps_rules($S))) $add('apps', 'Porte software (programmi abilitati)', 'filter', 'INPUT', 'end', 65, $ar);
+    if ($S['closeports'] && $S['close_range'] !== '') $add('close-input', 'Scarta le porte privilegiate non autorizzate', 'filter', 'INPUT', 'end', 80, ["-A INPUT -p tcp " . port_opt($S['close_range']) . " -j $DT", "-A INPUT -p udp " . port_opt($S['close_range']) . " -j $DT"]);
+    if ($S['final_drop']) foreach (['INPUT', 'FORWARD'] as $c) $add('final-' . strtolower($c), "Scarta tutto il resto ($c)", 'filter', $c, 'end', 99, ["-A $c -j $DT"]);
+    if ($x = svc_rules('FORWARD', array_values(array_filter($S['svc_fwd'], fn($r) => !empty($r['on']))), $AL)) $add('svc-fwd', 'Regole di transito (FORWARD)', 'filter', 'FORWARD', 'end', 40, $x);
+    // ---------- log
+    $lr = $S['log_rate'];
+    if ($S['log_in'] && $needw('Log ingresso')) $W('log-in', 'Log nuove connessioni in ingresso dal WAN', 'filter', 'INPUT', 'est', 90, ["-A INPUT {W} -m conntrack --ctstate NEW -m limit --limit $lr -j LOG --log-prefix \"IPTM-IN: \" --log-level 4"]);
+    if ($S['log_out'] && $needw('Log uscita')) $W('log-out', 'Log nuove connessioni verso il WAN', 'filter', 'FORWARD', 'est', 90, ["-A FORWARD {W} -m conntrack --ctstate NEW -m limit --limit $lr -j LOG --log-prefix \"IPTM-OUT: \" --log-level 4"], 'o');
+    if ($S['log_drop']) foreach (['INPUT', 'FORWARD'] as $c) $add('log-drop-' . strtolower($c), "Log pacchetti scartati ($c)", 'filter', $c, 'end', 90, ["-A $c -m limit --limit $lr -j LOG --log-prefix \"IPTM-DROP: \" --log-level 4"]);
+    // ---------- NAT / mangle
+    if ($S['nat_masq']) {
+        // A shared physical interface must NEVER produce an unscoped -o WAN
+        // MASQUERADE: doing so hides modem-side, Docker and WireGuard traffic.
+        // Honor explicit output interfaces only inside the source-scoped chain.
+        if ($single && $lan) {
+            // La limitazione del NAT alle sorgenti LAN è il funzionamento
+            // corretto, non un avviso. La pagina Setup la descrive come stato.
+            $singleOuts = array_values(array_unique(array_filter(array_map('trim', explode(',',
+                $S['masq_ifs'] !== '' ? $S['masq_ifs'] : $S['wan_if'])))));
+            if (!$singleOuts) {
+                $warn[] = 'NAT Single-NIC non generato: scegli l’interfaccia WAN o le interfacce di uscita in Rete → WAN, LAN e NAT.';
+            } else {
+                $add('nat-masq-ret', 'NAT: esclusione LAN→LAN', 'nat', 'IPTM-MASQ', 'top', 0,
+                    array_map(fn($n) => "-A IPTM-MASQ -d $n -j RETURN", $lan));
+                $add('nat-masq-do', 'NAT / Masquerade in uscita', 'nat', 'IPTM-MASQ', 'top', 10,
+                    array_map(fn($iface) => '-A IPTM-MASQ -o ' . $iface . ' -j MASQUERADE', $singleOuts));
+                // Una regola di ingresso per ogni LAN, mai una sorgente globale.
+                $add('nat-masq', 'NAT: salto dalla LAN', 'nat', 'POSTROUTING', 'end', 10,
+                    array_map(fn($n) => '-A POSTROUTING -s ' . $n . ' -j IPTM-MASQ', $lan));
+            }
+        } elseif ($S['masq_ifs'] !== '') {
+            $outIfs = array_values(array_unique(array_filter(array_map('trim', explode(',', $S['masq_ifs'])))));
+            $scoped = [];
+            foreach ($lan as $net) foreach ($outIfs as $iface)
+                $scoped[] = $J('-A POSTROUTING', '-s ' . $net, '-o ' . $iface, '-j MASQUERADE');
+            if ($scoped) $add('nat-masq', 'NAT / Masquerade per subnet LAN', 'nat', 'POSTROUTING', 'end', 10, $scoped);
+            else $warn[] = 'NAT non generato: inserisci almeno una subnet LAN (es. 192.168.10.0/24). Non verrà creato un masquerade globale.';
+        } elseif (!$single && $S['wan_if'] !== '' && $lan) {
+            // Stesso criterio prudenziale di IPTM 6.11.3: NAT solo per CIDR
+            // espliciti. Mai usare la fallback 0.0.0.0/0 quando manca la LAN.
+            $add('nat-masq', 'NAT / Masquerade per subnet LAN', 'nat', 'POSTROUTING', 'end', 10,
+                 array_map(fn($n) => $J('-A POSTROUTING', '-o ' . $S['wan_if'], '-s ' . $n, '-j MASQUERADE'), $lan));
+        } else $warn[] = 'NAT non generato: configura almeno una rete LAN e l’interfaccia di uscita in Rete → WAN, LAN e NAT.';
+    }
+    if ($S['mss']) $add('mss', 'Clamp MSS al PMTU', 'mangle', 'FORWARD', 'end', 10, ['-A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu']);
+    // Priorità traffico (DSCP → tin CAKE, stile cFosSpeed)
+    if (!empty($S['sqm']['on']) && empty($S['qos_engine']['interface']) && function_exists('sqm_prio_rules')) {
+        $prules = sqm_prio_rules($S);
+        $byc = [];
+        foreach ($prules as $r) {
+            if (preg_match('/^-A (OUTPUT|FORWARD) /', $r, $m)) $byc[$m[1]][] = $r;
+        }
+        foreach ($byc as $chain => $rs) {
+            $add('sqm-prio-' . strtolower($chain), 'QoS prioritizzazione DSCP (CAKE/cFos-like) su ' . $chain, 'mangle', $chain, 'end', 20, $rs);
+        }
+    }
+    if ($S['dns_redirect']) {
+        if ($S['dns_ip'] === '' || !$lan) $warn[] = 'Redirect DNS: servono IP del DNS locale e reti LAN.';
+        else { $r = []; foreach ($lan as $n) foreach (['udp', 'tcp'] as $p) $r[] = $J('-A PREROUTING', '-s ' . $n, '! -d ' . $S['dns_ip'], "-p $p --dport 53", '-j DNAT --to-destination ' . $S['dns_ip'] . ':53'); $add('dns-redir', 'Forza i client LAN a usare il DNS locale', 'nat', 'PREROUTING', 'top', 10, $r); }
+    }
+    // ---------- port forwarding / DMZ
+    $fn = $fa = $lb = $lm = [];
+    foreach ($S['fwd'] as $r) {
+        if (empty($r['on'])) continue;
+        $isr = str_contains($r['eport'], ':'); $dp = $r['tport'] !== '' ? $r['tport'] : $r['eport'];
+        $to = $r['ip'] . ($r['tport'] !== '' ? ':' . $r['tport'] : ($isr ? '' : ':' . $r['eport']));
+        $fn[] = '# ' . ($r['name'] ?: 'forward'); $fa[] = '# ' . ($r['name'] ?: 'forward');
+        foreach ($r['proto'] === 'both' ? ['tcp', 'udp'] : [$r['proto']] as $p) {
+            $s = $r['src'] !== '' ? '-s ' . $r['src'] : '';
+            $fn[] = $J('-A PREROUTING {W}', $s, '-m addrtype --dst-type LOCAL', "-p $p --dport " . $r['eport'], '-j DNAT --to-destination ' . $to);
+            $fa[] = $J('-A FORWARD', '-d ' . $r['ip'], $s, "-p $p --dport $dp", '-j ACCEPT');
+            if ($S['loopback'] && $lan) {
+                foreach ($lan as $n) $lb[] = $J('-A PREROUTING', '-s ' . $n, '-m addrtype --dst-type LOCAL', "-p $p --dport " . $r['eport'], '-j DNAT --to-destination ' . $to);
+                foreach ($lan as $n) $lm[] = $J('-A POSTROUTING', '-s ' . $n, '-d ' . $r['ip'], "-p $p --dport $dp", '-j MASQUERADE');
+            }
+        }
+    }
+    if ($fn) { if (!$ready) $warn[] = 'Port forward: WAN non definita, le regole valgono per qualsiasi pacchetto destinato a questo host.'; $W('fwd-nat', 'Port forwarding (DNAT)', 'nat', 'PREROUTING', 'top', 20, $fn); $add('fwd-acc', 'Port forwarding (permessi FORWARD)', 'filter', 'FORWARD', 'est', 20, $fa); }
+    if ($lb) { $add('fwd-loop', 'NAT loopback (accesso dalla LAN)', 'nat', 'PREROUTING', 'top', 21, $lb); $add('fwd-loop-m', 'NAT loopback (masquerade)', 'nat', 'POSTROUTING', 'end', 20, $lm); }
+    if ($S['dmz_on'] && $S['dmz_ip'] !== '') {
+        $ex = $S['dmz_excl']; $r = [];
+        foreach (['tcp', 'udp'] as $p) $r[] = $J('-A PREROUTING {W}', '-m addrtype --dst-type LOCAL', "-p $p", $ex !== '' ? '-m multiport ! --dports ' . $ex : '', '-j DNAT --to-destination ' . $S['dmz_ip']);
+        $W('dmz', 'DMZ host ' . $S['dmz_ip'], 'nat', 'PREROUTING', 'top', 90, $r);
+        $add('dmz-acc', 'DMZ (permesso FORWARD)', 'filter', 'FORWARD', 'est', 90, ['-A FORWARD -d ' . $S['dmz_ip'] . ' -m conntrack --ctstate DNAT -j ACCEPT']);
+    }
+    // ---------- restrizioni di accesso (prima di SPI/established: valgono anche per connessioni già aperte)
+    foreach ($S['acl'] as $i => $p) {
+        if (empty($p['on'])) continue;
+        [$cl, ] = acl_clients((string)$p['clients']); if (!$cl) { if ($S['lan_nets'] === '') { $warn[] = 'Criterio «' . $p['name'] . '»: nessun client e nessuna LAN definita.'; continue; } $cl = array_map(fn($n) => '-s ' . $n, $lan); }
+        $tg = acl_targets($p); if (!$tg) { $warn[] = 'Criterio «' . $p['name'] . '»: scegli almeno un servizio o parola chiave.'; continue; }
+        $r = ['# Criterio: ' . ($p['name'] ?: 'senza nome')];
+        foreach ($cl as $c) foreach (acl_time($p) as $t) foreach ($tg as $f) $r[] = $J('-A FORWARD', $c, $t, $f, '-j DROP');
+        $add('acl-' . ($i + 1), 'Restrizione: ' . ($p['name'] ?: 'criterio ' . ($i + 1)), 'filter', 'FORWARD', 'top', 7, $r);
+    }
+    // ---------- catene WAN (solo interfaccia unica)
+    $cn = ['filter|INPUT|i' => 'IPTM-WAN-IN', 'filter|FORWARD|i' => 'IPTM-WAN-FWI', 'filter|FORWARD|o' => 'IPTM-WAN-FWO', 'nat|PREROUTING|i' => 'IPTM-WAN-PRE'];
+    foreach ($wanc as $k => $list) {
+        [$t, $c, $d] = explode('|', $k); $ch = $cn[$k] ?? null; if (!$ch || !$lan) continue;
+        $add("wan-$ch-ret", "Esclusione LAN ($ch)", $t, $ch, 'top', 0, array_map(fn($n) => "-A $ch -" . ($d === 'i' ? 's' : 'd') . " $n -j RETURN", $lan));
+        $min = 999; $an = $list[0]['an'];
+        foreach ($list as $x) { $min = min($min, $x['pr']); $add($x['id'], $x['title'], $t, $ch, 'top', $x['pr'], array_map(fn($b) => preg_replace(['/^-A \S+ /', '/ \{W\}/', '/\{W\} ?/', '/ {2,}/'], ['-A ' . $ch . ' ', '', '', ' '], $b), $x['bodies'])); }
+        $add("wan-$ch-jump", "Salto a $ch (solo traffico WAN)", $t, $c, $an, $min, ["-A $c -j $ch"]);
+    }
+    foreach (($S['custom_opts'] ?? []) as $co) {   // opzioni create dall'utente (analisi regole manuali o inserimento diretto)
+        if (empty($co['on'])) continue; $by = [];
+        foreach (($co['rules'] ?? []) as $cr) {
+            if (!isset(BUILTIN[$cr['t'] ?? '']) || !lint_rule((string)($cr['r'] ?? ''))) { $warn[] = 'Opzione «' . ($co['name'] ?? '?') . '»: regola non valida saltata.'; continue; }
+            $by[$cr['t'] . '|' . rchain($cr['r'])][] = $cr['r'];
+        }
+        foreach ($by as $k => $rs) {
+            [$t, $c] = explode('|', $k, 2); $an = (in_array($co['an'] ?? 'end', ['top', 'est', 'end'], true) || preg_match('/^rk:[0-9a-f]{12}$/', (string)($co['an'] ?? ''))) ? $co['an'] : 'end';
+            $add('cust-' . preg_replace('/[^A-Za-z0-9_.-]/', '', (string)($co['id'] ?? 'x')) . '-' . $t . '-' . preg_replace('/[^A-Za-z0-9_.-]/', '', $c), 'Opzione «' . copt_clean_name((string)($co['name'] ?? '')) . '»', $t, $c, $an, (int)($co['pr'] ?? 50), $rs);
+        }
+    }
+    return [$sec, $warn];
+}
+function ensure_table(array &$M, string $name) {
+    if (tb($M, $name) >= 0) return;
+    $items = []; foreach (BUILTIN[$name] ?? [] as $c) $items[] = ['t' => 'chain', 'n' => $c, 'p' => 'ACCEPT'];
+    $last = -1; foreach ($M as $k => $b) if ($b['k'] === 'table') $last = $k;
+    array_splice($M, $last + 1, 0, [['k' => 'table', 'name' => $name, 'items' => $items]]);
+}
+function anchor_index(array $items, string $ch, string $an): int {
+    $ix = chain_rules($items, $ch);
+    if (str_starts_with($an, 'rk:')) {   // subito dopo la regola con quella chiave (mantiene la posizione di una regola manuale convertita)
+        foreach (array_reverse($ix) as $i) if (substr(md5(rkey($items[$i]['r'])), 0, 12) === substr($an, 3)) return $i + 1;
+        return ins_index($items, $ch, 'smart');
+    }
+    if ($an === 'top') return $ix ? $ix[0] : count($items);
+    if ($an === 'est') {
+        foreach ($ix as $i) {
+            if (!$items[$i]['on']) continue; $f = rule_parse($items[$i]['r']);
+            if ($f['target'] === 'ACCEPT' && stripos($f['ctstate'], 'ESTABLISHED') !== false && $f['ctstate'][0] !== '!' && $f['i'] === '' && $f['s'] === '') return $i + 1;
+        }
+        return $ix ? $ix[0] : count($items);
+    }
+    return ins_index($items, $ch, 'smart');
+}
+function in_region(array $items, int $idx): bool {   // true se $idx cade dentro un blocco IPTM
+    $open = false; for ($j = 0; $j < $idx && $j < count($items); $j++) { $x = $items[$j]; if ($x['t'] !== 'c') continue; if (str_starts_with($x['x'], '# >>> IPTM:')) $open = true; elseif (str_starts_with($x['x'], '# <<< IPTM:')) $open = false; }
+    return $open;
+}
+function out_of_region(array $items, int $idx): int {
+    if (!in_region($items, $idx)) return $idx;
+    for ($j = $idx; $j < count($items); $j++) if ($items[$j]['t'] === 'c' && str_starts_with($items[$j]['x'], '# <<< IPTM:')) return $j + 1;
+    return $idx;
+}
+function ensure_chain(array &$M, string $t, string $c) {
+    $ti = tb($M, $t); if ($ti < 0 || chain_ok($t, $M[$ti]['items'], $c)) return;
+    $last = 0; foreach ($M[$ti]['items'] as $i => $it) if ($it['t'] === 'chain') $last = $i + 1;
+    array_splice($M[$ti]['items'], $last, 0, [['t' => 'chain', 'n' => $c, 'p' => '-']]);
+}
+function strip_regions(array &$M) {
+    foreach ($M as &$b) {
+        if ($b['k'] !== 'table') continue;
+        $o = []; $in = false;
+        foreach ($b['items'] as $it) {
+            if ($it['t'] === 'c' && str_starts_with($it['x'], '# >>> IPTM:')) { $in = true; continue; }
+            if ($it['t'] === 'c' && str_starts_with($it['x'], '# <<< IPTM:')) { $in = false; continue; }
+            if (!$in && !($it['t'] === 'chain' && str_starts_with($it['n'], 'IPTM-'))) $o[] = $it;
+        }
+        if (!$in) $b['items'] = $o;   // regione non chiusa: non tocco nulla
+    }
+}
+function regen(array &$M, array $S): array {
+    strip_regions($M); [$secs, $warn] = gen_sections($S);
+    $groups = []; foreach ($secs as $s) $groups[$s['t'] . '|' . $s['c'] . '|' . $s['an']][] = $s;
+    $ord = ['top' => 0, 'est' => 1, 'end' => 2];
+    uksort($groups, fn($a, $b) => ($ord[explode('|', $a)[2]] ?? 3) <=> ($ord[explode('|', $b)[2]] ?? 3));
+    foreach ($groups as $k => $ss) {
+        [$t, $c, $an] = explode('|', $k); ensure_table($M, $t);
+        ensure_chain($M, $t, $c);
+        $ti = tb($M, $t);
+        if (!chain_ok($t, $M[$ti]['items'], $c)) { $warn[] = "Catena $t/$c inesistente: sezioni saltate."; continue; }
+        usort($ss, fn($a, $b) => $a['pr'] <=> $b['pr']); $blk = [];
+        foreach ($ss as $s) {
+            $blk[] = ['t' => 'c', 'x' => '# >>> IPTM:' . $s['id'] . ' - ' . $s['title'] . ' (generato: non modificare a mano)'];
+            foreach ($s['rules'] as $r) $blk[] = $r[0] === '#' ? ['t' => 'c', 'x' => $r] : ['t' => 'rule', 'r' => $r, 'on' => true];
+            $blk[] = ['t' => 'c', 'x' => '# <<< IPTM:' . $s['id']];
+        }
+        $at = out_of_region($M[$ti]['items'], anchor_index($M[$ti]['items'], $c, $an));
+        array_splice($M[$ti]['items'], $at, 0, $blk);
+    }
+    if ($S['spi']) { $ti = tb($M, 'filter'); foreach ($M[$ti]['items'] as &$it) if ($it['t'] === 'chain' && in_array($it['n'], ['INPUT', 'FORWARD'], true)) $it['p'] = 'DROP'; unset($it); }
+    return $warn;
+}
