@@ -1,3 +1,77 @@
+## 5.30.22 — CrowdSec nftables / rilevamento
+
+- `cs-status` riporta mode, tabella nft e presenza catene.
+- `cs_detect` considera utilizzabile anche nftables/ipset attivi (non solo CROWDSEC_CHAIN).
+- Autodetect: in nftables abilita IPTM senza richiedere catena iptables; messaggi di errore mirati.
+
+## 5.30.21 — miglioramenti impostazioni
+
+- Validazione incrociata pre-salvataggio (DNS redirect, NAT, guest, isolamento, WG, MAC-only, UI nets).
+- Snapshot automatico pre-save per sezione.
+- Messaggio di salvataggio con riepilogo sezione (setup/security/access).
+
+## 5.30.20 — hardening sicurezza applicabile
+
+- Header: Permissions-Policy, COOP/CORP, object-src none, no-store HTML.
+- Password: Argon2id se disponibile; verify anti-enumerazione utente.
+- CSRF a 32 byte; cookie di sessione più stretti.
+- Download backup con realpath confinement.
+- API: header hardening, niente leak messaggio eccezione, api.token 0600.
+- Helper: umask 077.
+
+## 5.30.19 — reservation DHCP: controllo e applicazione
+
+- **Controlla**: validazione strutturata errori (MAC/IP/pool/duplicati).
+- **Applica su Pi-hole**: scrive `dhcp.hosts` via `pihole-FTL --config` dopo validazione ok.
+- Verifica post-apply sulla presenza dei MAC.
+
+## 5.30.18 — errori reservation DHCP
+
+- Validatore strutturato `validate_dhcp_reservations` (MAC/IP/hostname, duplicati, pool, gateway).
+- CLI `net-audit dhcp-reservations` e azione UI **Controlla reservation** in Multi-NIC.
+- Codici errore espliciti in flash e elenco in pagina.
+
+## 5.30.17 — funzioni in sospeso completate
+
+- Piano MAC sospeso: **Riprendi piano** (oltre a elimina).
+- «Salva e applica» allineato alla conferma automatica.
+- Testi UI residuali «con rollback/conferma» aggiornati ad «Applica ora».
+- ACL orari classificati come funzione locale (parental schedules).
+
+## 5.30.16 — applicazione semplificata
+
+- «Applica ora» applica e conferma in un solo passo (niente seconda Conferma).
+- Niente checkbox force/DNS per l’apply normale.
+- Testi guida aggiornati.
+
+## 5.30.15 — colli di bottiglia
+
+- QoS: una sola chiamata `tc` in `inspect()` (prima doppia).
+- Cache request-local di `priv()` ampliata ai probe di stato più usati (stats, DNS, CrowdSec, SQM, conns, …).
+
+## 5.30.14 — retention release e rollback UI
+
+- Dopo ogni update restano al massimo **3** release su disco (prune corretto: non più bloccato dal check manifest parziale).
+- Pagina Aggiornamenti: elenco release locali e **Ripristina questa versione** (pack on-disk + migrate con force).
+- Unità HTTP cache legacy registrate in upgrade_cleanup.
+
+## 5.30.13 — release pulita post-cache HTTP
+
+- Nuova release nativa 5.30.13 (loader, helper, moduli, estensioni).
+- Dismissione proxy HTTP legacy: solo cleanup residuale (niente dipendenza da `cache_proxy.py`).
+- Downgrade consentito con flag force.
+- Generazione rules: SPI/anti-spoof anticipati; IoT raggruppato; SSH senza ESTABLISHED ridondante se SPI attivo.
+- Helper: conf_set/conf_del atomici; report moduli kernel.
+- UI: token CSS coerenti; helper form centralizzati.
+
+## 5.30.12+hardening — robustezza, UI e downgrade
+
+- Downgrade nativo consentito con flag **force** (stessa conferma della reinstallazione).
+- Generazione rules: SPI/anti-spoof anticipati; SSH senza ESTABLISHED ridondante; IoT raggruppato per policy uguali.
+- Helper: `conf_set`/`conf_del` atomici; report moduli kernel mancanti.
+- Retirement cache HTTP più fail-closed.
+- UI: token CSS coerenti, card con ombra, helper form centralizzati in `17_common_ui_ops.php`.
+
 ## 5.30.12 — dismissione cache HTTP IPTM e ottimizzazione senza proxy
 
 - Rimossi backend, dispatcher, pagina di configurazione, installazione APT e servizi gestiti per la vecchia cache HTTP.

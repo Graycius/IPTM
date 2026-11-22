@@ -119,7 +119,8 @@ function pg_zones() {
         echo 'Diagnostica: '.h((string)($pendingMac['diagnostic']??'IPv6 filter non disponibile')).'. ';
         echo 'Ripara il supporto IPv6 o disabilitalo completamente; quindi rigenera l’anteprima per rifare i controlli. Nessuna applicazione automatica.';
         if (($_SESSION['role']??'')==='admin')
-            echo '<form method=post>'.fh('p=zones').'<input type=hidden name=action value=mac_pending_clear><button class=s>Elimina piano sospeso</button></form>';
+            echo '<form method=post class=ops>'.fh('p=zones').'<input type=hidden name=action value=mac_pending_resume><button class=g>Riprendi piano sospeso</button></form> ';
+            echo '<form method=post class=ops>'.fh('p=zones').'<input type=hidden name=action value=mac_pending_clear><button class=s>Elimina piano sospeso</button></form>';
         echo '</div>';
     }
     $ipv6Check=null;

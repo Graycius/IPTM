@@ -851,6 +851,72 @@ function iptm_trusted_lan_nets(string $raw, array &$notes = []): string {
     }
     return implode(',', $safe);
 }
+
+/** Cross-field consistency checks for settings before persist/regen. */
+function iptm_settings_cross_validate(array $S): array {
+    $err = [];
+    $lan = trim((string)($S['lan_nets'] ?? ''));
+    $wan = trim((string)($S['wan_if'] ?? ''));
+    $dnsIp = trim((string)($S['dns_ip'] ?? ''));
+    if (!empty($S['dns_redirect'])) {
+        if ($dnsIp === '' || !v_ok('ip', $dnsIp)) $err[] = 'Redirect DNS attivo: indica un dns_ip valido';
+        if ($lan === '' || !v_ok('nets', $lan)) $err[] = 'Redirect DNS attivo: definisci le reti LAN (lan_nets)';
+    }
+    if (!empty($S['dot_block']) && ($lan === '' || !v_ok('nets', $lan)))
+        $err[] = 'Blocco DoT attivo: definisci le reti LAN (lan_nets)';
+    if (!empty($S['nat_masq'])) {
+        if ($lan === '' || !v_ok('nets', $lan)) $err[] = 'NAT/Masquerade attivo: definisci almeno una rete in lan_nets';
+        if (!empty($S['single_nic'])) {
+            $outs = trim((string)(($S['masq_ifs'] ?? '') !== '' ? $S['masq_ifs'] : $wan));
+            if ($outs === '' || !v_ok('ifs', $outs)) $err[] = 'NAT single-NIC: indica wan_if oppure masq_ifs';
+        } elseif ($wan === '' && trim((string)($S['masq_ifs'] ?? '')) === '') {
+            $err[] = 'NAT attivo: indica wan_if oppure masq_ifs';
+        }
+    }
+    if (!empty($S['mss']) && $wan === '' && trim((string)($S['masq_ifs'] ?? '')) === '')
+        $err[] = 'Clamp MSS attivo: serve un’interfaccia WAN/uscita';
+    if (!empty($S['guest_on'])) {
+        if (trim((string)($S['guest_nets'] ?? '')) === '' || !v_ok('nets', (string)$S['guest_nets']))
+            $err[] = 'Rete guest attiva: definisci guest_nets';
+    }
+    if (!empty($S['iso_on'])) {
+        if (trim((string)($S['iso_nets'] ?? '')) === '' || !v_ok('nets', (string)$S['iso_nets']))
+            $err[] = 'Isolamento attivo: definisci iso_nets';
+    }
+    if (!empty($S['mac_only']) && trim((string)($S['mac_allow'] ?? '')) === '')
+        $err[] = 'MAC-only attivo: elenca almeno un MAC in mac_allow';
+    if (!empty($S['wg_on'])) {
+        $p = trim((string)($S['wg_port'] ?? ''));
+        if ($p === '' || !v_ok('port', $p)) $err[] = 'WireGuard attivo: porta non valida';
+        $wgif = trim((string)($S['wg_if'] ?? ''));
+        if ($wgif === '' || !v_ok('if', $wgif)) $err[] = 'WireGuard attivo: interfaccia non valida';
+    }
+    if (!empty($S['ssh_acc']) && trim((string)($S['ssh_nets'] ?? '')) !== '' && !v_ok('nets', (string)$S['ssh_nets']))
+        $err[] = 'Accesso SSH limitato: ssh_nets non valido';
+    if (!empty($S['ui_nets']) && !v_ok('nets', (string)$S['ui_nets']))
+        $err[] = 'Reti UI (ui_nets) non valide';
+    return $err;
+}
+
+/** Short human summary of a settings section after save. */
+function iptm_settings_section_summary(string $sec, array $S): string {
+    $bits = [];
+    if ($sec === 'setup') {
+        $bits[] = 'WAN ' . ((string)($S['wan_if'] ?? '') !== '' ? $S['wan_if'] : '—');
+        $bits[] = 'LAN ' . ((string)($S['lan_nets'] ?? '') !== '' ? $S['lan_nets'] : '—');
+        $bits[] = !empty($S['nat_masq']) ? 'NAT on' : 'NAT off';
+        $bits[] = !empty($S['dns_redirect']) ? ('DNS→' . (string)($S['dns_ip'] ?? '')) : 'DNS redirect off';
+        if (!empty($S['single_nic'])) $bits[] = 'single-NIC';
+    } elseif ($sec === 'security') {
+        foreach (['spi' => 'SPI', 'antispoof' => 'anti-spoof', 'crowdsec' => 'CrowdSec', 'final_drop' => 'final-drop'] as $k => $lab)
+            if (!empty($S[$k])) $bits[] = $lab;
+        if (!$bits) $bits[] = 'profilo base';
+    } elseif ($sec === 'access') {
+        $bits[] = count((array)($S['acl'] ?? [])) . ' criteri ACL';
+    }
+    return $bits ? implode(' · ', $bits) : $sec;
+}
+
 function iptm_safe_settings(array $S, array &$notes = []): array {
     $S['lan_nets'] = iptm_trusted_lan_nets((string)($S['lan_nets'] ?? ''), $notes);
     // A legacy ssh_nets=/0 must not turn rate-limited SSH into WAN access.
@@ -1069,8 +1135,8 @@ function gen_sections(array $S): array {
         $unverified=array_values(array_diff($requested,$safeExt));
         if($unverified)$warn[]='Anti-spoof RFC1918 NON attivato su '.implode(', ',$unverified).': ingresso non verificato come esterno pubblico distinto, oppure WAN/LAN condivisa o doppio NAT.';
     }
-    if ($S['antispoof']) foreach (['INPUT', 'FORWARD'] as $c) $add('antispoof-' . strtolower($c), "Anti-spoofing ($c)", 'filter', $c, 'top', 5, array_merge(["-A $c ! -i lo -s 127.0.0.0/8 -j DROP"], $S['antispoof_mc'] ? ["-A $c -s 224.0.0.0/4 -j DROP"] : []));
-    if ($S['spoof_on'] && $S['spoof_if'] !== '' && $S['spoof_nets'] !== '') foreach (['INPUT', 'FORWARD'] as $c) $add('spoof-' . strtolower($c), "Sorgenti spoofate su {$S['spoof_if']} ($c)", 'filter', $c, 'top', 6, ["-A $c -i {$S['spoof_if']} -s {$S['spoof_nets']} -j $DT"]);
+    if ($S['antispoof']) foreach (['INPUT', 'FORWARD'] as $c) $add('antispoof-' . strtolower($c), "Anti-spoofing ($c)", 'filter', $c, 'top', 3, array_merge(["-A $c ! -i lo -s 127.0.0.0/8 -j DROP"], $S['antispoof_mc'] ? ["-A $c -s 224.0.0.0/4 -j DROP"] : []));
+    if ($S['spoof_on'] && $S['spoof_if'] !== '' && $S['spoof_nets'] !== '') foreach (['INPUT', 'FORWARD'] as $c) $add('spoof-' . strtolower($c), "Sorgenti spoofate su {$S['spoof_if']} ($c)", 'filter', $c, 'top', 5, ["-A $c -i {$S['spoof_if']} -s {$S['spoof_nets']} -j $DT"]);
     // ---------- CrowdSec: nessuna regola generata. Gli agganci (INPUT/FORWARD/DOCKER-USER -> CROWDSEC_CHAIN) li crea e li reinserisce il bouncer a ogni avvio:
     // salti scritti qui lo costringerebbero a fallire («Too many links») e lascerebbero INPUT senza protezione. L'app gli indica le catene (cs_sync) e lo riavvia dopo «Applica».
     // ---------- liste, GeoIP, blocco manuale. Le reti private/LAN sono SEMPRE escluse: firehol_level1 contiene i «bogons» e bloccherebbe la tua LAN
@@ -1120,14 +1186,18 @@ function gen_sections(array $S): array {
     // DNS replies or dashboard access after a regeneration. Filter top rules
     // for IoT, manual blocks and source blacklists still run first.
     if (empty($S['spi']) && !empty($S['continuity_priority'])) {
-        $add('conn-return-in', 'Continuità: risposte e loopback', 'filter', 'INPUT', 'est', 8,
+        // Same early placement as SPI so established sessions stay preferred
+        // even when full SPI mode is off.
+        $add('conn-return-in', 'Continuità: risposte e loopback', 'filter', 'INPUT', 'top', 4,
             ['-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT', '-A INPUT -i lo -j ACCEPT']);
-        $add('conn-return-fw', 'Continuità: risposte connessioni LAN', 'filter', 'FORWARD', 'est', 18,
+        $add('conn-return-fw', 'Continuità: risposte connessioni LAN', 'filter', 'FORWARD', 'top', 4,
             ['-A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT']);
     }
     if ($S['spi']) {
-        $add('spi-in', 'SPI Firewall (INPUT)', 'filter', 'INPUT', 'top', 10, ['-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT', '-A INPUT -i lo -j ACCEPT']);
-        $add('spi-fw', 'SPI Firewall (FORWARD)', 'filter', 'FORWARD', 'top', 10, ['-A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT']);
+        // Early SPI: accept RELATED/ESTABLISHED and loopback before SSH rate-limits,
+        // blacklists and service opens. Keeps established sessions fast and predictable.
+        $add('spi-in', 'SPI Firewall (INPUT)', 'filter', 'INPUT', 'top', 4, ['-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT', '-A INPUT -i lo -j ACCEPT']);
+        $add('spi-fw', 'SPI Firewall (FORWARD)', 'filter', 'FORWARD', 'top', 4, ['-A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT']);
     }
     // ---------- pacchetti non validi, ICMP, flood
     if ($S['invalid']) {
@@ -1256,36 +1326,46 @@ function gen_sections(array $S): array {
         $add('guest-fw', 'Rete ospiti: niente accesso alle reti private (FORWARD)', 'filter', 'FORWARD', 'top', 5, $fr);
         $add('guest-in', 'Rete ospiti: al router solo i servizi indicati (INPUT)', 'filter', 'INPUT', 'est', 5, $ir);
     }
-    // Per-device MAC policies. Match only packets entering through the LAN and
-    // crossing the gateway, never output packets generated by DietPi itself.
-    // Without WAN/LAN separation, 'internet' is skipped: -o bond0 alone can
+    // Per-device MAC policies. Match only packets crossing the gateway.
+    // Without WAN/LAN separation, 'internet' is skipped: -o shared iface alone can
     // also match traffic for local clients and cut their connection.
+    // MACs that share the exact same policy flags are emitted in one section to
+    // keep rules.v4 smaller and easier to audit.
+    $iotGroups = [];
+    $allowedFlags = array_keys(iptm_iot_policy_options());
     foreach ((array)($S['iot_policies'] ?? []) as $mac => $flags) {
         if (!is_string($mac) || !preg_match('/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/D', $mac)
             || !is_array($flags)) continue;
-        // Settings may contain untrusted imported nested flags: never let
-        // array_intersect stringify an array or widen a security rule.
-        $allowedFlags=array_keys(iptm_iot_policy_options());
         $on = array_values(array_unique(array_filter($flags,
-            fn($flag)=>is_string($flag) && in_array($flag,$allowedFlags,true))));
+            fn($flag)=>is_string($flag) && in_array($flag, $allowedFlags, true))));
         if (!$on) continue;
-        // Preserve UI-managed MAC restrictions across VLANs and mixed LAN
-        // interfaces. A single guessed -i would silently disable other IoT ACLs.
-        $match = '-m mac --mac-source ' . $mac;
+        sort($on);
+        $key = implode(',', $on);
+        $iotGroups[$key]['flags'] = $on;
+        $iotGroups[$key]['macs'][] = $mac;
+    }
+    $iotIdx = 0;
+    foreach ($iotGroups as $group) {
+        $on = $group['flags'];
+        $macs = $group['macs'];
         $r = [];
-        if (in_array('forward', $on, true)) $r[] = '-A FORWARD ' . $match . ' -j DROP';
-        else {
+        foreach ($macs as $mac) {
+            $match = '-m mac --mac-source ' . $mac;
+            if (in_array('forward', $on, true)) {
+                $r[] = '-A FORWARD ' . $match . ' -j DROP';
+                continue;
+            }
             if (in_array('internet', $on, true)) {
                 if ($single || empty($S['wan_if'])) $warn[] = 'IoT ' . $mac . ': blocco Internet ignorato: WAN non isolabile dalla LAN. Usa VLAN o due interfacce.';
                 else $r[] = '-A FORWARD ' . $match . ' -o ' . $S['wan_if'] . ' -j DROP';
             }
             if (in_array('lan', $on, true) && !$lan)
-                $warn[]='IoT '.$mac.': blocco LAN selezionato nella UI, ma manca una subnet LAN valida; la regola non può essere generata.';
+                $warn[] = 'IoT ' . $mac . ': blocco LAN selezionato nella UI, ma manca una subnet LAN valida; la regola non può essere generata.';
             if (in_array('lan', $on, true)) foreach ($lan as $net)
                 if (v_ok('nets', $net)) $r[] = '-A FORWARD ' . $match . ' -d ' . $net . ' -j DROP';
-            if (in_array('dns', $on, true)) foreach (['tcp','udp'] as $proto)
+            if (in_array('dns', $on, true)) foreach (['tcp', 'udp'] as $proto)
                 $r[] = '-A FORWARD ' . $match . ' -p ' . $proto . ' --dport 53 -j DROP';
-            if (in_array('dot', $on, true)) foreach (['tcp','udp'] as $proto)
+            if (in_array('dot', $on, true)) foreach (['tcp', 'udp'] as $proto)
                 $r[] = '-A FORWARD ' . $match . ' -p ' . $proto . ' --dport 853 -j DROP';
             if (in_array('quic', $on, true)) $r[] = '-A FORWARD ' . $match . ' -p udp --dport 443 -j DROP';
             if (in_array('vpn', $on, true)) {
@@ -1293,7 +1373,15 @@ function gen_sections(array $S): array {
                 $r[] = '-A FORWARD ' . $match . ' -p tcp --dport 1723 -j DROP';
             }
         }
-        if ($r) $add('iot-' . str_replace(':','',$mac), 'IoT ' . $mac . ': filtri selezionati', 'filter', 'FORWARD', 'top', 1, $r);
+        if (!$r) continue;
+        $iotIdx++;
+        $label = count($macs) === 1
+            ? ('IoT ' . $macs[0] . ': filtri selezionati')
+            : ('IoT gruppo (' . count($macs) . ' MAC): ' . implode(',', $on));
+        $id = count($macs) === 1
+            ? ('iot-' . str_replace(':', '', $macs[0]))
+            : ('iot-g' . $iotIdx);
+        $add($id, $label, 'filter', 'FORWARD', 'top', 1, $r);
     }
     $macs = array_values(array_filter(explode(',', (string)$S['mac_block'])));
     if ($macs) foreach (['INPUT', 'FORWARD'] as $c) $add('mac-' . strtolower($c), "Quarantena dispositivi per MAC ($c)", 'filter', $c, 'top', 2, array_map(fn($m) => "-A $c -m mac --mac-source $m -j DROP", $macs));
@@ -1398,8 +1486,12 @@ function gen_sections(array $S): array {
         array_map('trim',explode(',',(string)($S['mgmt_ports']??''))),true);
     if ($S['ssh_acc'] && ($S['ssh_nets'] !== '' || ($S['lockout_on'] && $sshInMgmt && $lan))) {
         // Never count normal SSH data/ACK packets as new login attempts.
-        // An existing management session must survive even with SPI disabled.
-        $r = ["-A INPUT -p tcp --dport {$S['ssh_acc_port']} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"];
+        // When SPI is on, RELATED/ESTABLISHED is already accepted earlier.
+        // Keep an explicit ESTABLISHED accept only if SPI is disabled.
+        $r = [];
+        if (empty($S['spi'])) {
+            $r[] = "-A INPUT -p tcp --dport {$S['ssh_acc_port']} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT";
+        }
         $sshTrusted=array_values(array_filter(explode(',', $S['ssh_nets'])));
         // Existing anti-lockout permitted all configured LANs to manage SSH.
         // Keep those admins reachable, but force their NEW SYN through the

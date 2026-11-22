@@ -23,7 +23,7 @@ import sys
 import tempfile
 import time
 
-VERSION = '5.30.12'
+VERSION = '5.30.22'
 ROOT = Path('/var/lib/iptm-network-runtime')
 STATE = ROOT / 'transaction.json'
 PLAN = ROOT / 'plan.json'

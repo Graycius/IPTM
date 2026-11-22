@@ -20,6 +20,10 @@ RETIRED_UNITS={
  'iot-warden.service':('Description=IoT Warden','ExecStart=/root/iot_warden.sh'),
  'iot_warden.service':('Description=IoT Warden','ExecStart=/root/iot_warden.sh'),
  'iptm-iot-warden.service':('Description=IPTM IoT Warden','ExecStart=/root/iot_warden.sh'),
+ # HTTP caching proxy retired in 5.30.12 — residual units only.
+ 'iptm-cache-proxy.service':('Description=IPTM isolated LAN HTTP caching proxy','iptm-cache-proxy'),
+ 'iptm-cache-redirect.service':('Description=IPTM HTTP cache redirect reconciliation','iptm-cache'),
+ 'iptm-cache-redirect.timer':('# IPTM HTTP redirect timer','iptm-cache'),
 }
 # Current production services are *not* legacy. They remain functional and
 # are intentionally not eligible for automatic retirement, even if disabled.

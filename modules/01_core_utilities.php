@@ -1,6 +1,45 @@
 <?php
 // ===================== UTILITA' =====================
 function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
+/** Prefer Argon2id when available; fall back to PASSWORD_DEFAULT. */
+function iptm_password_hash(string $pw): string {
+    if (defined('PASSWORD_ARGON2ID')) {
+        $hash = @password_hash($pw, PASSWORD_ARGON2ID);
+        if (is_string($hash) && $hash !== '') return $hash;
+    }
+    return password_hash($pw, PASSWORD_DEFAULT);
+}
+
+/** Constant-time-ish verify; always runs password_verify against a real hash. */
+function iptm_password_verify(string $pw, ?string $hash): bool {
+    static $dummy = null;
+    if ($dummy === null) {
+        $dummy = iptm_password_hash('iptm-dummy-password-not-a-secret');
+    }
+    $use = (is_string($hash) && $hash !== '') ? $hash : $dummy;
+    $ok = password_verify($pw, $use);
+    return $ok && is_string($hash) && $hash !== '';
+}
+
+/** Shared response hardening headers for HTML and JSON. */
+function iptm_security_headers(bool $html = true): void {
+    if (!headers_sent()) {
+        header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'; base-uri 'none'; object-src 'none'");
+        header('X-Frame-Options: DENY');
+        header('X-Content-Type-Options: nosniff');
+        header('Referrer-Policy: no-referrer');
+        header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+        header('Cross-Origin-Opener-Policy: same-origin');
+        header('Cross-Origin-Resource-Policy: same-origin');
+        header('X-Permitted-Cross-Domain-Policies: none');
+        if ($html) {
+            header('Cache-Control: no-store, private');
+            header('Pragma: no-cache');
+        }
+    }
+}
+
 // HTTP downloads require an independently obtained SHA-256; HTTP(S) must not become a
 // privileged SSRF route to loopback or link-local services. RFC1918 LAN servers
 // are intentionally allowed; the resolved IP is pinned for the curl connection.
@@ -326,7 +365,7 @@ function run(array $cmd, ?string $in = null, float $timeout = 30.0, int $maxOutp
     }
     return [$rc, $out, trim($err)];
 }
-const KC_RO = ['compat6-readiness', 'svc-state', 'cat', 'cat6', 'test', 'test6', 'rollback-prepare', 'rules-performance', 'v6cap', 'v6diag', 'save', 'save6', 'savec', 'journal', 'conf', 'ping', 'notice-status', 'ipset-info', 'ipset-test', 'ipset-hits', 'cs-status', 'conns', 'leases', 'suricata', 'selftest', 'backend', 'lists-status', 'sqm-status', 'sqm-v2-status', 'sqm-v3-status', 'security-integrations', 'suricata-eve-summary', 'sqm-probe', 'sqm-calibrate-status', 'sqm-safe-status', 'sqm-safe-preflight', 'version', 'post-suggest', 'compat', 'tool-status', 'tool-log', 'tool-logs', 'f2b-status', 'cs-decisions', 'vnstat-json', 'watch-status', 'capture', 'wg-status', 'wg-peer-conf', 'wg-peer-qr', 'cs-info', 'cs-collections', 'cs-log-discover', 'cs-scenarios', 'cs-metrics', 'cs-alerts', 'cs-bouncers', 'cs-allowlist', 'cs-acquis', 'su-info', 'su-alerts', 'su-stats', 'su-sources', 'su-config', 'su-test', 'su-rules-list', 'su-local-get', 'cs-parsers', 'cs-bouncer-get', 'cs-bouncer-status', 'cs-simulation', 'rules-check', 'ti-check', 'ti-summary', 'sec-audit', 'sysctl-audit', 'dns-status', 'dns-test'];
+const KC_RO = ['release-list', 'compat6-readiness', 'svc-state', 'cat', 'cat6', 'test', 'test6', 'rollback-prepare', 'rules-performance', 'v6cap', 'v6diag', 'save', 'save6', 'savec', 'journal', 'conf', 'ping', 'notice-status', 'ipset-info', 'ipset-test', 'ipset-hits', 'cs-status', 'conns', 'leases', 'suricata', 'selftest', 'backend', 'lists-status', 'sqm-status', 'sqm-v2-status', 'sqm-v3-status', 'security-integrations', 'suricata-eve-summary', 'sqm-probe', 'sqm-calibrate-status', 'sqm-safe-status', 'sqm-safe-preflight', 'version', 'post-suggest', 'compat', 'tool-status', 'tool-log', 'tool-logs', 'f2b-status', 'cs-decisions', 'vnstat-json', 'watch-status', 'capture', 'wg-status', 'wg-peer-conf', 'wg-peer-qr', 'cs-info', 'cs-collections', 'cs-log-discover', 'cs-scenarios', 'cs-metrics', 'cs-alerts', 'cs-bouncers', 'cs-allowlist', 'cs-acquis', 'su-info', 'su-alerts', 'su-stats', 'su-sources', 'su-config', 'su-test', 'su-rules-list', 'su-local-get', 'cs-parsers', 'cs-bouncer-get', 'cs-bouncer-status', 'cs-simulation', 'rules-check', 'ti-check', 'ti-summary', 'sec-audit', 'sysctl-audit', 'dns-status', 'dns-test'];
 function kc(string $k, callable $f) { return $GLOBALS['_kc'][$k] ??= $f(); }   // cache per richiesta di letture del kernel; si azzera dopo ogni comando che modifica lo stato
 function priv(string $cmd, ?string $in = null, array $args = []): array {
     $readonly = in_array($cmd, KC_RO, true) || (($cmd === 'qos-policy' && ($args[0]??'')==='status') || ($cmd === 'upgrade-cleanup' && in_array(($args[0]??''),['scan','report'],true)) || ($cmd === 'qos-engine' && in_array(($args[0]??''),['status','inspect','calibrate-status','auto-status','traffic-inspect'],true)) || ($cmd === 'security-stack' && in_array(($args[0]??''),['status','plan','suricata-sources'],true)) || ($cmd === 'nm-editor' && in_array(($args[0]??''),['inventory','preview','trial-status'],true))) || ($cmd === 'ipv6-control' && ($args[0] ?? '') === 'status') || ($cmd === 'dns-guard' && in_array(($args[0] ?? ''), ['status','events','preview'], true)) || ($cmd === 'multi-nic' && in_array(($args[0]??''), ['inventory','status'], true)) || ($cmd === 'anti-dpi-sources' && in_array(($args[0] ?? ''), ['status','catalog'], true));
@@ -334,7 +373,7 @@ function priv(string $cmd, ?string $in = null, array $args = []): array {
     // Never abort an updater during file replacement merely because the generic
     // read-only status timeout (30 s) elapsed. Mutating jobs need separate budgets.
     $deadline = ($cmd==='security' && ($args[0]??'')==='mac-inventory') ? 15.0
-        : (in_array($cmd, ['self-update','ui-update','dns-bundle'], true) ? 600.0
+        : (in_array($cmd, ['self-update','ui-update','dns-bundle','release-rollback'], true) ? 600.0
         : (in_array($cmd, ['save','save6','cat','cat6'], true) ? 40.0
         : ($cmd === 'tool-status' ? 25.0 // dpkg-query + apt-cache + systemctl are bounded individually
         : (($cmd === 'maintenance' && ($args[0] ?? '') === 'preflight') ? 45.0
@@ -342,9 +381,15 @@ function priv(string $cmd, ?string $in = null, array $args = []): array {
     // Only small stable read-only status commands: avoid repeated sudo/systemctl
     // launches on old ARM hardware. Cache is request-local and invalidated by
     // every mutating priv() call; never cache stdin/output-heavy or failed jobs.
+    // Request-local cache for frequent read-only status probes (one page can
+    // call the same helper several times). Mutating priv() clears $_kc.
     $cacheable = $in === null && in_array($cmd, [
         'version','backend','svc-state','tool-status','wg-status','sqm-status',
-        'dns-status','lists-status','cs-status'
+        'sqm-v2-status','sqm-v3-status','sqm-probe','sqm-calibrate-status',
+        'sqm-safe-status','sqm-safe-preflight','dns-status','lists-status',
+        'cs-status','cs-info','cs-decisions','conns','leases','suricata',
+        'vnstat-json','f2b-status','notice-status','compat','ping',
+        'release-list','ipset-info','security-integrations','su-info',
     ], true);
     $cacheKey = $cacheable ? 'priv:' . $cmd . ':' . hash('sha256', json_encode($args, JSON_THROW_ON_ERROR)) : '';
     if ($cacheable && isset($GLOBALS['_kc'][$cacheKey])) return $GLOBALS['_kc'][$cacheKey];

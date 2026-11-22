@@ -1,12 +1,15 @@
 <?php
 // ===================== BOOT / AUTENTICAZIONE =====================
-session_set_cookie_params(['httponly' => true, 'samesite' => 'Strict', 'secure' => !empty($_SERVER['HTTPS'])]);
-ini_set('session.use_strict_mode', '1'); session_name('iptmgr'); session_start();
-header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"); header('X-Frame-Options: DENY'); header('X-Content-Type-Options: nosniff'); header('Referrer-Policy: no-referrer');
+session_set_cookie_params(['httponly' => true, 'samesite' => 'Strict', 'secure' => !empty($_SERVER['HTTPS']), 'path' => '/', 'lifetime' => 0]);
+ini_set('session.use_strict_mode', '1');
+ini_set('session.use_only_cookies', '1');
+ini_set('session.cookie_httponly', '1');
+session_name('iptmgr'); session_start();
+iptm_security_headers(true);
 if (!ip_ok()) { http_response_code(403); exit('Accesso negato da questo indirizzo (vedi ALLOWED_NETS).'); }
 if (!empty($_SESSION['u']) && time() - (int)($_SESSION['t'] ?? time()) > IDLE_SECS) { $_SESSION = []; session_regenerate_id(true); }   // sessione scaduta per inattivita'
 if (!empty($_SESSION['u'])) $_SESSION['t'] = time();
-if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
+if (empty($_SESSION['csrf']) || !is_string($_SESSION['csrf']) || !preg_match('/^[a-f0-9]{64}$/D', $_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(32));
 
 // API read-only con token in header, mai in URL — prima del login HTML
 if (isset($_GET['api']) && function_exists('api_dispatch')) {
@@ -43,7 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pw = (string)($_POST['pw'] ?? '');
         if (!hash_equals(trim((string)file_get_contents($tokF)), trim((string)($_POST['token'] ?? '')))) flash('Codice di setup errato.', 'err');
         elseif (strlen($pw) < MIN_PW || $pw !== ($_POST['pw2'] ?? '')) flash('Password troppo corta (min ' . MIN_PW . ') o diversa dalla conferma.', 'err');
-        else { users_put(['admin' => ['hash' => password_hash($pw, PASSWORD_DEFAULT), 'role' => 'admin', 'totp' => '']]); @unlink($tokF); flash('Password impostata: accedi.'); }
+        else { users_put(['admin' => ['hash' => iptm_password_hash($pw), 'role' => 'admin', 'totp' => '']]); @unlink($tokF); flash('Password impostata: accedi.'); }
         go();
     }
     if ($a === 'login' && users_get()) {
@@ -57,8 +60,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $fl[$ip] ??= [];
         if (count($fl[$ip]) >= 5) { flock($flock, LOCK_UN); fclose($flock); flash('Troppi tentativi: riprova tra 10 minuti.', 'err'); go(); }
         $U = users_get(); $nm = strtolower(trim((string)($_POST['user'] ?? 'admin'))) ?: 'admin'; $u = $U[$nm] ?? null;
-        $okp = $u && password_verify((string)($_POST['pw'] ?? ''), $u['hash'] ?? ''); $oko = $okp && (empty($u['totp']) || totp_ok($u['totp'], (string)($_POST['otp'] ?? '')));
-        if ($oko) { flock($flock, LOCK_UN); fclose($flock); session_regenerate_id(true); $_SESSION['u'] = $nm; $_SESSION['role'] = in_array($u['role'] ?? '', ['admin', 'viewer'], true) ? $u['role'] : 'viewer'; $_SESSION['csrf'] = bin2hex(random_bytes(16)); $_SESSION['t'] = time(); audit('login'); notify('login', "Accesso di $nm da $ip"); go('p=status'); }
+        $okp = iptm_password_verify((string)($_POST['pw'] ?? ''), is_array($u) ? (string)($u['hash'] ?? '') : null); $oko = $okp && $u && (empty($u['totp']) || totp_ok($u['totp'], (string)($_POST['otp'] ?? '')));
+        if ($oko) { flock($flock, LOCK_UN); fclose($flock); session_regenerate_id(true); $_SESSION['u'] = $nm; $_SESSION['role'] = in_array($u['role'] ?? '', ['admin', 'viewer'], true) ? $u['role'] : 'viewer'; $_SESSION['csrf'] = bin2hex(random_bytes(32)); $_SESSION['t'] = time(); audit('login'); notify('login', "Accesso di $nm da $ip"); go('p=status'); }
         $fl[$ip][] = time(); $tmpf = $ff . '.' . bin2hex(random_bytes(5)) . '.tmp';
         $payload = json_encode($fl);
         if (!is_string($payload) || file_put_contents($tmpf, $payload, LOCK_EX) !== strlen((string)$payload) || !rename($tmpf, $ff)) { @unlink($tmpf); flock($flock, LOCK_UN); fclose($flock); http_response_code(503); exit('Impossibile aggiornare il rate-limit'); }

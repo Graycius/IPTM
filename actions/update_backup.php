@@ -106,6 +106,30 @@ case 'policy_export': {
             } catch (Throwable $e) { flash('Bundle rifiutato: '.substr($e->getMessage(),0,250),'err'); }
             break;
         }
+        
+        case 'release_rollback': {
+            $ver = trim((string)($_POST['target_version'] ?? ''));
+            if (!preg_match('/^\d+(?:\.\d+){1,3}$/', $ver)) {
+                flash('Versione non valida.', 'err');
+                $back = 'p=update';
+                break;
+            }
+            if ($ver === APP_VERSION) {
+                flash('La versione selezionata è già attiva.', 'err');
+                $back = 'p=update';
+                break;
+            }
+            $web = realpath((string)($_SERVER['SCRIPT_FILENAME'] ?? '')) ?: '';
+            [$c, $o, $e] = priv('release-rollback', null, [$web, $ver]);
+            if ($c !== 0) {
+                flash('Ripristino release fallito: ' . herr(trim($e ?: $o)), 'err');
+            } else {
+                flash("Ripristino completato:\n" . trim($o));
+            }
+            $back = 'p=update';
+            break;
+        }
+
         case 'ui_update_apply': { flash('Aggiornamento UI separato ritirato. Usa il pacchetto completo dalla pagina Aggiornamenti.', 'err'); $back='p=update'; break; }
         case 'update_apply':
         case 'update_url_apply': {

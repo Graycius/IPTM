@@ -8,7 +8,7 @@ Deliberately does not estimate internet bandwidth from NIC link speed.
 from __future__ import annotations
 import fcntl, hashlib, json, os, pathlib, re, secrets, subprocess, sys, tempfile, time
 
-VERSION='5.30.12'
+VERSION='5.30.22'
 BASE=pathlib.Path('/var/lib/iptm-qos-engine')
 LOCK=BASE/'lock';STAGE=BASE/'stage.json';STATE=BASE/'active.json'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-watchdog.service')
@@ -77,8 +77,9 @@ def identity(iface):
 def inspect(iface):
     if not isinstance(iface,str) or not NIC.fullmatch(iface) or iface=='lo':raise QosError('interfaccia non valida')
     ident=identity(iface)
-    roots=[q for q in jcmd(['tc','-j','qdisc','show','dev',iface]) if q.get('root') is True or q.get('parent')=='root']
-    ing=[q for q in jcmd(['tc','-j','qdisc','show','dev',iface]) if q.get('kind') in ('ingress','clsact')]
+    qdiscs=jcmd(['tc','-j','qdisc','show','dev',iface])
+    roots=[q for q in qdiscs if q.get('root') is True or q.get('parent')=='root']
+    ing=[q for q in qdiscs if q.get('kind') in ('ingress','clsact')]
     if len(roots)!=1 or roots[0].get('kind') not in DEFAULT or ing:
         audit=topology_report(iface)
         raise QosError(audit['reason']+' (root='+str(audit['root_kind'])+', handle='+str(audit['root_handle'])+'). Non è stata modificata alcuna qdisc.')

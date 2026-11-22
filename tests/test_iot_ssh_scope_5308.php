@@ -2,7 +2,7 @@
 declare(strict_types=1);
 function sys_ifaces():array{return $GLOBALS['_if']??[];}
 require __DIR__.'/bootstrap.php';
-require dirname(__DIR__).'/modules/30_features_core.php';
+require_once dirname(__DIR__).'/modules/30_features_core.php';
 require dirname(__DIR__).'/modules/42_policy_review.php';
 $n=0;
 function ck5308(bool $ok,string $name):void {global $n;$n++;if(!$ok){fwrite(STDERR,"FAIL #$n $name\n");exit(1);}}
@@ -29,9 +29,15 @@ ck5308(!str_contains(implode(' ',sect5308($sections,'lockout')),'--dports 22,'),
 $svc=implode("\n",sect5308($sections,'svc-in-a'));
 ck5308(str_contains($svc,'-i bond0.10 -s 192.168.10.0/24'),'SMB uses VLAN ingress');
 ck5308(!str_contains($svc,'--dports 22,139,445'),'SMB scope no duplicate ssh port');
-ck5308(count(array_filter($sections,fn($x)=>str_starts_with((string)$x['id'],'iot-')))==14,'fourteen UI IoT sections retained');
-foreach($macs as $mac){$iot=sect5308($sections,'iot-'.str_replace(':','',$mac));
-  ck5308(count($iot)===8,'IoT LAN3 + DoT2 + QUIC1 + VPN2 '.$mac); // corrected below if counts differ
+// Since 5.30.13, identical IoT policies are grouped without losing per-MAC matches.
+$iotSections=array_values(array_filter($sections,fn($x)=>str_starts_with((string)$x['id'],'iot-')));
+ck5308(count($iotSections)===1,'fourteen identical IoT policies grouped once');
+$iotGroupId=$iotSections[0]['id'];
+$allIoT=$iotSections[0]['rules'];
+ck5308(count($allIoT)===count($macs)*8,'all eight FORWARD rules retained for each MAC');
+foreach($macs as $mac){
+  $iot=array_values(array_filter($allIoT,fn($rule)=>str_contains($rule,'--mac-source '.$mac)));
+  ck5308(count($iot)===8,'IoT LAN3 + DoT2 + QUIC1 + VPN2 '.$mac);
   ck5308(str_contains(implode(' ',$iot),'--mac-source '.$mac),'MAC preserved '.$mac);
 }
 $raw="*filter\n:FORWARD DROP [0:0]\n";
@@ -44,7 +50,7 @@ ck5308(!str_contains($titles,'Salti MAC'),'UI policies require no Warden hook');
 ck5308(!str_contains($titles,'Policy IoT UI assenti'),'every saved IoT policy present');
 ck5308(!str_contains($titles,'Regole MAC esterne'),'managed IoT not external');
 $missing=$s;$missing['iot_policies'][$macs[0]]=['forward'];
-$missingRaw=str_replace('# >>> IPTM:iot-'.str_replace(':','',$macs[0]).' - UI','# >>> IPTM:other-'.str_replace(':','',$macs[0]).' - UI',$raw);
+$missingRaw=implode("\n",array_filter(explode("\n",$raw),fn($line)=>!str_contains($line,'--mac-source '.$macs[0])));
 ck5308(str_contains(implode('|',array_column(iptm_policy_findings($missingRaw,$missing),'title')),'Policy IoT UI assenti'),'missing UI block is detected');
 $stale=$s;unset($stale['iot_policies'][$macs[0]]);
 ck5308(str_contains(implode('|',array_column(iptm_policy_findings($raw,$stale),'title')),'Sezioni IoT da riconciliare'),'orphan section only warning, not removal');
@@ -53,8 +59,8 @@ ck5308(str_contains(implode('|',array_column(iptm_policy_findings($manual,['iot_
 $shared=$s;$shared['single_nic']=1;$shared['wan_if']='bond0';
 [$sc,$notes]=gen_sections($shared);
 ck5308(sect5308($sc,'wan-rfc1918-input')===[],'shared NIC no destructive anti-spoof');
-ck5308(count(array_filter($sc,fn($x)=>str_starts_with((string)$x['id'],'iot-')))==14,'shared NIC retains 14 IoT');
-ck5308(!str_contains(implode(' ',sect5308($sc,'iot-'.str_replace(':','',$macs[0]))),'-i bond0'),'MAC controls not accidentally pinned to guessed LAN');
+ck5308(count(array_filter($sc,fn($x)=>str_starts_with((string)$x['id'],'iot-')))==1,'shared NIC retains one group covering 14 MACs');
+ck5308(!str_contains(implode(' ',sect5308($sc,$iotGroupId)),'-i bond0'),'MAC controls not accidentally pinned to guessed LAN');
 $noSsh=$s;$noSsh['mgmt_ports']='80,443';$noSsh['continuity_priority']=0;$noSsh['spi']=0;$noSsh['final_drop']=0;[$ns,$note]=gen_sections($noSsh);
 ck5308(sect5308($ns,'ssh-acc')===[],'no invented SSH exception when excluded from management');
 ck5308(str_contains(implode(' ',$note),'nessuna subnet attendibile'),'missing SSH subnet warns');
@@ -66,7 +72,7 @@ ck5308($normalized['iot_policies'][$macs[0]]===['forward'],'malformed nested fla
 ck5308(!isset($normalized['iot_policies']['../../bad']),'malicious MAC key ignored');
 $broken=$s;$broken['lan_nets']='';$broken['iot_policies']=[$macs[0]=>['lan']];
 [$bc,$bw]=gen_sections($broken);
-ck5308(sect5308($bc,'iot-'.str_replace(':','',$macs[0]))===[],'no phantom LAN block without subnet');
+ck5308(count(array_filter($bc,fn($x)=>str_starts_with((string)$x['id'],'iot-')))==0,'no phantom LAN block without subnet');
 ck5308(str_contains(implode(' ',$bw),'manca una subnet LAN'),'missing LAN block warning');
 ck5308(str_contains((string)file_get_contents(dirname(__DIR__).'/modules/15_apps_services.php'),'Deseleziona servizi senza listener'),'optional apps cleanup UI');
 ck5308(str_contains((string)file_get_contents(dirname(__DIR__).'/modules/35_iot_zones_pages.php'),'Policy IoT salvate'),'IoT status visible in UI');

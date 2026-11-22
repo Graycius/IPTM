@@ -17,7 +17,7 @@ function api_token_set(string $t): void {
     S_put($S);
     $f = DATA_DIR . '/api.token';
     if ($t === '') @unlink($f);
-    else @file_put_contents($f, $t . "\n", LOCK_EX);
+    else { @file_put_contents($f, $t . "\n", LOCK_EX); @chmod($f, 0600); }
 }
 
 function api_auth_ok(): bool {
@@ -32,6 +32,10 @@ function api_auth_ok(): bool {
 
 /** Dispaccia ?api=... (solo lettura). Esce con JSON o text/plain metrics. */
 function api_dispatch(string $ep): void {
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: no-store, private');
+    header('Referrer-Policy: no-referrer');
+    header('X-Frame-Options: DENY');
     if (!api_auth_ok()) {
         http_response_code(401);
         header('Content-Type: application/json; charset=utf-8');
@@ -66,7 +70,7 @@ function api_dispatch(string $ep): void {
     } catch (Throwable $e) {
         http_response_code(500);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['error' => 'server', 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['error' => 'server'], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }

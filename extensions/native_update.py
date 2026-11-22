@@ -216,10 +216,16 @@ def migrate(web,archive,sha,force):
     if not VERSION_RX.fullmatch(current):raise UpdateError('Versione installata malformata')
     current_order=tuple(map(int,current.split('.')))
     candidate_order=tuple(map(int,version.split('.')))
-    if candidate_order<current_order:
-        raise UpdateError('Downgrade non consentito: ripristinare da backup verificato, non usare force')
+    # Same version and lower versions require an explicit force flag so an
+    # accidental upload cannot roll the appliance back or no-op silently.
+    if candidate_order<current_order and force!='force':
+        raise UpdateError(
+            'Downgrade verso '+version+' richiede la conferma force '
+            '(dalla versione installata '+current+'). '
+            'Verifica backup e regole attive prima di procedere.'
+        )
     if force!='force' and candidate_order==current_order:
-        raise UpdateError('Versione già installata; force consente soltanto reinstallazione della stessa versione')
+        raise UpdateError('Versione già installata; force consente reinstallazione o conferma di downgrade')
     if (STATE/'pending.json').exists() or (STATE/'pending.json').is_symlink():
         raise UpdateError('Journal aggiornamento precedente ancora pendente')
     if not shutil.which('php') or not shutil.which('bash'):raise UpdateError('Validatori PHP/Bash non disponibili')
@@ -329,19 +335,18 @@ def migrate(web,archive,sha,force):
 
 
 
-def prune_old_releases(current, previous, *, base=RELEASE_BASE, days=7):
-    """Conservative post-commit housekeeping. Never delete referenced or unverified trees.
+def prune_old_releases(current, previous, *, base=RELEASE_BASE, keep=3):
+    """Post-commit housekeeping: keep only the newest *keep* releases.
 
-    Only native-managed immutable releases whose files still match their manifest,
-    older than the retention interval, may be removed. Keep at least three recent
-    releases and both update endpoints. A failure never aborts a committed update.
+    Never delete the live current/previous endpoints or a release still referenced
+    by active systemd/cron units. Manifest integrity is required before rmtree.
+    Failures are reported and never abort a committed update.
     """
-    import time
-    report={'deleted':[], 'preserved':[], 'errors':[]}
+    report={'deleted':[], 'preserved':[], 'errors':[], 'keep':keep}
     try:
         check_dir(base)
-        # Refuse pruning during an unresolved update or active QoS/NM trial.
-        if (STATE/'pending.json').exists():return dict(report,reason='pending-update')
+        if (STATE/'pending.json').exists():
+            return dict(report,reason='pending-update')
         for candidate in ('/var/lib/iptm-qos-engine/active.json',
                           '/var/lib/iptm-qos-engine/unshaped-calibration.json',
                           '/var/lib/iptm-nm-editor/trial.json'):
@@ -351,64 +356,155 @@ def prune_old_releases(current, previous, *, base=RELEASE_BASE, days=7):
                     state=json.loads(f.read_text())
                     if state.get('state') in ('pending','applying','rollback-failed'):
                         return dict(report,reason='network-transaction')
-                except (OSError, ValueError):return dict(report,reason='unreadable-state')
+                except (OSError, ValueError):
+                    return dict(report,reason='unreadable-state')
         version_dirs=[]
         for item in base.iterdir():
-            if item.is_symlink() or not item.is_dir() or not VERSION_RX.fullmatch(item.name):continue
+            if item.is_symlink() or not item.is_dir() or not VERSION_RX.fullmatch(item.name):
+                continue
             version_dirs.append(item)
-        version_dirs.sort(key=lambda x:tuple(map(int,x.name.split('.'))),reverse=True)
-        protected={current,previous}|{f.name for f in version_dirs[:3]}
-        # All systemd unit/drop-in and IPTM runtime/loader files may pin old releases.
-        reference_locations=[pathlib.Path('/etc/systemd/system'),
-                             pathlib.Path('/etc/cron.d'),pathlib.Path('/etc/cron.daily'),
-                             pathlib.Path('/etc/cron.hourly'),pathlib.Path('/etc/crontab'),
-                             pathlib.Path('/var/spool/cron/crontabs'),
-                             pathlib.Path('/usr/local/sbin'),ROOT,HELPER]
+        version_dirs.sort(key=lambda x: tuple(map(int, x.name.split('.'))), reverse=True)
+        # Always retain the newest *keep* trees plus the just-installed endpoints.
+        protected={current, previous} | {f.name for f in version_dirs[:max(1, int(keep))]}
+        # Live references only: systemd/cron pins (not historical source trees).
         referenced=set()
+        reference_locations=[
+            pathlib.Path('/etc/systemd/system'),
+            pathlib.Path('/etc/cron.d'),
+            pathlib.Path('/etc/cron.daily'),
+            pathlib.Path('/etc/cron.hourly'),
+            pathlib.Path('/etc/crontab'),
+            pathlib.Path('/var/spool/cron/crontabs'),
+            HELPER,
+        ]
         for folder in reference_locations:
-            if not folder.exists():continue
+            if not folder.exists():
+                continue
             try:
                 files=[folder] if folder.is_file() else folder.rglob('*')
                 for f in files:
-                    if not f.is_file() or f.is_symlink() or f.stat().st_size>1000000:continue
-                    # Do not treat historical release source itself as a live reference.
-                    if base in f.parents:continue
-                    if f.suffix not in ('.service','.timer','.socket','.path','.php','.py','.sh',''):
+                    if not f.is_file() or f.is_symlink() or f.stat().st_size > 1000000:
+                        continue
+                    if base in f.parents:
+                        continue
+                    if f.suffix not in ('.service', '.timer', '.socket', '.path', '.php', '.py', '.sh', ''):
                         continue
                     content=f.read_bytes()
-                    for m in re.finditer(rb'/web/releases/([0-9]+(?:\.[0-9]+){1,3})/',content):
+                    for m in re.finditer(rb'/web/releases/([0-9]+(?:\.[0-9]+){1,3})/', content):
                         referenced.add(m.group(1).decode())
-            except (OSError,PermissionError) as exc:
-                return dict(report,reason='reference-scan-failed',errors=[str(exc)])
+            except (OSError, PermissionError) as exc:
+                return dict(report, reason='reference-scan-failed', errors=[str(exc)])
         protected |= referenced
         for item in version_dirs:
-            if item.name in protected or time.time()-item.stat().st_mtime<days*86400:
-                report['preserved'].append(item.name);continue
+            if item.name in protected:
+                report['preserved'].append(item.name)
+                continue
             try:
                 check_dir(item)
                 man=item/'native-manifest.json'
-                if man.is_symlink() or not man.is_file():continue
+                if man.is_symlink() or not man.is_file():
+                    report['preserved'].append(item.name)
+                    continue
                 metadata=json.loads(man.read_text())
-                if metadata.get('version')!=item.name or not isinstance(metadata.get('sha256'),dict):continue
+                if metadata.get('version') != item.name or not isinstance(metadata.get('sha256'), dict):
+                    report['preserved'].append(item.name)
+                    continue
                 hashes=metadata['sha256']
-                expected={x for x in hashes if x.startswith(('modules/','actions/','assets/','extensions/'))}
-                if set(hashes)!=expected or not expected:continue
-                # Unrecognized extra files or changed files -> preserve, never recursively delete.
+                if not hashes:
+                    report['preserved'].append(item.name)
+                    continue
+                expected=set(hashes)
                 actual={str(f.relative_to(item)) for f in item.rglob('*') if f.is_file()}
-                if actual!=expected|{'native-manifest.json'}:continue
-                if any(f.is_symlink() or f.stat().st_uid!=0 for f in item.rglob('*')):continue
-                if any(hashlib.sha256((item/name).read_bytes()).hexdigest()!=digest
-                       for name,digest in hashes.items()):continue
+                # Allow only manifest-listed files + the manifest itself.
+                if actual != expected | {'native-manifest.json'}:
+                    report['preserved'].append(item.name)
+                    continue
+                if any(f.is_symlink() or f.stat().st_uid != 0 for f in item.rglob('*')):
+                    report['preserved'].append(item.name)
+                    continue
+                if any(hashlib.sha256((item/name).read_bytes()).hexdigest() != digest
+                       for name, digest in hashes.items()):
+                    report['preserved'].append(item.name)
+                    continue
                 shutil.rmtree(item)
                 report['deleted'].append(item.name)
-            except (OSError,ValueError,TypeError) as exc:
-                report['errors'].append(item.name+': '+str(exc))
-    except (OSError,UpdateError) as exc:
+            except (OSError, ValueError, TypeError) as exc:
+                report['errors'].append(item.name + ': ' + str(exc))
+    except (OSError, UpdateError) as exc:
         report['errors'].append(str(exc))
     return report
 
 
+def list_local_releases(*, base=RELEASE_BASE, limit=3):
+    """Return newest release directory names present on disk (newest first)."""
+    found=[]
+    if not base.is_dir() or base.is_symlink():
+        return found
+    for item in base.iterdir():
+        if item.is_symlink() or not item.is_dir() or not VERSION_RX.fullmatch(item.name):
+            continue
+        man=item/'native-manifest.json'
+        if man.is_symlink() or not man.is_file():
+            continue
+        found.append(item.name)
+    found.sort(key=lambda v: tuple(map(int, v.split('.'))), reverse=True)
+    return found[:max(1, int(limit))]
+
+
+def pack_local_release(version, dest_zip, *, base=RELEASE_BASE):
+    """Build a native-format zip from an immutable on-disk release tree."""
+    if not VERSION_RX.fullmatch(version):
+        raise UpdateError('Versione non valida')
+    root=base/version
+    check_dir(root)
+    man=root/'native-manifest.json'
+    if man.is_symlink() or not man.is_file():
+        raise UpdateError('Manifest release assente')
+    metadata=json.loads(man.read_text())
+    if metadata.get('version')!=version or not isinstance(metadata.get('sha256'), dict):
+        raise UpdateError('Manifest release non valido')
+    hashes=metadata['sha256']
+    if not hashes:
+        raise UpdateError('Manifest vuoto')
+    # Verify integrity before packaging.
+    for name, digest in hashes.items():
+        if '..' in name or name.startswith('/'):
+            raise UpdateError('Path non sicuro nel manifest')
+        f=root/name
+        if f.is_symlink() or not f.is_file() or f.stat().st_uid!=0:
+            raise UpdateError('File release non integro: '+name)
+        if hashlib.sha256(f.read_bytes()).hexdigest()!=digest:
+            raise UpdateError('Hash non corrispondente: '+name)
+    dest=pathlib.Path(dest_zip)
+    if dest.exists():
+        raise UpdateError('ZIP destinazione già presente')
+    with zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(man, 'native-manifest.json')
+        for name in sorted(hashes):
+            zf.write(root/name, name)
+    return hashlib.sha256(dest.read_bytes()).hexdigest()
+
+
+def rollback_local_release(web, version, force='force'):
+    """Reinstall an on-disk release (downgrade/switch) via the normal migrate path."""
+    if force!='force':
+        raise UpdateError('Il ripristino da release locale richiede force')
+    with tempfile.TemporaryDirectory(prefix='.iptm-rollback-') as tmp:
+        zpath=pathlib.Path(tmp)/'package.zip'
+        sha=pack_local_release(version, zpath)
+        return migrate(pathlib.Path(web), zpath, sha, 'force')
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == 'list-releases':
+        print(json.dumps({'ok': True, 'releases': list_local_releases()}))
+        return
+    if len(sys.argv) == 4 and sys.argv[1] == 'rollback':
+        # native-update rollback WEB VERSION
+        result = rollback_local_release(sys.argv[2], sys.argv[3], 'force')
+        print('versione '+result['previous']+' -> '+result['version']+' [NATIVE-ROLLBACK]')
+        print(json.dumps(result))
+        return
     if len(sys.argv)!=5:raise UpdateError('Uso: native-update WEB ZIP SHA256 force|-')
     result=migrate(pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2]),sys.argv[3],sys.argv[4])
     print('versione '+result['previous']+' -> '+result['version']+' [NATIVE]')

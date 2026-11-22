@@ -9,7 +9,7 @@ No tc, iptables, NetworkManager or DNS configuration writes are performed here.
 """
 from __future__ import annotations
 import base64, fcntl, importlib.util, json, os, pathlib, re, subprocess, sys, tempfile, time
-VERSION='5.30.12'
+VERSION='5.30.22'
 ROOT=pathlib.Path('/usr/local/lib/iptables-manager')
 ENGINE=ROOT/f'web/releases/{VERSION}/extensions/qos_engine.py'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-watchdog.service')
