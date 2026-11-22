@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from typing import Optional, List
 
 DATA = pathlib.Path('/var/lib/iptables-manager')
-RETHINK_SCRIPT = pathlib.Path('/usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/rethink_catalog.py')
+RETHINK_SCRIPT = pathlib.Path('/usr/local/lib/iptables-manager/web/releases/5.30.6/extensions/rethink_catalog.py')
 DB_CANDIDATES = [pathlib.Path('/etc/pihole/gravity.db'), pathlib.Path('/var/lib/pihole/gravity.db')]
 SYSCTL_FILE = pathlib.Path('/etc/sysctl.d/98-iptm-hardening.conf')
 BACKUP_DIR = DATA / 'backups' / 'maintenance'
@@ -773,7 +773,7 @@ def pihole_api_json(_args):
     if not password:
         # Password fetched only by the root worker: never returned to the web session.
         import importlib.util
-        credential_script=pathlib.Path('/usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/pihole_credentials.py')
+        credential_script=pathlib.Path('/usr/local/lib/iptables-manager/web/releases/5.30.6/extensions/pihole_credentials.py')
         if credential_script.is_symlink() or not credential_script.is_file():
             raise PiholeApiError('Archivio credenziali IPTM non installato')
         st=credential_script.stat()

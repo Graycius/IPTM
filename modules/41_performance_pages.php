@@ -68,13 +68,15 @@ function pg_performance(): void {
     echo '<p>Pacchetto Squid: <b>'.(!empty($cache['package_installed'])?'installato':'non verificato').'</b> · Binario: <b>'.(!empty($cache['installed'])?'verificato':'non trovato').'</b> · Proxy IPTM: <b>'.(!empty($cache['active'])?'attivo':'inattivo').'</b> · HTTP trasparente: <b>'.(!empty($cache['intercept_active'])?'attivo':'disattivato').'</b></p>';
     if(!empty($cache['binary']))echo '<p class=mut>Binario verificato: <code>'.h((string)$cache['binary']).'</code></p>';
     if(!empty($cache['warning']))echo '<div class="msg warn">'.h((string)$cache['warning']).'</div>';
+    if(!empty($cache['binary_warning']))echo '<div class="msg warn">'.h((string)$cache['binary_warning']).'</div>';
+    if(empty($cache['ipv4_forwarding']))echo '<p class="mut">Gateway IPv4: forwarding non attivo o non verificato. Per intercettare HTTP automaticamente i client devono utilizzare questo dispositivo come gateway; IPTM non modifica il gateway degli altri dispositivi.</p>';
     if(!empty($cache['pending_changes']))echo '<p class="msg warn">Preferenze salvate: le modifiche non sono ancora applicate al servizio.</p>';
     $prof=(array)($cache['profile']??[]);
     if(!empty($prof['listen_ip']))echo '<p>Indirizzo LAN: <code>'.h((string)$prof['listen_ip']).':'.(int)($prof['port']??3129).'</code>. '.(!empty($prof['intercept_http'])?'Nessuna modifica richiesta al browser HTTP se questo host è il gateway.':'Modalità esplicita: configurare il proxy nel client.').'</p>';
     if(empty($cache['installed']))echo '<p class="mut">Il binario Squid non è verificabile: <a href="?p=progs#tool-squid">verifica o reinstalla da Strumenti → Programmi</a>. Le preferenze possono comunque essere salvate senza attivare il servizio. Se APT indica installato, controlla <code>dpkg -L squid</code> e <code>command -v squid</code>.</p>';
     if($admin){
         $ifdata=sys_ifaces();$form=iptm_proxy_form_defaults($ifdata,$prof);
-        echo '<form method="post" class="row">'.fh('p=performance').'<input type=hidden name=action value=cache_proxy_stage>';
+        echo '<form method="post" class="row">'.fh('p=performance');
         echo '<label>Interfaccia LAN<select name=interface required>';
         foreach(array_keys($ifdata) as $ifc)echo '<option value="'.h($ifc).'"'.($form['interface']===$ifc?' selected':'').'>'.h($ifc).'</option>';
         echo '</select></label>';
@@ -84,7 +86,8 @@ function pg_performance(): void {
         echo '<label>Cache disco MiB<input type=number name=disk_mib min=64 max=1024 value="'.(int)$form['disk_mib'].'" required></label>';
         echo '<label>Cache RAM MiB<input type=number name=memory_mib min=8 max=64 value="'.(int)$form['memory_mib'].'" required></label>';
         echo '<label><input type=hidden name=intercept_http value=0><input type=checkbox name=intercept_http value=1'.(!empty($form['intercept_http'])?' checked':'').'> Intercettazione HTTP automatica (solo gateway/LAN; disattivabile)</label>';
-        echo '<button type=submit class=s>Salva preferenze e prepara anteprima</button></form>';
+        echo '<button type=submit name=action value=cache_proxy_save class=s>Salva soltanto le preferenze</button>';
+        echo '<button type=submit name=action value=cache_proxy_stage class=g>Verifica e prepara anteprima</button></form>';
         $pending=$_SESSION['iptm_cache_proxy_stage']??null;
         if(is_array($pending)&&time()-(int)($pending['created']??0)<600&&preg_match('/^[a-f0-9]{64}$/D',(string)($pending['hash']??''))){
             echo '<div class="msg warn">Anteprima proxy disponibile. Nessun servizio o regola modificato.</div>';
@@ -96,5 +99,5 @@ function pg_performance(): void {
         }
         echo '<form method="post">'.fh('p=performance').'<button class=d name=action value=cache_proxy_disable>Disattiva proxy e intercettazione (anche se già disattivati)</button></form>';
     }
-    echo '<p class="mut">Il proxy non modifica il gateway dei dispositivi, né i DNS o le impostazioni del browser. Nella modalità trasparente aggiunge <b>solo</b> regole iptables limitate a HTTP/80 e alla LAN: funziona se il traffico passa realmente attraverso IPTM. Per la <b>cache delle risposte DNS</b> di Pi-hole, Unbound o DNSCrypt usa <a href="?p=dns">Resolver DNS</a>: non è una cache dei contenuti HTTPS.</p></section>';
+    echo '<p class="mut"><b>Come funziona:</b> con intercettazione automatica attiva IPTM inserisce regole NAT iptables limitate a HTTP TCP/80 sui client LAN che usano già IPTM come gateway; non cambia gateway, DNS o browser. HTTPS/443 rimane cifrato e non viene memorizzato. La cache DNS di Pi-hole/Unbound/DNSCrypt è indipendente e si gestisce da <a href="?p=dns">Resolver DNS</a>. In presenza di regole FORWARD restrittive l’intercettazione viene rifiutata per non aggirare le protezioni. Il pulsante di disattivazione rimuove i redirect IPTM e mantiene le preferenze salvate.</p></section>';
 }

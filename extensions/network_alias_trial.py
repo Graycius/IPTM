@@ -25,7 +25,7 @@ import time
 import fabric_runtime as journal
 from multinic_manager import inventory, read_profile, validate, ValidationError
 
-VERSION = '5.30.5'
+VERSION = '5.30.6'
 STATE_DIR = Path('/var/lib/iptm-alias-trial')
 STATE = STATE_DIR/'state.json'
 LOCK = STATE_DIR/'lock'
