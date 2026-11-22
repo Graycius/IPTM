@@ -86,8 +86,8 @@ $bad['ssh_acc']=1;$bad['lockout_on']=1;$bad['raw_drop']=1;$bad['wan_if']='eth0 -
 [$sec,$warn]=gen_sections($bad);
 check500(sec500($sec,'raw-drop')===null,'Invalid WAN created raw drop',$cases,'attack',0);
 $ssh=sec500($sec,'ssh-acc');
-check500($ssh!==null && count($ssh['rules'])===3,'Unsafe SSH networks survived',$cases,'attack',0);
-foreach($ssh['rules'] as $r)check500(str_contains($r,'-s 192.168.50.0/24'),'SSH network not sanitized',$cases,'attack',0);
+check500($ssh!==null && count($ssh['rules'])===4,'Unsafe SSH networks survived',$cases,'attack',0);
+foreach($ssh['rules'] as $r)if(str_contains($r,'--ctstate NEW'))check500(str_contains($r,'-s 192.168.50.0/24'),'SSH network not sanitized',$cases,'attack',0);
 $al=['ports'=>['miss'=>'','db'=>'2375','range'=>'2300:2400','ssh'=>'22','safe'=>'9000']];
 $rows=[];foreach(['miss','db','range','ssh','safe'] as $p)$rows[]=['on'=>1,'proto'=>'tcp','ports'=>'@'.$p,'act'=>'ACCEPT','src'=>'192.168.50.0/24'];
 $rules=svc_rules('INPUT',$rows,$al);

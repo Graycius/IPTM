@@ -1,4 +1,37 @@
-# IPTM 5.30.1 — Continuità SSH, HTTP Update, QoS non invasivo (22 novembre 2026)
+## 5.30.5 — Proxy HTTP LAN trasparente, profili persistenti e fail-open
+
+- Corretto il riconoscimento dei binari Debian `/usr/sbin/squid-gnutls` e `/usr/sbin/squid-openssl`, oltre ai collegamenti protetti da root.
+- Le preferenze di configurazione sono salvate alla creazione dell’anteprima anche se Squid non è avviato; la UI precompila IP, interfaccia, subnet e parametri già scelti.
+- Proxy opzionale con intercettazione del solo HTTP TCP/80 via iptables e verifica rigorosa della modalità gateway IPv4, senza intercettazione HTTPS o modifica DNS, routing o browser.
+- NAT IPTM proprietario e reindirizzamento fail-open su stop/crash Squid, watchdog periodico e rimozione del redirect nelle transazioni firewall.
+- Rifiuto preventivo dell’intercettazione quando il filtro FORWARD contiene ACL restrittive o catene sconosciute, evitando aggiramenti delle policy IoT e MAC.
+- Disattivazione indipendente dall’avvio/installazione Squid, preservando le preferenze.
+
+# IPTM 5.30.4 — Rafforzamento stati QoS, recupero firewall e proxy
+
+- Validazione rigorosa dello stato CAKE e delle identità delle interfacce prima della calibrazione.
+- Arresto delle regolazioni concorrenti durante la misura senza shaping e controllo dello scadere della prova.
+- Confronto dei parametri originali nel journal prima del ripristino dei limiti CAKE.
+- Controlli sui permessi e sul risultato delle operazioni di rollback del servizio Squid.
+- Verifica bilanciata dei blocchi iptables negli snapshot CrowdSec.
+- Suite di test di regressione e aggiornamento versione.
+
+# IPTM 5.30.4 — Installazione Squid da Strumenti → Programmi
+
+- Squid è presente nel catalogo dei programmi installabili tramite APT, nella selezione multipla e nei registri di installazione.
+- Rilevamento installazione e disponibilità pacchetto integrato nei controlli esistenti.
+- Per una nuova installazione, il servizio Squid predefinito è mantenuto disattivato; il proxy LAN IPTM si configura separatamente nella pagina Prestazioni con conferma esplicita.
+- La pagina Prestazioni rimanda alla voce Squid di Strumenti → Programmi quando il pacchetto manca.
+
+# IPTM 5.30.2 — Prestazioni e continuità di rete
+
+- Analisi in sola lettura delle regole IPv4: limiti DROP, QUIC, logging, IPSet, code in userspace, duplicati e controlli che possono aumentare latenza.
+- Proxy HTTP Squid isolato per subnet LAN esplicitamente autorizzate, con cache configurabile, HTTPS CONNECT senza intercettazione TLS, anteprima e attivazione a conferma.
+- Calibrazione della banda con CAKE **bandwidth unlimited** temporaneo su entrambe le direzioni; watchdog indipendente per ripristinare i limiti confermati.
+- Miglioramento del recupero firewall quando snapshot IPSet contengono riferimenti CrowdSec dinamici scaduti.
+- Riduzione carico QoS automatico, analisi Suricata EVE Layer 7, socket dei processi locali e retention backup conservativa.
+
+# IPTM 5.30.2 — Continuità SSH, HTTP Update, QoS non invasivo (22 novembre 2026)
 
 **Priorità:** continuità SSH e traffico lecito, nessuna modifica automatica al kernel durante l'aggiornamento.
 

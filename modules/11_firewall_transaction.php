@@ -90,6 +90,16 @@ function iptm_iot_rules_diagnose(string $txt): array {
     }
     return $problems;
 }
+/** Prepare a rollback candidate while preserving the unchanged original. */
+function iptm_recovery_prepare(string $snapshot, string $family): array {
+    if (!in_array($family,['4','6'],true)||trim($snapshot)===''||strlen($snapshot)>2097152)
+        return [1,'','Snapshot di rollback non valido'];
+    [$rc,$prepared,$err]=priv('rollback-prepare',$snapshot,[$family]);
+    if($rc!==0||trim($prepared)==='')return [1,'','IPSet non verificabili: '.herr($err)];
+    [$testRc,$out,$testErr]=priv($family==='6'?'test6':'test',$prepared);
+    if($testRc!==0)return [1,'','Preflight delle vecchie regole fallito: '.herr($out.$testErr)];
+    return [0,$prepared,$err];
+}
 function do_apply(int $secs, string $fam = '4', bool $force = false): string {
     $GLOBALS['apply_notes'] = [];
     $GLOBALS['_iptm_post_stage']='firewall:locking';
@@ -193,6 +203,12 @@ function do_apply(int $secs, string $fam = '4', bool $force = false): string {
             ', dati ' . (trim($live) === '' ? 'vuoti' : 'presenti') . '). Regole NON applicate. '
             . herr(trim($e . "\n" . ($c !== 0 ? $live : ''))) .
             ' Controlla da SSH: ip6tables-save, ip6tables -t filter -S, ip6tables -V e /proc/sys/net/ipv6/conf/all/disable_ipv6.';
+    // A backup that cannot pass iptables-restore --test is NOT a safety net.
+    // Refuse the new policy BEFORE arm/start, preserving connectivity.
+    [$safeRc,$safePrevious,$safeError]=iptm_recovery_prepare($live,$fam);
+    if($safeRc!==0)return 'Preflight rollback non superato; nessuna regola applicata. '.$safeError;
+    if(!hash_equals(hash('sha256',$live),hash('sha256',$safePrevious)))
+        $GLOBALS['apply_notes'][]=['err','Snapshot contiene IPSet dinamici CrowdSec obsoleti: il watchdog userà una copia normalizzata.'];
     $rb = DATA_DIR . "/rollback$sx.rules"; $pf = DATA_DIR . '/pending.json'; $ap = DATA_DIR . "/applied$sx.rules";
     $secs = max(30, min(600, $secs));
     $csch = ($fam === '4' && !empty(S_get()['crowdsec'])) ? cs_chains_for(S_get(), $txt) : [];
@@ -216,10 +232,19 @@ function do_apply(int $secs, string $fam = '4', bool $force = false): string {
     }
     if (time() >= (int)(json_decode($pendingData, true)['until'] ?? 0))
         return 'Finestra di sicurezza scaduta durante il preflight: nessuna regola caricata; watchdog mantenuto per riconciliazione.';
+    // A transparent HTTP redirect would move FORWARD traffic into INPUT and
+    // could bypass a newly applied IoT/MAC policy. Remove only IPTM-owned NAT
+    // interception before changing firewall tables; squid remains available.
+    if ($fam === '4') {
+        [$cacheOffRc,$cacheOffOut,$cacheOffErr] = priv('cache-proxy',null,['failopen']);
+        if ($cacheOffRc !== 0)
+            return 'Protezione proxy: impossibile rimuovere il redirect HTTP prima di Apply. Regole non caricate; watchdog rimane attivo. '.herr($cacheOffOut.$cacheOffErr);
+    }
     $GLOBALS['_iptm_post_stage']='firewall:restore_live';
     [$c, $o, $e] = priv('restore' . $sx, $txt);
     if ($c) {
-        [$backCode] = priv('restore' . $sx, $live);
+        [$safeRc,$restorable]=iptm_recovery_prepare($live,$fam);
+        $backCode=1; if($safeRc===0)[$backCode]=priv('restore' . $sx,$restorable);
         $cancelled = false;
         if ($backCode === 0) {
             [$cancelCode] = priv('rollback-cancel', null, [$txid]);
@@ -280,8 +305,12 @@ function confirm_pending(): string {
         $old = @file_get_contents(DATA_DIR . "/rollback$sx.rules");
         $recovery = 'snapshot precedente non disponibile';
         if (is_string($old) && trim($old) !== '') {
-            [$rr] = priv('restore' . $sx, $old);
-            [$wr] = priv('write' . $sx, $old);
+            [$safeRc,$restorable]=iptm_recovery_prepare($old,$fam);
+            $rr=$wr=1;
+            if($safeRc===0){
+                [$rr]=priv('restore'.$sx,$restorable);
+                if($rr===0)[$wr]=priv('write'.$sx,$restorable);
+            }
             $recovery = ($rr === 0 && $wr === 0) ? 'ripristino immediato tentato e comandi riusciti' :
                 'ATTENZIONE: ripristino immediato del kernel o del file non riuscito';
         }
@@ -296,6 +325,10 @@ function confirm_pending(): string {
         priv('ipset-persist');
         @copy(DATA_DIR . '/settings.json', DATA_DIR . '/last-good.json');
         @file_put_contents(DATA_DIR . '/last-good.time', (string)time());
+        // Re-enable only if current FORWARD security policy permits the HTTP
+        // proxy's alternate INPUT/OUTPUT path; otherwise leave direct traffic.
+        [$cacheRc,$cacheOut,$cacheErr]=priv('cache-proxy',null,['reconcile']);
+        if ($cacheRc!==0)$GLOBALS['apply_notes'][]=['err','Proxy HTTP: controllo dopo Apply non riuscito: '.herr($cacheOut.$cacheErr)];
     } else iptm_draft_remove_if_same($txt,'6');
     return '';
 }
@@ -309,14 +342,11 @@ function revert_pending(): string {
     if (!is_string($old) || trim($old) === '') {
         return 'Snapshot precedente mancante: watchdog lasciato attivo.';
     }
-    // Fail closed before touching the kernel. This detects missing dynamic
-    // CrowdSec sets and malformed snapshots without bypassing dependencies.
-    [$checkCode, $checkOut, $checkErr] = priv('test' . $sx, $old);
-    if ($checkCode !== 0) {
-        return 'Preflight ripristino fallito; regole non modificate e watchdog conservato. '
-            . herr($checkOut . $checkErr);
-    }
-    [$rc, $out, $err] = priv('restore' . $sx, $old);
+    // Manual and timed rollback use the SAME preflight normalizer.
+    [$checkCode, $prepared, $checkErr] = iptm_recovery_prepare($old,$sx==='6'?'6':'4');
+    if ($checkCode !== 0)
+        return 'Preflight ripristino fallito; regole non modificate e watchdog conservato. '.$checkErr;
+    [$rc, $out, $err] = priv('restore' . $sx, $prepared);
     if ($rc !== 0) {
         return 'Ripristino manuale fallito: watchdog lasciato attivo. ' . herr($out . $err);
     }

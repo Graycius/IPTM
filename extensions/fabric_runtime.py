@@ -24,7 +24,7 @@ import time
 
 from multinic_manager import inventory, read_profile, validate, ValidationError
 
-VERSION = '5.30.1'
+VERSION = '5.30.5'
 STATE_DIR = Path('/var/lib/iptm-fabric-runtime')
 STATE = STATE_DIR / 'fabric-trial.json'
 LOCK = STATE_DIR / 'fabric-trial.lock'

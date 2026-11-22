@@ -1,4 +1,4 @@
-/* IPTM 5.30.1 – navigation and progressive UI only.
+/* IPTM 5.30.5 – navigation and progressive UI only.
    Never changes a server action, security confirmation, or live firewall state. */
 (()=>{
  'use strict';

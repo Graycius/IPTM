@@ -167,7 +167,7 @@ function settings_migrate(array $s): array {
         return $s;
     };
 
-    // 5.30.1: remove dangerous wide opens in persisted settings.
+    // 5.30.5: remove dangerous wide opens in persisted settings.
     $steps[43] = function (array $s) use (&$log): array {
         if (!empty($s['lan_tcp_accept'])) { $s['lan_tcp_accept'] = 0; $log[] = 'LAN TCP indiscriminato disattivato'; }
         if (!empty($s['docker_accept'])) { $s['docker_accept'] = 0; $log[] = 'Accesso totale container→host disattivato'; }

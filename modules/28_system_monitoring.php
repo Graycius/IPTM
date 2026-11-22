@@ -57,6 +57,7 @@ function tool_defs(): array {
         'unattended' => ['Aggiornamenti automatici', 'unattended-upgrades: applica automaticamente le patch di sicurezza Debian/Ubuntu.', ''],
         'auditd' => ['Auditd · audit configurazioni', 'Registra modifiche a rules.v4/v6, configurazioni WireGuard e SSH. Gli eventi recenti sono consultabili qui; non modifica le regole firewall.', ''],
         'lynis' => ['Lynis · audit hardening', 'Esegue un controllo di sicurezza in sola lettura su sistema, servizi, kernel e configurazioni; non applica correzioni automatiche. Il report resta nel registro del programma.', ''],
+        'squid' => ['Squid · cache e proxy LAN', 'Installa il pacchetto Squid tramite APT. Il proxy IPTM viene configurato e attivato separatamente in Prestazioni: nessuna esposizione WAN o intercettazione HTTPS automatica.', ''],
         'unbound' => ['Unbound · resolver DNS locale', 'Resolver ricorsivo DNSSEC su loopback porta 5335, con configurazione isolata e validata prima del riavvio. Si integra con Pi-hole FTL tramite upstream locale.', ''],
         'ipset' => ['ipset · insiemi firewall', 'Utilità per gli insiemi iptables, utilizzata anche dai bouncer CrowdSec.', ''],
         'clamav' => ['ClamAV · scanner leggero', 'Installa clamscan e freshclam senza avviare clamd, particolarmente pesante su macchine con poca RAM. Nessuna scansione automatica.', ''],
@@ -187,10 +188,12 @@ function pg_progs() {
         if (!$ro && !$running && empty($t['inst']) && (!empty($t['cand']) || empty($t['cand_known'])) && $arg==='') {
             echo '<form method=post style="display:inline">'.fh('p=progs').'<input type=hidden name=action value=tool_install><input type=hidden name=tool value="'.h($k).'"><button class="s sm" title="Installa programma">'.h($name).'</button></form>';
         } else echo '<a href="?p=progs#tool-' . h($k) . '"><b>' . h($name) . '</b></a>';
-        echo '<br><span class=mut>' . $desc . '</span></td><td>' . $state . '</td><td>';
+        echo '<br><span class=mut>' . h($desc) . '</span></td><td>' . $state . '</td><td>';
         if (!$ro && !$t['run'] && (!empty($t['inst']) || !empty($t['cand']) || empty($t['cand_known']))) {
             if ($k === 'wireguard' && $t['inst']) {
                 echo '<a class="btn s sm" href="?p=vpn">Apri gestione VPN</a>';
+            } elseif ($k === 'squid' && !empty($t['inst'])) {
+                echo '<a class="btn s sm" href="?p=performance">Configura proxy LAN</a>';
             } else {
                 echo '<form method=post class=ops style="display:inline">' . fh('p=progs') . '<input type=hidden name=action value=tool_install><input type=hidden name=tool value="' . h($k) . '">';
                 if ($arg === 'iface') echo sel('arg', array_combine($if, $if), $S['wan_if'] ?? '') . ' ';
