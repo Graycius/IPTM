@@ -4414,7 +4414,8 @@ PY_PENDING_CHECK
             # decision set may disappear between Apply and the watchdog firing.
             # Only obsolete direct DROP references are reconcilable; all
             # non-CrowdSec/malformed rules remain hard blockers.
-            rollback_source="$D/rollback$([ "$f" = 6 ] && printf 6).rules"
+            rollback_source="$D/rollback.rules"
+            [ "$f" = 6 ] && rollback_source="$D/rollback6.rules"
             [ -s "$rollback_source" ] || { echo 'Rollback: snapshot mancante' >&2; exit 70; }
             rollback_tmp=$(mktemp /tmp/.iptm-recovery.XXXXXXXX) || exit 70
             trap 'rm -f -- "$rollback_tmp"' EXIT
@@ -5185,7 +5186,7 @@ PY_LAN
       [[ "${3:-}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || exit 2
     exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.1/extensions/ssh_continuity.py repair "$3" ;;
   qos-engine)
-    shift; case "${1:-}" in status|stage|install-guard|disable|calibrate-status|adaptive-enable|adaptive-disable|auto-enable|auto-disable|auto-status) [ "$#" -eq 1 ] ;; inspect|calibrate-start) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; confirm|rollback) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
+    shift; case "${1:-}" in status|traffic-inspect|stage|install-guard|disable|calibrate-status|adaptive-enable|adaptive-disable|auto-enable|auto-disable|auto-status) [ "$#" -eq 1 ] ;; inspect|calibrate-start) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; confirm|rollback) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
     exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.1/extensions/qos_engine.py "$@" ;;
   compat6-readiness)
     [ "$#" -eq 2 ] && [ "${2:-}" = report ] || exit 2
