@@ -10,7 +10,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         flash('Account in sola lettura.', 'err'); go($back);
     }
-    $MUT = ['rule_save', 'rule_op', 'wizard_add', 'chain_op', 'raw_save', 'settings_save', 'strip_managed', 'import_apply', 'rules_cleanup_apply', 'custom_rules_integrate', 'custom_rules_delete', 'apply', 'save_file', 'iot_bulk_save', 'sec_preset', 'regen_now', 'rules_compact_safe'];
+    $MUT = ['rule_save', 'rule_op', 'wizard_add', 'chain_op', 'raw_save', 'settings_save', 'strip_managed', 'import_apply', 'rules_cleanup_apply', 'custom_rules_integrate', 'custom_rules_delete', 'apply', 'save_file', 'iot_bulk_save', 'sec_preset', 'regen_now', 'rules_compact_safe', 'rules_audit_import'];
     if (in_array($a, $MUT, true) && ($_POST['rev'] ?? '') !== $rev) { flash('La bozza è cambiata in un\'altra scheda: operazione annullata, ricarica e riprova.', 'err'); go($back); }
     try {
     $iptm_handlers=array (
@@ -40,6 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   'block_ip' => 'system',
   'conn_kill' => 'system',
   'wol' => 'system',
+  'ssh_continuity_recover' => 'security',
   'qos_guard_install' => 'qos',
   'qos_adaptive_enable' => 'qos',
   'qos_adaptive_disable' => 'qos',
@@ -127,6 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   'sysctl_consolidate' => 'system',
   'sysctl_consolidate_rollback' => 'system',
   'rules_compact_safe' => 'firewall',
+  'rules_audit_import' => 'firewall',
   'dns_wizard_plan' => 'dns',
   'antidpi_live' => 'dns',
   'antidpi_sources' => 'dns',

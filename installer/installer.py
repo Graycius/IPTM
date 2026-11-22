@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IPTM 5.20.25 — installazione iniziale conservativa per DietPi/Debian.
+"""IPTM 5.30.1 — installazione iniziale conservativa per DietPi/Debian.
 
 Non configura/ripristina iptables, DHCP, NAT, routing o resolver; non avvia
 servizi di rete. Una Web UI PHP già operativa è un prerequisito.
@@ -22,7 +22,7 @@ import sys
 import tempfile
 import tokenize
 
-VERSION = "5.20.25"
+VERSION = "5.30.1"
 BASE = Path(__file__).resolve().parent
 SOURCE = BASE / "source"
 ROOT_LIB = Path("/usr/local/lib/iptables-manager")
@@ -320,7 +320,7 @@ class Installer:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Prima installazione IPTM 5.20.25")
+    ap = argparse.ArgumentParser(description="Prima installazione IPTM 5.30.1")
     ap.add_argument("--web-root", default="/var/www/html", help="Document root già servita da PHP")
     ap.add_argument("--web-user", default="www-data", help="Utente PHP della console")
     ap.add_argument("--dry-run", action="store_true", help="Verifica senza modificare il sistema")

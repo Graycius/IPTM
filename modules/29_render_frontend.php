@@ -58,7 +58,7 @@ $MENU = [
     'uplink' => ['Connessione e rete', ['multinic'=>'Interfacce e VLAN', 'setup'=>'Indirizzamento e NAT', 'router'=>'Routing e servizi', 'sqm'=>'Qualità del traffico', 'vpn'=>'VPN e tunnel', 'forward'=>'Porte inoltrate', 'v6'=>'IPv6', 'v6convert'=>'Conversione IPv6']],
     'clients' => ['Rete locale', ['devices'=>'Dispositivi', 'zones'=>'Zone e isolamento', 'access'=>'Permessi di accesso', 'deviceinsights'=>'Attività dispositivi', 'apps'=>'Servizi e porte']],
     'dns' => ['DNS e privacy', ['dns'=>'Resolver DNS', 'piholelists'=>'Filtri Pi-hole', 'dnsguard'=>'DNS protetto', 'piholehealth'=>'Salute Pi-hole', 'unbound'=>'Unbound', 'dnsaudit'=>'Audit DNS']],
-    'firewall' => ['Protezione', ['security'=>'Firewall', 'rules'=>'Regole', 'rule'=>'Nuova regola', 'wizard'=>'Procedura guidata', 'chains'=>'Catene', 'crowdsec'=>'CrowdSec', 'ips'=>'Suricata', 'lists'=>'Liste e GeoIP', 'harden'=>'Hardening', 'avscan'=>'Antivirus', 'traffic'=>'Analisi HTTPS', 'attacks'=>'Attacchi', 'raw'=>'Editor regole', 'manual'=>'Conversione manuale']],
+    'firewall' => ['Protezione', ['security'=>'Firewall', 'rules'=>'Regole', 'rulesaudit'=>'Analizza rules.v4', 'rule'=>'Nuova regola', 'wizard'=>'Procedura guidata', 'chains'=>'Catene', 'crowdsec'=>'CrowdSec', 'ips'=>'Suricata', 'lists'=>'Liste e GeoIP', 'harden'=>'Hardening', 'avscan'=>'Antivirus', 'traffic'=>'Analisi HTTPS', 'attacks'=>'Attacchi', 'raw'=>'Editor regole', 'manual'=>'Conversione manuale']],
     'system' => ['Sistema e strumenti', ['apply'=>'Applica configurazione', 'operations'=>'Operazioni', 'diag'=>'Diagnostica', 'log'=>'Log', 'health'=>'Salute sistema', 'update'=>'Aggiornamenti', 'config'=>'Backup e ripristino', 'postcheck'=>'Controllo dopo apply', 'tracer'=>'Analisi pacchetti', 'impact'=>'Impatto regole', 'advise'=>'Consigli', 'system'=>'Servizi', 'history'=>'Cronologia', 'search'=>'Ricerca avanzata', 'zero'=>'Configurazione iniziale', 'retention'=>'Pulizia', 'import'=>'Importa regole', 'progs'=>'Programmi', 'admin'=>'Utenti', 'upgrade-wizard'=>'Nuove opzioni', 'guide'=>'Guida']]
 ];
 $MENU_PRIMARY = [
@@ -66,7 +66,7 @@ $MENU_PRIMARY = [
     'uplink'=>['multinic','setup','sqm','vpn','forward'],
     'clients'=>['devices','zones','access'],
     'dns'=>['dns','piholelists','dnsguard','piholehealth'],
-    'firewall'=>['security','rules','crowdsec','ips'],
+    'firewall'=>['security','rules','rulesaudit','crowdsec','ips'],
     'system'=>['apply','operations','diag','update','config'],
 ];
 $MENU_LABELS = [
@@ -325,6 +325,7 @@ $IPTM_PAGE_HANDLERS = [
     'apply' => 'pg_apply',
     'guide' => 'pg_guide',
     'rules' => 'pg_rules',
+    'rulesaudit' => 'pg_rulesaudit',
 ];
 $IPTM_ASYNC_PAGES = [
     'dnsaudit' => 'Analisi DNS in corso…',

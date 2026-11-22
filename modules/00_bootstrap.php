@@ -20,12 +20,30 @@ define('ALLOWED_NETS', (isset($__wc['ALLOWED_NETS']) && is_array($__wc['ALLOWED_
     || !preg_match('~^(?:\d{1,3}\.){3}\d{1,3}/(?:0|[1-9]|[12][0-9]|3[0-2])$~', $n)
     || filter_var(substr($n, 0, strrpos($n, '/')), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false))
     ? array_values($__wc['ALLOWED_NETS']) : ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']);   // predefinito: solo reti private; CIDR IPv4 validi
+// Configurable IPv6 management scopes. If ALLOWED_NETS is explicitly
+// restricted to specific IPv4 networks, default IPv6 access becomes loopback
+// only. Add ALLOWED_NETS6 explicitly to authorize private IPv6 clients.
+$__v6 = ['::1/128'];
+if (!array_key_exists('ALLOWED_NETS', $__wc)) $__v6 = ['::1/128','fc00::/7','fe80::/10'];
+if (isset($__wc['ALLOWED_NETS6']) && is_array($__wc['ALLOWED_NETS6'])) {
+    $__provided = $__wc['ALLOWED_NETS6'];
+    $__valid = count($__provided) <= 64;
+    foreach ($__provided as $__net) {
+        if (!is_string($__net) || !preg_match('~^([^/]+)/([0-9]{1,3})$~D', $__net, $__match)
+            || filter_var($__match[1], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false
+            || (int)$__match[2] > 128) { $__valid = false; break; }
+    }
+    // Invalid configuration cannot expand privileges by falling back to ULA.
+    $__v6 = $__valid ? array_values($__provided) : ['::1/128'];
+}
+define('ALLOWED_NETS6', $__v6);
+unset($__v6, $__provided, $__valid, $__net, $__match);
 define('ROLLBACK_SECS', $__wi('ROLLBACK_SECS', 60, 10, 3600));      // secondi per confermare dopo "Applica"
 define('MIN_PW', $__wi('MIN_PW', 10, 8, 128));
 define('IDLE_SECS', $__wi('IDLE_SECS', 1800, 60, 86400));           // scadenza della sessione per inattivita'
-const APP_VERSION = '5.20.25';
-const APP_BUILD = '20261122.3.iptm-5.20.25';
-const SETTINGS_SCHEMA = 42;   // versione schema settings.json (migrazioni in S_load)
+const APP_VERSION = '5.30.1';
+const APP_BUILD = '20261122.9.iptm-5.30.1';
+const SETTINGS_SCHEMA = 44;   // versione schema settings.json (migrazioni in S_load)
 define('HELPER', $__wp('HELPER', '/usr/local/sbin/iptm-helper'));   // creato da install-dietpi.sh (operazioni root)
 define('BIN_IP', $__wp('BIN_IP', '/usr/sbin/ip'));
 define('BIN_SUDO', $__wp('BIN_SUDO', '/usr/bin/sudo'));
@@ -40,7 +58,7 @@ const SVC = ['web' => ['Web (HTTP/HTTPS)', 'tcp:80,443'], 'dns' => ['DNS', 'tcp,
 const DAYS = ['Mon' => 'Lun', 'Tue' => 'Mar', 'Wed' => 'Mer', 'Thu' => 'Gio', 'Fri' => 'Ven', 'Sat' => 'Sab', 'Sun' => 'Dom'];
 const SEC_FIELDS = [
     'setup' => ['wan_if' => 'if', 'single_nic' => 'b', 'lan_nets' => 'nets', 'masq_ifs' => 'ifs', 'drop_chain' => 'chain', 'nat_masq' => 'b', 'mss' => 'b', 'dns_redirect' => 'b', 'dns_ip' => 'ip', 'dot_block' => 'b'],
-    'security' => ['spi' => 'b', 'antispoof' => 'b', 'antispoof_mc' => 'b', 'spoof_on' => 'b', 'spoof_if' => 'if', 'spoof_nets' => 'nets', 'invalid' => 'b', 'blockping' => 'b', 'ident' => 'b', 'multicast' => 'b',
+    'security' => ['continuity_priority' => 'b', 'spi' => 'b', 'antispoof' => 'b', 'antispoof_mc' => 'b', 'spoof_on' => 'b', 'spoof_if' => 'if', 'spoof_nets' => 'nets', 'invalid' => 'b', 'blockping' => 'b', 'ident' => 'b', 'multicast' => 'b',
         'crowdsec' => 'b', 'cs_docker' => 'b', 'conn_limit' => 'b', 'cl_max' => 'n:1:100000', 'rpfilter' => 'b', 'bw_on' => 'b', 'bw_up' => 'n:1:10000000', 'bw_down' => 'n:1:10000000', 'mac_only' => 'b', 'mac_allow' => 'macs', 'alg_ftp' => 'b', 'alg_tftp' => 'b', 'alg_sip' => 'b', 'iso_on' => 'b', 'iso_nets' => 'nets', 'guest_on' => 'b', 'guest_nets' => 'nets', 'guest_ports' => 'ports', 'guest_allow' => 'nets', 'mac_block' => 'macs', 'quic_block' => 'b', 'lan_cl' => 'b', 'lan_cl_max' => 'n:10:1000000', 'svc_ban' => 'b', 'sb_ports' => 'ports', 'sb_hits' => 'n:1:20', 'sb_secs' => 'n:1:3600', 'sb_ban' => 'n:60:86400', 'ui_nets' => 'nets', 'bad_mss' => 'b', 'udp_rl' => 'b', 'ul_rate' => 'n:1:100000', 'ul_burst' => 'n:1:100000', 'web_rl' => 'b', 'wl_rate' => 'n:1:100000', 'wl_burst' => 'n:1:100000', 'wl_ports' => 'ports', 'amp_block' => 'b', 'bl_log' => 'b',
         'icmp_limit' => 'b', 'icmp_echo_rate' => 'rate', 'icmp_echo_burst' => 'n:1:100000', 'icmp_other_rate' => 'rate', 'icmp_other_burst' => 'n:1:100000', 'igmp_accept' => 'b', 'lan_tcp_accept' => 'b', 'docker_accept' => 'b', 'docker_nets' => 'nets', 'bcast_accept' => 'b', 'dhcp_accept' => 'b', 'coap_accept' => 'b', 'lan_out_fwd' => 'b', 'cs_set_match' => 'b',
         'dos' => 'b', 'dos_syn' => 'n:1:100000', 'dos_burst' => 'n:1:100000', 'ssh_acc' => 'b', 'ssh_nets' => 'nets', 'ssh_acc_port' => 'port', 'ssh_conn' => 'n:1:1000', 'ssh_hits' => 'n:1:20', 'ssh_secs' => 'n:1:3600', 'ssh_name' => 'setname',

@@ -3,13 +3,13 @@
 
 The web entrypoint dispatches only to this verified root worker for native
 archives. No shell installer, tar extraction or arbitrary paths. Manifest SHA256
-checks integrity, not publisher identity; HTTP downloads and unsigned packages
-remain allowed by user request.
+checks integrity, not publisher identity; URL-based downloads support HTTP/HTTPS; HTTP requires a trusted external SHA-256.
+Authenticated local ZIP uploads remain possible. Manifests are SHA-256 integrity checks, not digital signatures.
 """
 from __future__ import annotations
 import hashlib,json,os,pathlib,re,shutil,stat,subprocess,sys,tempfile,zipfile,tokenize,time
 
-VERSION_RX=re.compile(r'[0-9]+(?:\.[0-9]+){2,3}\Z')
+VERSION_RX=re.compile(r'[0-9]+(?:\.[0-9]+){1,3}\Z')
 PATH_RX=re.compile(r'(?:modules/[0-9]{2}_[a-z0-9_]+\.php|actions/[a-z_]+\.php|assets/[a-z]+\.(?:css|js)|extensions/[a-z0-9_]+\.py|runtime/iptm-[a-z-]+(?:\.py)?|loader/iptables-manager\.php|CHANGELOG\.md)\Z')
 ROOT=pathlib.Path('/usr/local/lib/iptables-manager')
 RELEASE_BASE=ROOT/'web/releases'
@@ -363,7 +363,7 @@ def prune_old_releases(current, previous, *, base=RELEASE_BASE, days=7):
                     if f.suffix not in ('.service','.timer','.socket','.path','.php','.py','.sh',''):
                         continue
                     content=f.read_bytes()
-                    for m in re.finditer(rb'/web/releases/([0-9]+(?:\.[0-9]+){2,3})/',content):
+                    for m in re.finditer(rb'/web/releases/([0-9]+(?:\.[0-9]+){1,3})/',content):
                         referenced.add(m.group(1).decode())
             except (OSError,PermissionError) as exc:
                 return dict(report,reason='reference-scan-failed',errors=[str(exc)])

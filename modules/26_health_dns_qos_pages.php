@@ -424,12 +424,12 @@ function iptm_page_update(): void {   // distribuzione nativa modulare
         . '<p class=mut><b>Non caricare</b> il Kit completo, Sorgenti e test, README o uno ZIP che contiene altri ZIP. Se hai scaricato il Kit, estrailo sul computer e seleziona soltanto l’archivio Native Update.</p>'
         . '<label><input type=checkbox name=force value=1> Consenti soltanto la stessa versione (es. nuova build della versione corrente); non permette downgrade</label>'
         . '<p><button class=g type=submit >Installa pacchetto completo</button></p></form>';
-    if (!$ro) echo '<details class=card><summary><b>Alternativa: scarica lo ZIP da URL HTTP/HTTPS</b></summary>'
-        . '<p class=mut>Per server di aggiornamento attendibili, anche HTTP sulla LAN. Nessun hash da digitare. Fino a 3 redirect HTTP vengono verificati singolarmente: indirizzi locali speciali e passaggi HTTPS verso HTTP sono bloccati. HTTP non protegge contro manomissioni sulla rete.</p>'
+    if (!$ro) echo '<details class=card><summary><b>Scarica aggiornamento via HTTP / HTTPS</b></summary>'
+        . '<p class=mut>HTTP supportato, anche sulla LAN, con SHA-256 obbligatorio da fonte attendibile. HTTPS disponibile. Nessun downgrade da HTTPS a HTTP.</p>'
         . '<form method=post action="?p=update" class="iptm-classic-form">' . fh('p=update')
         . '<input type=hidden name=action value=update_url_apply>'
-        . '<label class=fl><span>URL completo dello ZIP (HTTP o HTTPS, max 8 MiB)</span><input name=package_url type=url maxlength=1500 placeholder="http://192.168.1.10/releases/IPTM.zip" required></label>'
-        . '<label class=fl><span>SHA-256 pubblicato dall’autore (facoltativo, consigliato per HTTP)</span><input name=sha maxlength=64 pattern="[a-fA-F0-9]{64}" placeholder="64 caratteri esadecimali"></label>'
+        . '<label class=fl><span>URL HTTP o HTTPS dello ZIP (max 8 MiB)</span><input name=package_url type=url maxlength=1500 placeholder="http://server.lan/releases/IPTM.zip" required></label>'
+        . '<label class=fl><span>SHA-256 attendibile (obbligatorio per HTTP)</span><input name=sha maxlength=64 pattern="[a-fA-F0-9]{64}" placeholder="64 caratteri esadecimali"></label>'
         . '<label><input type=checkbox name=force value=1> Consenti soltanto la stessa versione, mai downgrade</label>'
         . '<p><button class=g type=submit >Scarica e installa</button></p></form></details>';
     echo '<p class=mut>Installazioni precedenti al multi-NIC: nessuna seconda scheda richiesta per installare l’aggiornamento; configurazione WAN, DHCP, indirizzi IP e firewall conservati. Gli updater modulari supportano solo il formato nativo e verificano la unità di recupero prima di confermare il risultato. Le release successive utilizzano un archivio nativo e il journal di recovery. Nessuna regola firewall viene cambiata aprendo questa pagina.</p></div>';

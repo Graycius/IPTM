@@ -1,0 +1,57 @@
+name: Syntax and regression checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: PHP CLI available
+        run: |
+          if ! command -v php >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y php-cli
+          fi
+      - name: PHP syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          find modules actions loader -type f -name '*.php' -print0 | xargs -0 -r -n1 php -l
+      - name: Python syntax without importing privileged code
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q extensions runtime tests installer
+      - name: JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do node --check "$file"; done < <(find assets -type f -name '*.js' -print0)
+      - name: Bash syntax
+        run: |
+          bash -n runtime/iptm-helper installer/install.sh
+      - name: Fast offline regression tests (no live firewall modifications)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/test_optimizer.py
+          python tests/test_ssh_qos_5301.py
+          php tests/test_regressions.php
+          php tests/test_service_combinations.php
+      - name: ShellCheck diagnostics (advisory)
+        continue-on-error: true
+        run: |
+          shellcheck -S warning runtime/iptm-helper installer/install.sh

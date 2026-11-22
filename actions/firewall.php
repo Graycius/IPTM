@@ -74,6 +74,74 @@ case 'rule_op': {
             } else flash('Operazione non consentita.', 'err');
             unset($items); save_model(); break;
         }
+        case 'rules_audit_import': {
+            // The optimizer reads text from stdin and never alters the kernel.
+            // One click produces a regular IPTM draft, protected by CAS + backup.
+            $back = 'p=rulesaudit';
+            if (($_SESSION['role'] ?? 'viewer') !== 'admin') { flash('Accesso riservato agli amministratori.', 'err'); break; }
+            $uploaded = $_FILES['rules_file'] ?? null;
+            $input = $draftTxt;
+            if (is_array($uploaded) && ($uploaded['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
+                if (($uploaded['error'] ?? -1) !== UPLOAD_ERR_OK
+                    || !is_uploaded_file((string)($uploaded['tmp_name'] ?? ''))
+                    || (int)($uploaded['size'] ?? 0) < 10 || (int)($uploaded['size'] ?? 0) > 2097152) {
+                    flash('Il file deve essere un rules.v4 testuale fino a 2 MB.', 'err'); break;
+                }
+                $input = @file_get_contents((string)$uploaded['tmp_name']);
+                if (!is_string($input) || strlen($input) !== (int)$uploaded['size']) {
+                    flash('File non leggibile o incompleto.', 'err'); break;
+                }
+            }
+            if (!is_string($input) || trim($input)==='' || strlen($input)>2097152) {flash('Bozza assente o troppo grande.', 'err'); break;}
+            $program = IPTM_RELEASE_DIR . '/extensions/rules_optimizer.py';
+            if (!is_file($program) || !is_readable($program)) {flash('Analizzatore non installato.', 'err'); break;}
+            $auditMode = ((string)($_POST['audit_mode'] ?? 'harden') === 'audit') ? 'audit' : 'harden';
+            [$rc, $out, $err] = run(['/usr/bin/python3','-B',$program,$auditMode], $input, 18.0, 6*1024*1024);
+            $res = json_decode($out, true);
+            if ($rc !== 0 || !is_array($res) || empty($res['ok']) || !isset($res['draft']) || !is_string($res['draft'])) {
+                flash('Analisi non riuscita: ' . herr((string)($res['error'] ?? $err ?: 'formato non valido')), 'err'); break;
+            }
+            $res['mode'] = $auditMode;
+            // Read-only path: no disk writes, no draft backup, no kernel effects.
+            if ($auditMode === 'audit') {
+                $_SESSION['iptm_rules_audit'] = [
+                    'findings' => (array)($res['findings'] ?? []),
+                    'changes' => [],
+                    'before' => (int)($res['original_rules'] ?? 0),
+                    'after' => (int)($res['original_rules'] ?? 0),
+                    'mode' => 'audit',
+                ];
+                flash('Controllo completato. Nessuna modifica alla bozza o alla rete.', 'ok');
+                break;
+            }
+            $draft = $res['draft'];
+            if (strlen($draft) > 2097152 || !str_contains($draft,'*filter') || !str_contains($draft,'COMMIT')) {
+                flash('La bozza proposta non supera i controlli minimi.', 'err'); break;
+            }
+            $origM = parse_rules($draft);
+            if (!is_array($origM) || !$origM) {flash('Bozza non analizzabile dal modello IPTM.', 'err'); break;}
+            // Exact pre-import draft backup. Never overwrite the running rules.
+            $dir = DATA_DIR . '/backups';
+            if (is_link($dir) || (!is_dir($dir) && !@mkdir($dir, 0700, true))) {
+                flash('Backup non disponibile: bozza invariata.', 'err'); break;
+            }
+            $base = $dir . '/rules.v4.' . date('Ymd-His') . '-' . bin2hex(random_bytes(4));
+            if (!atomic_data_write($base, $draftTxt, 0600) || !hash_equals(hash('sha256',$draftTxt), (string)@hash_file('sha256',$base))) {
+                flash('Backup della bozza fallito: nessun cambiamento.', 'err'); break;
+            }
+            if (!put_draft($draft)) {flash('Impossibile salvare la bozza.', 'err'); break;}
+            $rev = hash('sha256', $draft);
+            $stats = [ 'findings'=>array_slice((array)($res['findings']??[]),0,100),
+                'changes'=>array_slice((array)($res['changes']??[]),0,200),
+                'before'=>(int)($res['original_rules']??0),'after'=>(int)($res['new_rules']??0),
+                'sha256'=>(string)($res['source_sha256']??''),
+                'settings_patch'=>(array)($res['settings_patch']??[]) ];
+            $stats['mode'] = 'harden';
+            $_SESSION['iptm_rules_audit'] = $stats;
+            audit('rules_audit_import changes=' . count($stats['changes']) . ' findings=' . count($stats['findings']));
+            flash('Nuova bozza creata: ' . count($stats['changes']) . ' correzioni, ' . count($stats['findings']) . ' segnalazioni. Nessuna regola attiva modificata.', 'ok');
+            break;
+        }
         case 'import_apply': {
             if (is_file(DATA_DIR . '/settings.json')) { flash('Importazione già eseguita.', 'err'); break; }
             $pl = import_plan_safe($M); $orig = ser($M);

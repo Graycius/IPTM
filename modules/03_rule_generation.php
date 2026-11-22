@@ -14,7 +14,7 @@ function S_def(): array {
         'closeports' => 0, 'close_range' => '1:1023', 'final_drop' => 0, 'logdrop_on' => 0, 'ld_src_rate' => '10/sec', 'ld_src_burst' => 20, 'ld_glob_rate' => '200/sec', 'ld_glob_burst' => 400, 'ld_prefix' => 'IPT-DROP: ',
         'raw_lo' => 0, 'raw_drop' => 0, 'raw_tcp' => '135,137,138,139,445', 'raw_udp' => '135,137,138,139,445,1900',
         'log_in' => 0, 'log_out' => 0, 'log_drop' => 0, 'log_rate' => '10/min', 'loopback' => 0, 'dmz_on' => 0, 'dmz_ip' => '', 'dmz_excl' => '22', 'fwd' => [], 'acl' => [], 'svc_in' => [], 'svc_fwd' => [], 'apps' => [],
-        'lockout_on' => 0, 'mgmt_ports' => '22,80,443,8089,8489', 'drop_frag' => 0, 'portscan' => 0, 'ps_hits' => 14, 'ps_secs' => 60, 'ps_ban' => 3600, 'bogon_wan' => 0, 'lan_flood' => 0, 'lf_rate' => 200, 'lf_burst' => 400, 'egress_smtp' => 0, 'egress_allow' => '', 'egress_ports' => '',
+        'continuity_priority' => 1, 'lockout_on' => 0, 'mgmt_ports' => '22,80,443,8089,8489', 'drop_frag' => 0, 'portscan' => 0, 'ps_hits' => 14, 'ps_secs' => 60, 'ps_ban' => 3600, 'bogon_wan' => 0, 'lan_flood' => 0, 'lf_rate' => 200, 'lf_burst' => 400, 'egress_smtp' => 0, 'egress_allow' => '', 'egress_ports' => '',
         'stealth' => 0, 'synproxy' => 0, 'sp_ports' => '', 'tarpit' => 0, 'dns_rebind' => 0, 'raw_invalid' => 0, 'arp_protect' => 0, 'tcp_fastopen_off' => 0, 'glob_new_limit' => 0, 'gn_rate' => 100, 'gn_burst' => 200,
         'harden' => ['rpf' => '2'], 'custom_opts' => [], 'aliases' => [], 'blocklists' => [], 'geo_on' => 0, 'geo_codes' => '', 'geo_dir' => 'in', 'manual_block' => '', 'knock_on' => 0, 'knock_ports' => '7000,8000,9000', 'knock_target' => '22', 'knock_secs' => 30, 'knock_nets' => '',
         'iot_devices' => [], 'iot_policies' => [], 'api_token' => '', 'notify' => ['tg_token' => '', 'tg_chat' => '', 'webhook' => '', 'ev' => ['apply', 'confirm', 'revert', 'rollback', 'loginfail'], 'rule_on' => 0, 'rule_min' => 20, 'rule_patterns' => 'DROP,REJECT,IPTM-DROP,IPTM-IN,IPTM-OUT,CROWDSEC'], 'ti' => ['abuseipdb' => '', 'greynoise' => '', 'otx' => '', 'virustotal' => '', 'urlscan' => '', 'ipapi' => 0, 'threatfox' => 1, 'urlhaus' => 1, 'cache_hours' => 24], 'v6' => ['on' => 0, 'mode' => 'host', 'lan_if' => '', 'wan_if' => '', 'lan_prefix' => 'fe80::/10', 'icmp' => 1, 'dhcp6' => 1, 'ssh' => 1, 'ssh_port' => 22, 'ports' => '', 'log' => 0], 'sqm' => ['on' => 0, 'iface' => '', 'down' => 0, 'up' => 0, 'mode' => 'cake', 'diffserv' => 'diffserv4', 'ack_filter' => 1, 'nat' => 1, 'wash' => 0, 'overhead' => 'ethernet', 'prio_interactive' => 1, 'prio_voip' => 1, 'prio_games' => 1, 'prio_bulk_low' => 1, 'game_ports' => '27000:27050,3074,7777,25565', 'voip_ports' => '5060,5061,10000:10100', 'bulk_ports' => '6881:6999', 'auto' => 0, 'autocal' => 0, 'interval_min' => 60, 'last_cal' => 0]];
@@ -30,6 +30,22 @@ function svc_proto_choices(string $proto): array {
 function settings_with_defaults(array $s): array {
     $d = S_def();
     $s = array_merge($d, $s);
+    // JSON imports and legacy settings can contain arrays where scalars are
+    // expected. Do not let them reach str_starts_with(), interpolated rules,
+    // or numeric comparisons. Retain defaults rather than throwing during UI.
+    foreach ($d as $key => $default) {
+        if (is_array($default)) {
+            if (!is_array($s[$key])) $s[$key] = $default;
+        } elseif (is_string($default)) {
+            if (!is_string($s[$key]) && !is_int($s[$key]) && !is_float($s[$key])) $s[$key] = $default;
+            else $s[$key] = (string)$s[$key];
+        } elseif (is_int($default)) {
+            if (is_int($s[$key])) continue;
+            if (is_string($s[$key]) && preg_match('/^-?[0-9]{1,10}$/D', $s[$key]))
+                $s[$key] = (int)$s[$key];
+            else $s[$key] = $default;
+        }
+    }
     foreach (['ti', 'notify', 'v6', 'sqm', 'harden'] as $k) {
         if (!isset($d[$k]) || !is_array($d[$k])) continue;
         $cur = (isset($s[$k]) && is_array($s[$k])) ? $s[$k] : [];
@@ -45,6 +61,14 @@ function settings_with_defaults(array $s): array {
         $expanded = [];
         foreach ($s[$key] as $r) {
             if (!is_array($r)) continue;
+            // Discard malformed rows rather than potentially widening ACLs.
+            $fields = ['name','iif','oif','src','dst','proto','ports','ct','act'];
+            $bad = false;
+            foreach ($fields as $field) {
+                if (array_key_exists($field, $r) && !is_string($r[$field])) { $bad = true; break; }
+            }
+            if ($bad || (isset($r['on']) && !is_scalar($r['on'])) ||
+                (isset($r['after']) && !is_scalar($r['after']))) continue;
             foreach (svc_proto_choices((string)($r['proto'] ?? '')) as $p) {
                 $copy = $r;
                 $copy['proto'] = $p;
@@ -139,6 +163,27 @@ function settings_migrate(array $s): array {
         if (!in_array($s['iot_strategy'] ?? 'auto', ['auto','warden','iptm_zone','iptm_mac','none'], true)) {
             $s['iot_strategy'] = 'auto';
             $log[] = 'strategia IoT sconosciuta: conservata modalità auto';
+        }
+        return $s;
+    };
+
+    // 5.30.1: remove dangerous wide opens in persisted settings.
+    $steps[43] = function (array $s) use (&$log): array {
+        if (!empty($s['lan_tcp_accept'])) { $s['lan_tcp_accept'] = 0; $log[] = 'LAN TCP indiscriminato disattivato'; }
+        if (!empty($s['docker_accept'])) { $s['docker_accept'] = 0; $log[] = 'Accesso totale container→host disattivato'; }
+        if (in_array('docker', (array)($s['apps'] ?? []), true)) {
+            $s['apps'] = array_values(array_diff((array)$s['apps'], ['docker']));
+            $log[] = 'API Docker 2375/2376 rimossa dalle aperture automatiche';
+        }
+        return $s;
+    };
+
+    $steps[44] = function (array $s) use (&$log): array {
+        // Never turn off explicit IPv4/IPv6 policies during migration.
+        // New installs default to continuity-first; existing installs can opt out.
+        if (!array_key_exists('continuity_priority', $s)) {
+            $s['continuity_priority'] = 1;
+            $log[] = 'continuità rete abilitata per nuove bozze';
         }
         return $s;
     };
@@ -350,6 +395,10 @@ function settings_restore_from(string $path): array {
 }
 
 function S_put(array $s) {
+    // Do not regenerate a firewall bypass from a legacy toggle or app entry.
+    $s['lan_tcp_accept'] = 0;
+    $s['docker_accept'] = 0;
+    $s['apps'] = array_values(array_diff((array)($s['apps'] ?? []), ['docker']));
     $s['settings_schema'] = SETTINGS_SCHEMA;
     $json = json_encode($s, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     if (!is_string($json)) throw new RuntimeException('Impossibile serializzare le impostazioni');
@@ -482,9 +531,50 @@ function svc_rules(string $chain, array $rows, array $AL = []): array {
     $out = [];
     foreach ($rows as $r) {
         if (!is_array($r)) continue;
+        // Every row is untrusted until the runtime validates its field types.
+        // Silently widening a malformed rule would be worse than omitting it.
+        $valid = true;
+        foreach (['iif','oif','src','dst','proto','ports','ct','act'] as $field) {
+            if (isset($r[$field]) && !is_string($r[$field])) { $valid = false; break; }
+        }
+        if (!$valid) continue;
         foreach (svc_proto_choices((string)($r['proto'] ?? '')) as $p) {
             $one = $r;
             $one['proto'] = $p;
+            $source = trim((string)($one['src'] ?? ''));
+            $unscoped = in_array($source, ['', '0.0.0.0/0', '0/0', '0.0.0.0'], true)
+                && trim((string)($one['iif'] ?? '')) === '';
+            $portText = trim((string)($one['ports'] ?? ''));
+            $isAlias = str_starts_with($portText, '@');
+            $effective = $isAlias ? (string)($AL['ports'][substr($portText, 1)] ?? '') : $portText;
+            $accept = strtoupper((string)($one['act'] ?? 'ACCEPT')) === 'ACCEPT';
+            // Never turn an unresolved or malformed port alias into an
+            // unrestricted rule. This applies to FORWARD as well as INPUT,
+            // and to DROP as well as ACCEPT (avoid blocking legitimate traffic).
+            if ($isAlias && ($effective === '' || !v_ok('ports', $effective))) continue;
+            if ($portText !== '' && in_array($p, ['tcp','udp'], true) && !v_ok('ports', $effective)) continue;
+            if ($portText !== '' && !in_array($p, ['tcp','udp'], true)) continue;
+            // An unresolved alias silently becomes an unrestricted host service
+            // in svc_rule(). A valid empty port list must never open all TCP/UDP.
+            if ($chain === 'INPUT' && $accept && in_array($p, ['tcp','udp'], true)) {
+                if ($effective === '' || !v_ok('ports', $effective)) continue;
+                if ($p === 'tcp') {
+                    $sensitive = false;
+                    foreach (explode(',', $effective) as $entry) {
+                        $bits = explode(':', $entry, 2);
+                        $lo = (int)$bits[0]; $hi = (int)($bits[1] ?? $bits[0]);
+                        if ($lo <= 2376 && $hi >= 2375) { $sensitive = true; break; }
+                    }
+                    if ($sensitive) continue; // Docker root API never auto-exposed.
+                }
+            }
+            $sshOpen = ($effective === '');
+            foreach (preg_split('/[\s,]+/', $effective, -1, PREG_SPLIT_NO_EMPTY) as $portPart) {
+                if (ctype_digit($portPart) && (int)$portPart === 22) $sshOpen = true;
+                if (preg_match('/^(\d+):(\d+)$/D', $portPart, $range)
+                    && (int)$range[1] <= 22 && 22 <= (int)$range[2]) $sshOpen = true;
+            }
+            if ($chain === 'INPUT' && $p === 'tcp' && $accept && $unscoped && $sshOpen) continue;
             $out[] = svc_rule($chain, $one, $AL);
         }
     }
@@ -499,7 +589,125 @@ function iptm_unsafe_flag_keys(): array {
     return ['rpfilter','synproxy','raw_lo','raw_invalid','bogon_wan','spoof_on',
             'drop_frag','bad_mss','tarpit','svc_ban','mac_only'];
 }
+/** Only actual private IPv4/CGNAT source scopes qualify for automatic LAN trust.
+ * A /0 (or a public network copied into LAN settings) must never open SSH or
+ * the management UI to the whole WAN. Public routed networks need explicit
+ * custom ACLs instead of implicit 'trusted LAN' privileges.
+ */
+function iptm_trusted_lan_nets(string $raw, array &$notes = []): string {
+    $safe = [];
+    foreach (preg_split('/[\s,;]+/', trim($raw), -1, PREG_SPLIT_NO_EMPTY) as $scope) {
+        $parts = explode('/', $scope, 2);
+        $ip = $parts[0];
+        $validMask = count($parts) === 1 || preg_match('/^\d{1,2}$/D', $parts[1]);
+        $mask = $validMask ? (isset($parts[1]) ? (int)$parts[1] : 32) : -1;
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || $mask < 8 || $mask > 32) {
+            $notes[] = 'Subnet LAN non attendibile o non valida esclusa dalla bozza: ' . $scope;
+            continue;
+        }
+        $v = ip2long($ip);
+        $isTrusted = false;
+        foreach ([['10.0.0.0',8], ['172.16.0.0',12], ['192.168.0.0',16], ['100.64.0.0',10]] as [$base,$prefix]) {
+            if ($mask < $prefix) continue;
+            $bits = (0xffffffff << (32 - $prefix)) & 0xffffffff;
+            if (($v & $bits) === (ip2long($base) & $bits)) { $isTrusted = true; break; }
+        }
+        if (!$isTrusted) {
+            $notes[] = 'Rete pubblica o non attendibile esclusa dagli accessi automatici LAN: ' . $scope;
+            continue;
+        }
+        $bits = $mask === 32 ? 0xffffffff : ((0xffffffff << (32 - $mask)) & 0xffffffff);
+        $net = long2ip($v & $bits) . '/' . $mask;
+        if (!in_array($net, $safe, true)) $safe[] = $net;
+    }
+    return implode(',', $safe);
+}
 function iptm_safe_settings(array $S, array &$notes = []): array {
+    $S['lan_nets'] = iptm_trusted_lan_nets((string)($S['lan_nets'] ?? ''), $notes);
+    // A legacy ssh_nets=/0 must not turn rate-limited SSH into WAN access.
+    // SSH exceptions are managed from private LAN/VPN scopes, not public CIDR.
+    $S['ssh_nets'] = iptm_trusted_lan_nets((string)($S['ssh_nets'] ?? ''), $notes);
+    // Configurations may arrive from old settings.json / import, not only from
+    // validated form inputs. Never interpolate untrusted interface tokens.
+    foreach (['wan_if', 'lan_if', 'wg_if'] as $ifaceKey) {
+        if (isset($S[$ifaceKey]) && !v_ok('if', (string)$S[$ifaceKey])) {
+            $notes[] = 'Interfaccia non valida: ' . $ifaceKey . ' (nessuna regola generata per quel nome).';
+            $S[$ifaceKey] = '';
+        }
+    }
+    if (isset($S['masq_ifs']) && !v_ok('ifs', (string)$S['masq_ifs'])) {
+        $notes[] = 'Interfacce NAT non valide: uscita non generata finché non vengono corrette.';
+        // Empty the WAN too to avoid implicit fallback to an unintended route.
+        $S['masq_ifs'] = '';
+        $S['nat_masq'] = 0;
+        $S['lan_out_fwd'] = 0;
+    }
+    foreach (['lan_tcp_accept', 'docker_accept'] as $key) {
+        if (!empty($S[$key])) $notes[] = 'Apertura generica non sicura ignorata: ' . $key;
+        $S[$key] = 0;
+    }
+    if (in_array('docker', (array)($S['apps'] ?? []), true)) {
+        $S['apps'] = array_values(array_diff((array)$S['apps'], ['docker']));
+        $notes[] = 'API Docker 2375/2376: apertura automatica rimossa';
+    }
+    // A broad host-service ACCEPT would reintroduce the removed lan-tcp bypass.
+    // Do not rewrite manually authored rules or active firewall state.
+    $safeRows = [];
+    foreach ((array)($S['svc_in'] ?? []) as $r) {
+        if (!is_array($r) || empty($r['on'])) { $safeRows[] = $r; continue; }
+        $protos = svc_proto_choices((string)($r['proto'] ?? ''));
+        $ports = trim((string)($r['ports'] ?? ''));
+        $accept = strtoupper((string)($r['act'] ?? 'ACCEPT')) === 'ACCEPT';
+        $blocked = $accept && $ports === '' && (in_array('tcp', $protos, true) || in_array('udp', $protos, true)
+            || ((string)($r['proto'] ?? '') === '' && trim((string)($r['iif'] ?? '')) !== 'lo')); 
+        if ($accept && in_array('tcp', $protos, true) && $ports !== '') {
+            foreach (preg_split('/[\s,]+/', $ports, -1, PREG_SPLIT_NO_EMPTY) as $part) {
+                if (ctype_digit($part) && in_array((int)$part, [2375,2376], true)) $blocked = true;
+                if (preg_match('/^(\d+):(\d+)$/D', $part, $p)
+                    && (int)$p[1] <= 2376 && (int)$p[2] >= 2375) $blocked = true;
+            }
+        }
+        if ($blocked) {
+            $notes[] = 'Servizio INPUT troppo ampio o API Docker esposta: riga esclusa dalla bozza.';
+            continue;
+        }
+        $safeRows[] = $r;
+    }
+    $S['svc_in'] = $safeRows;
+    // A same-interface connection cannot distinguish upstream and LAN by -i.
+    // raw table runs before INPUT and FORWARD; do not drop legitimate discovery
+    // or client traffic before per-service firewall rules have a chance.
+    $wanIf = trim((string)($S['wan_if'] ?? ''));
+    $shared = !empty($S['single_nic'])
+        || ($wanIf !== '' && $wanIf === trim((string)($S['lan_if'] ?? '')))
+        || ($wanIf !== '' && function_exists('sys_ifaces')
+            && count((array)(sys_ifaces()[$wanIf] ?? [])) > 1);
+    if (!empty($S['raw_drop']) && ($shared || $wanIf === '')) {
+        $S['raw_drop'] = 0;
+        $notes[] = 'Filtro raw disattivato nella bozza: necessita di una WAN dedicata; il filtro INPUT/FORWARD resta in funzione.';
+    }
+    if (in_array('minidlna', (array)($S['apps'] ?? []), true) &&
+        in_array('1900', explode(',', (string)($S['raw_udp'] ?? '')), true)) {
+        $S['raw_udp'] = implode(',', array_diff(explode(',', $S['raw_udp']), ['1900']));
+        $notes[] = 'MiniDLNA: SSDP 1900 escluso dal blocco raw';
+    }
+    // Connectivity-first is deliberately opt-out. It affects only nonessential,
+    // indiscriminate rate drops; application-specific explicit ACLs are retained.
+    // Never silently tear down an active firewall, DNS daemon or network link.
+    if (!empty($S['continuity_priority'])) {
+        foreach (['dos', 'conn_limit', 'lan_cl', 'udp_rl', 'web_rl',
+                  'glob_new_limit', 'lan_flood', 'portscan'] as $key) {
+            if (!empty($S[$key])) {
+                $notes[] = 'Continuità rete: limite generico ' . $key . ' escluso dalla bozza (può bloccare traffico lecito).';
+                $S[$key] = 0;
+            }
+        }
+        // Explicit choices such as IoT isolation, QUIC, DoT or service DROP
+        // still take effect. Warn in the UI rather than secretly overriding.
+        if (!empty($S['quic_block'])) $notes[] = 'QUIC: il blocco UDP 443 può interrompere videochiamate, gaming e app senza fallback TCP.';
+        if (!empty($S['dot_block'])) $notes[] = 'DoT: il blocco 853 può interrompere i client configurati per DNS cifrato esterno.';
+        if (!empty($S['iso_on']) || !empty($S['guest_on'])) $notes[] = 'Segmentazione: verifica che le eccezioni DNS, DHCP e gestione siano raggiungibili dalle zone previste.';
+    }
     foreach (iptm_unsafe_flag_keys() as $key) {
         if (!empty($S[$key])) $notes[] = 'Protezione anti-lockout: opzione ' . $key . ' ignorata nella nuova bozza.';
         $S[$key] = 0;
@@ -517,7 +725,7 @@ function iptm_safe_settings(array $S, array &$notes = []): array {
             $S[$key] = 0;
         }
     }
-    if (!empty($S['lan_nets']) && (!empty($S['spi']) || !empty($S['final_drop']))) {
+    if (!empty($S['lan_nets']) && (!empty($S['spi']) || !empty($S['final_drop']) || !empty($S['continuity_priority']))) {
         $S['lockout_on'] = 1;
         $must = ['22', '80', '443', '8089', '8489'];
         $ports = array_filter(array_map('trim', explode(',', (string)($S['mgmt_ports'] ?? ''))),
@@ -530,9 +738,27 @@ function iptm_safe_settings(array $S, array &$notes = []): array {
 /** Reject even forced or imported unsafe raw rules; never silently alter unknown rules. */
 function iptm_reject_unsafe_rules(string $txt): string {
     $lines = explode("\n", $txt);
+    $section = '';
     foreach ($lines as $n => $line) {
+        if (preg_match('/^\s*# >>> IPTM:([A-Za-z0-9_.-]+)/', $line, $m)) {
+            $section = $m[1]; continue;
+        }
+        if (preg_match('/^\s*# <<< IPTM:/', $line)) { $section = ''; continue; }
         if (!preg_match('/^\s*-A\s+\S+\s+/', $line)) continue;
-        $unsafe = (
+        // Fail closed only for IPTM-owned sections; user rules are diagnosed
+        // separately and must not be rewritten without their owner's decision.
+        $owned = $section !== '';
+        $unsafeManaged = $owned && (
+            ($section === 'lan-tcp' && preg_match('/^-A\s+INPUT\b.*\s-p\s+tcp\b.*\s-j\s+ACCEPT\b/', $line)) ||
+            (str_starts_with($section, 'svc-in-') && preg_match('/^-A\s+INPUT\b.*\s-p\s+tcp\b.*\s-j\s+ACCEPT\b/', $line)
+                && !preg_match('/--dports?\s+/', $line)) ||
+            ($section === 'apps' && str_contains($line, 'IPTM-app:docker')
+                && preg_match('/\s-j\s+ACCEPT\b/', $line)) ||
+            ($section === 'raw-drop' && preg_match('/^-A\s+PREROUTING\b.*\s-j\s+DROP\b/', $line)
+                && !preg_match('/\s-i\s+/', $line)) ||
+            ($section === 'lockout' && preg_match('/(?:^|\s)-s\s+0\.0\.0\.0\/0\b/', $line))
+        );
+        $unsafe = ($unsafeManaged ||
             (str_contains($line, '--invert') && str_contains($line, '-m rpfilter')) ||
             (bool)preg_match('/\s-j\s+SYNPROXY(?:\s|$)/', $line) ||
             (bool)preg_match('/\s-j\s+TARPIT(?:\s|$)/', $line) ||
@@ -555,6 +781,8 @@ function gen_sections(array $S): array {
         $warn[] = 'DNS/DHCP: redirect DNS attivo con eccezione DHCP INPUT disabilitata; verificare porta UDP 67/68 per Pi-hole DHCP.';
     if (empty($S['nat_masq']) && $lan && $S['wan_if'] !== '')
         $warn[] = 'Navigazione client: NAT/MASQUERADE disabilitato. Serve un percorso di ritorno esplicito sul router a monte, altrimenti i client non navigano.';
+    if (!$lan && !empty($S['apps']))
+        $warn[] = 'Porte software: nessuna LAN configurata. Aperture locali sospese; le porte VPN con ambito pubblico restano esplicite.';
     $DT = $S['drop_chain'] !== '' ? $S['drop_chain'] : 'DROP'; $AL = alias_map($S);
     $add = function (string $id, string $title, string $t, string $c, string $an, int $pr, array $rules) use (&$sec) {
         $rules = array_values(array_filter($rules, fn($r) => $r !== '' && ($r[0] === '#' || lint_rule($r))));
@@ -579,7 +807,13 @@ function gen_sections(array $S): array {
     }
     // ---------- raw
     if ($S['raw_lo']) { $add('raw-lo-pre', 'raw: il loopback non viene tracciato', 'raw', 'PREROUTING', 'top', 10, ['-A PREROUTING -i lo -j CT --notrack', '-A PREROUTING -i lo -j ACCEPT']); $add('raw-lo-out', 'raw: loopback in uscita non tracciato', 'raw', 'OUTPUT', 'top', 10, ['-A OUTPUT -o lo -j CT --notrack']); }
-    if ($S['raw_drop']) { $r = []; if ($S['raw_tcp'] !== '') $r[] = '-A PREROUTING -p tcp ' . port_opt($S['raw_tcp']) . ' -j DROP'; if ($S['raw_udp'] !== '') $r[] = '-A PREROUTING -p udp ' . port_opt($S['raw_udp']) . ' -j DROP'; $add('raw-drop', 'raw: scarta porte Windows/SSDP prima del tracking', 'raw', 'PREROUTING', 'top', 20, $r); }
+    if ($S['raw_drop'] && $S['wan_if'] !== '') {
+        $wanMatch = '-i ' . $S['wan_if'];
+        $r = [];
+        if ($S['raw_tcp'] !== '') $r[] = '-A PREROUTING ' . $wanMatch . ' -p tcp ' . port_opt($S['raw_tcp']) . ' -j DROP';
+        if ($S['raw_udp'] !== '') $r[] = '-A PREROUTING ' . $wanMatch . ' -p udp ' . port_opt($S['raw_udp']) . ' -j DROP';
+        $add('raw-drop', 'Scarta traffico WAN verso porte bloccate', 'raw', 'PREROUTING', 'top', 20, $r);
+    }
     // ---------- catena di log
     if ($S['logdrop_on'] && $S['drop_chain'] !== '') {
         $add('logdrop', 'Catena ' . $DT . ' (log con limiti per sorgente)', 'filter', $DT, 'top', 10, [
@@ -611,7 +845,7 @@ function gen_sections(array $S): array {
     $bin = []; $bout = [];
     $blg = fn($c, $set, $d) => !empty($S['bl_log']) ? ["-A $c -m set --match-set $set $d -m limit --limit 5/min --limit-burst 10 -j LOG --log-prefix \"IPTM-BL: \" --log-level 4"] : [];
     foreach (list_sets($S) as $set => $dir) { if ($dir !== 'out') { array_push($bin, ...$blg('IPTM-BL', $set, 'src')); $bin[] = "-A IPTM-BL -m set --match-set $set src -j DROP"; } if ($dir !== 'in') { array_push($bout, ...$blg('IPTM-BLD', $set, 'dst')); $bout[] = "-A IPTM-BLD -m set --match-set $set dst -j DROP"; } }
-    if ($bin) { $NL('IPTM-BL', '-s'); $add('bl-sets', 'Liste IP: scarto delle sorgenti', 'filter', 'IPTM-BL', 'top', 10, $bin); $add('bl-jump-in', 'Liste IP (INPUT)', 'filter', 'INPUT', 'est', 2, ['-A INPUT -j IPTM-BL']); $add('bl-jump-fw', 'Liste IP (FORWARD)', 'filter', 'FORWARD', 'top', 9, ['-A FORWARD -j IPTM-BL']); }
+    if ($bin) { $NL('IPTM-BL', '-s'); $add('bl-sets', 'Liste IP: scarto delle sorgenti', 'filter', 'IPTM-BL', 'top', 10, $bin); $add('bl-jump-in', 'Liste IP (INPUT)', 'filter', 'INPUT', 'est', 2, ['-A INPUT -j IPTM-BL']); $add('bl-jump-fw', 'Liste IP (FORWARD)', 'filter', 'FORWARD', 'top', 2, ['-A FORWARD -j IPTM-BL']); }
     if ($bout) { $NL('IPTM-BLD', '-d'); $add('bl-sets-d', 'Liste IP: scarto delle destinazioni', 'filter', 'IPTM-BLD', 'top', 10, $bout); $add('bl-jump-fw-d', 'Liste IP (FORWARD, uscita)', 'filter', 'FORWARD', 'top', 9, ['-A FORWARD -j IPTM-BLD']); $add('bl-jump-out', 'Liste IP (OUTPUT)', 'filter', 'OUTPUT', 'top', 9, ['-A OUTPUT -j IPTM-BLD']); }
     if ($S['lockout_on'] && $lan && $S['mgmt_ports'] !== '') $add('lockout', 'Anti-lockout: gestione sempre raggiungibile dalla LAN', 'filter', 'INPUT', 'top', 7, array_map(fn($n) => '-A INPUT -s ' . $n . ' -p tcp ' . port_opt($S['mgmt_ports']) . ' -j ACCEPT', $lan));
     if ($S['knock_on']) {
@@ -623,6 +857,16 @@ function gen_sections(array $S): array {
                 $r[] = "-A INPUT {$ks}-p tcp --dport $pt {$chk}{$set} -j DROP"; }
             $add('knock', 'Port knocking verso la porta ' . $kt, 'filter', 'INPUT', 'est', 12, $r);
         }
+    }
+    // Restore replies and loopback even if SPI is disabled: older imported
+    // rules.v4 may still have INPUT/FORWARD DROP and otherwise lose browsing,
+    // DNS replies or dashboard access after a regeneration. Filter top rules
+    // for IoT, manual blocks and source blacklists still run first.
+    if (empty($S['spi']) && !empty($S['continuity_priority'])) {
+        $add('conn-return-in', 'Continuità: risposte e loopback', 'filter', 'INPUT', 'est', 8,
+            ['-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT', '-A INPUT -i lo -j ACCEPT']);
+        $add('conn-return-fw', 'Continuità: risposte connessioni LAN', 'filter', 'FORWARD', 'est', 18,
+            ['-A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT']);
     }
     if ($S['spi']) {
         $add('spi-in', 'SPI Firewall (INPUT)', 'filter', 'INPUT', 'top', 10, ['-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT', '-A INPUT -i lo -j ACCEPT']);
@@ -685,13 +929,22 @@ function gen_sections(array $S): array {
         $add('lan-tcp', 'Tutto il TCP dalla LAN verso l\'host (come FIX 1 rules.v4)', 'filter', 'INPUT', 'end', 55, $r);
     }
     if (!empty($S['lan_out_fwd']) && $lan) {
-        $outs = array_filter(array_map('trim', explode(',', (string)($S['masq_ifs'] !== '' ? $S['masq_ifs'] : ($S['wan_if'] ?? '')))));
-        $r = [];
-        foreach ($lan as $n) {
-            if ($outs) foreach ($outs as $o) $r[] = "-A FORWARD -s $n -o $o -j ACCEPT";
-            else $r[] = "-A FORWARD -s $n -j ACCEPT";
+        $outs = array_values(array_unique(array_filter(array_map('trim', explode(',',
+            (string)($S['masq_ifs'] !== '' ? $S['masq_ifs'] : ($S['wan_if'] ?? '')))))));
+        if (!$outs) {
+            $warn[] = 'Permesso LAN→Internet non generato: indica una interfaccia di uscita. Non usare ACCEPT senza -o.';
+        } else {
+            // RETURN means continue evaluating FORWARD: never ACCEPT to a
+            // configured LAN just because ingress and egress share bond0.
+            $add('lan-egress-local', 'Non autorizzare LAN→LAN per errore', 'filter',
+                'IPTM-LAN-EGRESS', 'top', 1,
+                array_map(fn($n) => "-A IPTM-LAN-EGRESS -d $n -j RETURN", $lan));
+            $add('lan-egress-out', 'Uscita verso le interfacce autorizzate', 'filter',
+                'IPTM-LAN-EGRESS', 'top', 10,
+                array_map(fn($o) => "-A IPTM-LAN-EGRESS -o $o -j ACCEPT", $outs));
+            $add('lan-out', 'LAN verso Internet', 'filter', 'FORWARD', 'est', 40,
+                array_map(fn($n) => "-A FORWARD -s $n -j IPTM-LAN-EGRESS", $lan));
         }
-        if ($r) $add('lan-out', 'FORWARD: LAN verso uscita (WAN/masq)', 'filter', 'FORWARD', 'est', 40, $r);
     }
 
     if ($S['blockping'] && $needw('Blocco ping WAN')) $W('blockping', 'Blocca richieste anonime dal WAN (ping)', 'filter', 'INPUT', 'est', 20, ['-A INPUT {W} -p icmp --icmp-type echo-request -j DROP']);
@@ -777,7 +1030,11 @@ function gen_sections(array $S): array {
     }
     $macs = array_values(array_filter(explode(',', (string)$S['mac_block'])));
     if ($macs) foreach (['INPUT', 'FORWARD'] as $c) $add('mac-' . strtolower($c), "Quarantena dispositivi per MAC ($c)", 'filter', $c, 'top', 2, array_map(fn($m) => "-A $c -m mac --mac-source $m -j DROP", $macs));
-    if (!empty($S['quic_block'])) $add('quic', 'Blocca QUIC/HTTP3 (i browser ripiegano su TCP)', 'filter', 'FORWARD', 'est', 26, array_map(fn($n) => $J('-A FORWARD', "-s $n", '-p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable'), $lan ?: ['0.0.0.0/0']));
+    if (!empty($S['quic_block'])) {
+        if (!$lan) $warn[] = 'Blocco QUIC non generato: configura prima le subnet LAN.';
+        else $add('quic', 'Blocca QUIC dalla LAN', 'filter', 'FORWARD', 'est', 26,
+            array_map(fn($n) => $J('-A FORWARD', "-s $n", '-p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable'), $lan));
+    }
     if (!empty($S['lan_cl'])) $add('lancl', 'Limite connessioni simultanee per client', 'filter', 'FORWARD', 'est', 16, array_map(fn($n) => $J('-A FORWARD', "-s $n", "-p tcp --syn -m connlimit --connlimit-above {$S['lan_cl_max']} --connlimit-mask 32 -j $DT"), $lan ?: ['0.0.0.0/0']));
     if (!empty($S['svc_ban']) && $S['sb_ports'] !== '' && $needw('Ban automatico servizi')) foreach (['INPUT' => 'in', 'FORWARD' => 'fwd'] as $c => $k) {   // come l'«overload table» di pfSense
         $det = "-A $c {W} -p tcp " . port_opt($S['sb_ports']) . ' -m conntrack --ctstate NEW -m recent --name IPTM-SVC' . $k;
@@ -790,7 +1047,17 @@ function gen_sections(array $S): array {
         $W('webrl-' . $k, "Limite nuove connessioni web dal WAN ($c)", 'filter', $c, 'est', 63, ["-A $c {W} -p tcp " . port_opt($S['wl_ports']) . " -m conntrack --ctstate NEW -m hashlimit --hashlimit-name webrl$k --hashlimit-mode srcip --hashlimit-above {$S['wl_rate']}/sec --hashlimit-burst {$S['wl_burst']} -j $DT"]);
     if (!empty($S['amp_block']) && $needw('Blocco amplificazione UDP')) $W('amp', 'Scarta risposte UDP non richieste da servizi di amplificazione (WAN)', 'filter', 'INPUT', 'est', 35, ['-A INPUT {W} -p udp -m multiport --sports 19,53,111,123,137,161,389,1900,5353,11211 -m conntrack --ctstate NEW -j DROP']);
     if (!empty($S['rpfilter'])) $add('raw-rpf', 'raw: reverse path filter (sorgenti incoerenti con il routing)', 'raw', 'PREROUTING', 'top', 30, ['-A PREROUTING -p udp --sport 68 --dport 67 -j ACCEPT', '-A PREROUTING -m rpfilter --invert -j DROP']);
-    if ($S['dot_block']) $add('dot', 'Blocco DNS-over-TLS (853)', 'filter', 'FORWARD', 'est', 70, ['-A FORWARD -p tcp --dport 853 -j REJECT --reject-with tcp-reset', '-A FORWARD -p udp --dport 853 -j REJECT --reject-with icmp-port-unreachable']);
+    if ($S['dot_block']) {
+        if (!$lan) $warn[] = 'Blocco DoT non generato: configura prima le subnet LAN.';
+        else {
+            $r = [];
+            foreach ($lan as $n) {
+                $r[] = "-A FORWARD -s $n -p tcp --dport 853 -j REJECT --reject-with tcp-reset";
+                $r[] = "-A FORWARD -s $n -p udp --dport 853 -j REJECT --reject-with icmp-port-unreachable";
+            }
+            $add('dot', 'Blocca DoT dalla LAN', 'filter', 'FORWARD', 'top', 0, $r);
+        }
+    }
     // ---------- protezioni aggiuntive (da pfSense/OPNsense, CIS, iptables-essentials)
     if ($S['drop_frag']) foreach (['INPUT', 'FORWARD'] as $c) $add('frag-' . strtolower($c), "Scarta frammenti IP ($c)", 'filter', $c, 'est', 9, ["-A $c -f -j DROP"]);
     if ($S['bogon_wan']) {
@@ -860,9 +1127,19 @@ function gen_sections(array $S): array {
     $sin = fn($after) => svc_rules('INPUT', array_values(array_filter($S['svc_in'], fn($r) => !empty($r['on']) && (!empty($r['after'])) === $after)), $AL);
     if ($x = $sin(false)) $add('svc-in-a', 'Servizi del router (INPUT)', 'filter', 'INPUT', 'end', 40, $x);
     if ($S['ssh_acc'] && $S['ssh_nets'] !== '') {
-        $r = []; foreach (explode(',', $S['ssh_nets']) as $n) { $b = "-A INPUT -s $n -p tcp --dport {$S['ssh_acc_port']}";
-            $r[] = "$b -m connlimit --connlimit-above {$S['ssh_conn']} --connlimit-mask 32 -j $DT"; $r[] = "$b -m recent --name {$S['ssh_name']} --update --seconds {$S['ssh_secs']} --hitcount {$S['ssh_hits']} -j $DT"; $r[] = "$b -m recent --name {$S['ssh_name']} --set -j ACCEPT"; }
-        $add('ssh-acc', 'SSH: limiti di connessioni e tentativi per rete', 'filter', 'INPUT', 'end', 50, $r);
+        // Never count normal SSH data/ACK packets as new login attempts.
+        // An existing management session must survive even with SPI disabled.
+        $r = ["-A INPUT -p tcp --dport {$S['ssh_acc_port']} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"];
+        foreach (explode(',', $S['ssh_nets']) as $n) {
+            $b = "-A INPUT -s $n -p tcp --dport {$S['ssh_acc_port']} -m conntrack --ctstate NEW --syn";
+            $r[] = "$b -m connlimit --connlimit-above {$S['ssh_conn']} --connlimit-mask 32 -j $DT";
+            $r[] = "$b -m recent --name {$S['ssh_name']} --update --seconds {$S['ssh_secs']} --hitcount {$S['ssh_hits']} -j $DT";
+            $r[] = "$b -m recent --name {$S['ssh_name']} --set -j ACCEPT";
+        }
+        // Trusted management LANs bypass connection-attempt penalties when
+        // continuity is prioritized; non-trusted sources never gain new access.
+        $priority = !empty($S['continuity_priority']) ? 12 : 6;
+        $add('ssh-acc', 'SSH: controllo solo nuove connessioni', 'filter', 'INPUT', 'top', $priority, $r);
     }
     if ($x = $sin(true)) $add('svc-in-b', 'Servizi del router (INPUT, dopo SSH)', 'filter', 'INPUT', 'end', 60, $x);
     if (function_exists('apps_rules') && ($ar = apps_rules($S))) $add('apps', 'Porte software (programmi abilitati)', 'filter', 'INPUT', 'end', 65, $ar);
@@ -979,6 +1256,40 @@ function gen_sections(array $S): array {
             $add('cust-' . preg_replace('/[^A-Za-z0-9_.-]/', '', (string)($co['id'] ?? 'x')) . '-' . $t . '-' . preg_replace('/[^A-Za-z0-9_.-]/', '', $c), 'Opzione «' . copt_clean_name((string)($co['name'] ?? '')) . '»', $t, $c, $an, (int)($co['pr'] ?? 50), $rs);
         }
     }
+    // The raw table runs before filter: a blanket raw DROP must not shadow
+    // an explicitly allowed local service port (Samba, MiniDLNA, etc.).
+    // Scope this repair to IPTM-owned generated raw-drop only.
+    $allowedPorts = ['tcp' => [], 'udp' => []];
+    foreach ($sec as $section) {
+        if (($section['t'] ?? '') !== 'filter' || ($section['c'] ?? '') !== 'INPUT') continue;
+        foreach ($section['rules'] as $row) {
+            if (!str_contains($row, '-j ACCEPT') ||
+                !(preg_match('/(?:^|\s)-s\s+\S+/', $row) || preg_match('/(?:^|\s)-i\s+\S+/', $row))) continue;
+            if (!preg_match('/(?:^|\s)-p\s+(tcp|udp)(?:\s|$)/', $row, $pp)) continue;
+            if (!preg_match('/--dports?\s+([0-9,:]+)/', $row, $pm)) continue;
+            foreach (explode(',', $pm[1]) as $port) if (ctype_digit($port))
+                $allowedPorts[$pp[1]][$port] = true;
+        }
+    }
+    foreach ($sec as &$section) {
+        if (($section['id'] ?? '') !== 'raw-drop') continue;
+        $filtered = [];
+        foreach ($section['rules'] as $row) {
+            if (!preg_match('/(?:^|\s)-p\s+(tcp|udp)(?:\s|$)/', $row, $pp)
+                || !preg_match('/--dports?\s+([0-9,:]+)/', $row, $pm)) { $filtered[] = $row; continue; }
+            $parts = explode(',', $pm[1]);
+            $rest = array_values(array_filter($parts, fn($port) => !isset($allowedPorts[$pp[1]][$port])));
+            if (count($rest) !== count($parts)) {
+                $warn[] = 'raw-drop: porte ' . $pp[1] . ' abilitate in INPUT escluse dal blocco preliminare.';
+                if (!$rest) continue;
+                $row = str_replace($pm[1], implode(',', $rest), $row);
+            }
+            $filtered[] = $row;
+        }
+        $section['rules'] = $filtered;
+    }
+    unset($section);
+    $sec = array_values(array_filter($sec, fn($s) => !empty($s['rules'])));
     return [$sec, $warn];
 }
 function ensure_table(array &$M, string $name) {

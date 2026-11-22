@@ -1,98 +1,165 @@
-# IPTM — Network Control
+# IPTM — Firewall, Network & QoS Control
 
-**Versione attuale: 5.20.25** · [Sorgenti](./) · [Pacchetti ZIP](release/) · [Novità](CHANGELOG.md)
+**IPTM 5.30.1** · Console web per **DietPi e Debian Linux** · Firewall basato prioritariamente su **iptables** · PHP 8+, Python 3, Bash, JavaScript.
 
-IPTM è una console web per amministrare **rete, iptables, DNS e servizi di sicurezza** su **DietPi/Debian**. L'interfaccia organizza le funzioni per percorso di rete: **Interfacce → Zone → DNS → Accessi → Firewall → Applica**.
+[![Security CI](https://github.com/Graycius/IPTM/actions/workflows/security-ci.yml/badge.svg)](https://github.com/Graycius/IPTM/actions/workflows/security-ci.yml)
+[![CodeQL](https://github.com/Graycius/IPTM/actions/workflows/codeql.yml/badge.svg)](https://github.com/Graycius/IPTM/actions/workflows/codeql.yml)
+[![Semgrep](https://github.com/Graycius/IPTM/actions/workflows/semgrep.yml/badge.svg)](https://github.com/Graycius/IPTM/actions/workflows/semgrep.yml)
 
-![Anteprima illustrativa della console IPTM](docs/images/dashboard-overview.svg)
+**Una sola interfaccia per preparare regole, controllare i servizi di rete e applicare modifiche con protezioni contro il lockout.** IPTM combina un generatore `rules.v4`, analisi di precedenza e anomalie, gestione DNS e dispositivi IoT, diagnostica e strumenti QoS/CAKE. Le funzioni non sono abilitate semplicemente installando il software: si attivano secondo le configurazioni e gli strumenti effettivamente presenti.
 
-*Immagine schematica della console, non un'acquisizione di uno stato di rete reale.*
+![Schema illustrativo dell'interfaccia IPTM](docs/images/dashboard-overview.svg)
 
-## Funzionalità
+*Illustrazione schematica dell'interfaccia, non una schermata acquisita da un sistema in esecuzione.*
 
-- **Rete e firewall:** interfacce WAN/LAN, NAT Single-NIC, iptables, IPv4/IPv6, VLAN e zone IoT.
-- **DNS e privacy:** configurazione e controlli per Pi-hole, Unbound, DNSCrypt e protezione anti-bypass (quando disponibili).
-- **Sicurezza:** diagnostica e strumenti per CrowdSec, Suricata, monitoraggio e regole personalizzate.
-- **QoS:** CAKE/SQM, IFB e politiche DSCP, con disattivazione selettiva delle catene IPTM e conservazione delle regole di terzi (5.20.25).
-- **Manutenzione:** backup, import/export, diagnostica e aggiornamenti web con manifest SHA-256 e procedure di recupero.
+## Cosa gestisce
 
-Alcune funzioni dipendono da servizi esterni installati e configurati separatamente. Non tutte vengono abilitate automaticamente.
+| Area | Cosa permette | Limiti e prerequisiti |
+| --- | --- | --- |
+| **Firewall IPv4/IPv6** | Generazione di regole, default-drop, servizi INPUT/FORWARD, NAT, liste IP e import/export | Applicazione reale subordinata a backend, interfacce, ipset e controlli di recupero; il codice dà priorità a iptables |
+| **Continuità SSH** | Regole `recent`/`connlimit` sui soli SYN `NEW`, protezione delle sessioni `ESTABLISHED`, recupero mirato da console amministrativa | Non corregge disconnessioni causate da driver, QoS, link fisico o regole esterne |
+| **Reti e IoT** | Subnet LAN, interfacce, VLAN, isolamento per MAC, DNS forzato e blocchi anti-bypass | La protezione per MAC dipende dalla topologia di livello 2; non sostituisce una VLAN reale |
+| **DNS e privacy** | Controlli e integrazioni per Pi-hole, Unbound, DNSCrypt e regole DNS | I relativi demoni non vengono installati e avviati automaticamente |
+| **QoS / SQM** | CAKE per upload/download, IFB dove valido, politica DSCP IPv4 e sonde RTT | Velocità e qdisc richiedono verifica sul kernel; la ricalibrazione sotto CAKE non esegue speedtest invasivi |
+| **Difesa e diagnostica** | CrowdSec, Suricata, log, audit e monitoraggio, se installati | Nessun servizio di sicurezza esterno è fornito automaticamente |
+| **Aggiornamenti e backup** | Pacchetto Native Update, manifest SHA-256, esportazione e ripristino | SHA-256 non è una firma del produttore; un download HTTP richiede hash da una fonte fidata indipendente |
 
-## Download
+![Percorso logico del traffico in IPTM](docs/images/network-architecture.svg)
 
-| Uso | Pacchetto | 
+*Diagramma concettuale: la presenza di un blocco non certifica che il servizio sia installato o attivo.*
+
+## Il principio più importante: non perdere la connettività
+
+I firewall sono **sensibili all'ordine**: una regola `ACCEPT` generica può annullare restrizioni successive; un rate-limit applicato prima di `ESTABLISHED` può interrompere SSH; una qdisc mal calibrata può rendere lenta l'intera LAN. La versione **5.30.1** introduce o mantiene queste difese:
+
+- **SSH:** controllo dei tentativi solo su `--ctstate NEW --syn`, senza contare ogni pacchetto di una connessione già stabilita.
+- **Bozza prima del kernel:** analisi di `rules.v4` e riorganizzazione in memoria, senza applicare automaticamente le correzioni.
+- **Preflight e rollback:** verifiche delle condizioni di navigazione e del meccanismo di recupero prima di applicare modifiche critiche.
+- **Accesso amministrativo:** eccezioni solo per reti attendibili configurate; niente apertura indiscriminata di TCP/22 o delle API Docker 2375/2376.
+- **Traffico lecito:** evita blocchi generici incompatibili con servizi locali, NAT/forwarding, DNS, discovery e tunnel VPN.
+- **QoS non invasivo:** se CAKE è già attivo o la WAN è occupata, rinvia gli speedtest; l'adattamento leggero misura RTT senza riscrivere automaticamente le bande.
+
+![Processo di applicazione e rollback](docs/images/safe-apply.svg)
+
+> **Attenzione:** queste protezioni non costituiscono una garanzia di connettività. Prima di applicare regole su un host remoto prepara accesso fisico/console di emergenza. Le prove offline non sostituiscono un test su DietPi reale.
+
+## Scaricare e installare
+
+**Ultima versione pubblicata nel repository: 5.30.1.** I due archivi hanno destinazioni diverse:
+
+| Pacchetto | Utilizzo |
 | --- | --- |
-| **Prima installazione** su DietPi/Debian | [IPTM_5_20_25_FRESH_INSTALL_DIETPI.zip](release/IPTM_5_20_25_FRESH_INSTALL_DIETPI.zip) |
-| **Aggiornamento** di IPTM esistente | [IPTM_5_20_25_DSCP_SAFE_DISABLE_NATIVE_WEB_UPDATE.zip](release/IPTM_5_20_25_DSCP_SAFE_DISABLE_NATIVE_WEB_UPDATE.zip) |
+| [**Fresh Install — DietPi/Debian**](release/IPTM_5_30_1_FRESH_INSTALL_DIETPI.zip) | Prima installazione, quando IPTM non è ancora presente |
+| [**Native Web Update — 5.30.1**](release/IPTM_5_30_1_SSH_HTTP_QOS_NATIVE_WEB_UPDATE.zip) | Aggiornamento di una console IPTM esistente |
+| [**Sorgente completo**](release/IPTM_5_30_1_COMPLETE_SOURCE.zip) | Consultazione e audit dei file PHP, Python, Bash, JS e test |
+| [**Suite di test offline**](release/IPTM_5_30_1_OFFLINE_TESTS.zip) | Ripetizione dei test di regressione in un ambiente di laboratorio |
 
-I due ZIP **non sono intercambiabili**: il pacchetto Fresh Install usa `install.sh` e configura le componenti iniziali; il pacchetto Native Update si importa solo dalla console IPTM già installata.
+### Requisiti di prima installazione
 
-## Prima installazione su DietPi / Debian
+- DietPi/Debian con `systemd`, Python 3, PHP **8+**, `sudo`, `visudo` e iptables.
+- **Un server web già configurato per eseguire PHP** (ad esempio Apache, nginx con PHP-FPM o Lighttpd con PHP). Il web server integrato di Pi-hole **non è automaticamente idoneo** per PHP.
+- Accesso root via console locale o SSH; una strada di recupero se la rete o SSH hanno già problemi.
+- I servizi opzionali (Pi-hole, WireGuard, CrowdSec, CAKE, ecc.) richiedono installazione e configurazione proprie.
 
-### Requisiti
+### 1. Prima installazione
 
-- DietPi o Debian con **systemd**, **Python 3**, Bash, `sudo`, `visudo`, `iptables` e strumenti iproute2.
-- **PHP 8 o superiore** (inclusa CLI) e un **server web già configurato per eseguire PHP** (Apache, Lighttpd o nginx + PHP-FPM).
-- Document root esistente, di proprietà di root e non scrivibile da gruppo/altri; utente effettivo del processo PHP noto (valore predefinito `www-data`).
-- Permessi di amministratore (`sudo`/root) per eseguire la prima installazione.
-
-> **Attenzione Pi-hole:** il server web integrato di Pi-hole non garantisce l'esecuzione di PHP. L'installer **non installa né configura il web server**, non cambia porte e non riavvia Pi-hole.
-
-### Installazione da ZIP
-
-1. [Scarica il pacchetto per la prima installazione](release/IPTM_5_20_25_FRESH_INSTALL_DIETPI.zip) e copialo sul server.
-2. Apri un terminale nel percorso dove si trova lo ZIP, quindi esegui:
-
-   ```bash
-   unzip IPTM_5_20_25_FRESH_INSTALL_DIETPI.zip -d iptm-installer
-   cd iptm-installer
-   sudo bash install.sh --dry-run
-   sudo bash install.sh
-   ```
-
-3. Apri **`https://IP_DEL_SERVER/iptables-manager.php`** sulla **porta configurata per il server PHP esistente**. Se il server non dispone di TLS, usa un tunnel SSH o limita l'accesso a una rete fidata.
-4. Al primo accesso usa l'utente **`admin`**, e il codice temporaneo generato sul server per impostare la password:
-
-   ```bash
-   sudo cat /var/lib/iptables-manager/setup-token.txt
-   ```
-
-   Il token viene eliminato dopo la configurazione della password.
-
-Se la document root o l'utente PHP sono diversi:
+Estrai lo ZIP di **Fresh Install**, poi dalla cartella estratta esegui:
 
 ```bash
-sudo bash install.sh --web-root /percorso/document-root --web-user nome-utente-php
+sudo bash install.sh --dry-run
+sudo bash install.sh
 ```
 
-L'installer colloca la console in `iptables-manager.php`, il runtime in `/usr/local/lib/iptables-manager/`, l'helper in `/usr/local/sbin/iptm-helper`, dati sotto `/var/lib/iptables-manager/` e una unità di recupero aggiornamenti. Predispone anche una regola sudo per consentire all'utente PHP di invocare l'helper privilegiato: **proteggi rigorosamente l'accesso alla console**.
+Se PHP è eseguito con un utente o document root non standard:
 
-Non sovrascrive un'installazione IPTM esistente. Non applica regole iptables, DNS, NAT, QoS o routing in fase di prima installazione. La funzionalità del sistema è stata verificata mediante simulazioni e controlli sintattici, **non collaudata end-to-end su tutte le versioni DietPi**.
+```bash
+sudo bash install.sh --web-root /percorso/document-root --web-user utente-php
+```
 
-## Aggiornamento di un'installazione esistente
+Apri `http://IP_DEL_SERVER/iptables-manager.php` sulla **porta del web server con PHP già attivo**. Configura la password dell'amministratore al primo accesso utilizzando il token leggibile soltanto sul server:
 
-1. Salva un backup della configurazione e assicurati di avere accesso di recupero alla macchina.
-2. Apri la console IPTM come amministratore e vai in **Sistema e strumenti → Aggiornamenti** (`?p=update`).
-3. Carica **solo** [l'archivio Native Update 5.20.25](release/IPTM_5_20_25_DSCP_SAFE_DISABLE_NATIVE_WEB_UPDATE.zip).
-4. Esegui l'installazione con la procedura integrata e controlla versione e stato dei servizi.
+```bash
+sudo cat /var/lib/iptables-manager/setup-token.txt
+```
 
-**Non** estrarre il Native Update direttamente nelle directory di sistema. Gli hash del manifest verificano la coerenza dei file rispetto al pacchetto, ma **non costituiscono una firma crittografica dell'autore**.
+L'installer installa console, helper privilegiato, codice versione 5.30.1, area dati e componenti di recupero degli aggiornamenti. **Non** modifica automaticamente iptables attivo, DNS, indirizzi di rete, NAT, qdisc o Pi-hole. Non crea né riconfigura il server web.
 
-## Struttura del repository
+Leggi anche [la guida dettagliata dell'installer](installer/LEGGIMI_INSTALLAZIONE.md).
 
-| Percorso | Contenuto |
+### 2. Aggiornamento da una versione IPTM esistente
+
+1. Effettua un backup della configurazione e verifica che sia disponibile un metodo di accesso di emergenza.
+2. Apri la console IPTM come amministratore → **Sistema e strumenti → Aggiornamenti** (`?p=update`).
+3. Carica **solo** lo ZIP [Native Web Update 5.30.1](release/IPTM_5_30_1_SSH_HTTP_QOS_NATIVE_WEB_UPDATE.zip), non il pacchetto Fresh Install né lo ZIP sorgenti.
+4. Avvia l'installazione tramite UI, attendi le verifiche, controlla versione e diagnostica; non decomprimere manualmente i file in `/usr/local`.
+
+**Aggiornamenti via HTTP:** IPTM conserva HTTP e HTTPS per i download URL. **Con HTTP lo SHA-256 atteso deve provenire da un canale affidabile e indipendente**; l'hash contenuto nello stesso ZIP o ricevuto dallo stesso server HTTP non fornisce autenticità. Preferire HTTPS quando possibile. Sono conservati i controlli sui redirect e sui contenuti del pacchetto.
+
+## Riparare una configurazione `rules.v4` precedente
+
+Dalla sezione **Protezione → Analizza rules.v4**:
+
+1. **Controlla soltanto**: diagnostica ridondanze, aperture SSH, conflitti `raw`/`filter`, NAT, IoT e QoS, senza alterare file né firewall.
+2. **Crea bozza corretta**: genera una nuova bozza in memoria e conserva quella precedente; non modifica il kernel.
+3. Confronta la bozza, verifica le reti di management e usa soltanto l'applicazione protetta da rollback.
+
+Se SSH viene ripetutamente interrotto per un vecchio limite `recent`, la console amministrativa include **Recupera SSH da questo PC**. L'azione è limitata a client LAN autorizzati e non apre SSH dall'intera WAN. Una correzione della bozza è necessaria per la persistenza.
+
+## Qualità del traffico e CAKE
+
+![Pipeline concettuale CAKE e IFB](docs/images/qos-pipeline.svg)
+
+| Funzionalità | Stato dichiarato in 5.30.1 |
 | --- | --- |
-| `loader/` | Punto d'accesso della console PHP |
-| `modules/`, `actions/` | Interfaccia, configurazioni e azioni |
-| `assets/` | CSS e JavaScript |
-| `extensions/`, `runtime/` | Componenti Python e helper |
-| `installer/` | Sorgenti dell'installer Fresh Install |
-| `release/` | Pacchetti ZIP di installazione e aggiornamento |
-| `native-manifest.json` | Manifest dei sorgenti versione 5.20.25 |
-| `CHANGELOG.md` | Cronologia delle modifiche |
+| CAKE bidirezionale | Disponibile **solo quando entrambe le qdisc sono verificate** |
+| Ingress IPv4 prima di IFB | Gestito con topologia e ownership verificate |
+| DSCP dei flussi IPv4 | Gestione disponibile; classificazione attiva da verificare sul kernel |
+| Adattamento alla latenza | Opzionale; **sonde RTT**, non classificazione L7 |
+| Layer 7 / DPI | **Non implementato** |
+| Classificazione per processo | **Non implementata** |
+
+Per sicurezza, gli speedtest e la ricalibrazione automatica non devono saturare un collegamento già sagomato o occupato. La modalità RTT è una misura leggera: **non garantisce ottimizzazione automatica della velocità**. L'efficacia reale di CAKE dipende da kernel, interfacce, IFB, driver e carico CPU (anche su Atom N450).
+
+## Controlli automatici e revisione del codice
+
+Il repository contiene configurazioni GitHub per eseguire controlli **su commit, pull request e periodicamente**, senza installare strumenti sul DietPi:
+
+| Controllo | Copertura | Configurazione |
+| --- | --- | --- |
+| **CodeQL** | Python, JavaScript e GitHub Actions | [Workflow](.github/workflows/codeql.yml) |
+| **Semgrep Community** | Analisi statica orientata alla sicurezza, **incluso PHP** | [Workflow](.github/workflows/semgrep.yml) |
+| **Security CI** | Syntax PHP/Python/JS/Bash, regressioni SSH/QoS/firewall | [Workflow](.github/workflows/security-ci.yml) |
+| **Dependency Review** | Variazioni dipendenze nelle pull request | [Workflow](.github/workflows/dependency-review.yml) |
+| **Dependabot** | Aggiornamento versioni delle GitHub Actions | [Configurazione](.github/dependabot.yml) |
+| **GitHub Copilot Code Review** | Revisione **AI delle pull request**, se l'account è abilitato | [Istruzioni specifiche IPTM](.github/copilot-instructions.md) |
+
+**Importante:** il commit dei workflow li rende disponibili ma la loro esecuzione dipende dalle autorizzazioni e impostazioni Actions / Code Security del repository. Copilot Code Review richiede l'attivazione dell'utente nelle impostazioni GitHub e può consumare crediti AI. Le istruzioni nel repository non attivano un abbonamento.
+
+Per attivare l'AI di revisione: **Settings → Rules → Rulesets** e scegli la revisione automatica di Copilot per le pull request, se disponibile sul piano. Vedi [la guida alla revisione AI](https://docs.github.com/en/copilot/how-tos/copilot-on-github/set-up-copilot/configure-code-review). Per vulnerabilità e segnalazioni, leggi [SECURITY.md](SECURITY.md).
+
+## Organizzazione del progetto
+
+```text
+loader/       avvio PHP della console
+modules/      generatore, pagine, stato, preflight e UI
+actions/      azioni autenticate e aggiornamenti
+extensions/   analisi rules.v4, rete, DNS, QoS, recovery SSH
+runtime/      helper privilegiato e servizi di supporto
+assets/       CSS e JavaScript
+installer/    prima installazione e documentazione
+tests/        regressioni offline, test combinatori e concorrenza
+.github/      controlli CI, security scanning e istruzioni AI
+docs/images/  diagrammi SVG della documentazione
+release/      archivi installabili e sorgente completo
+```
+
+**Test:** le suite offline verificano regressioni e combinazioni scelte; **non** garantiscono la correttezza di ogni possibile rete o l'assenza totale di bug. Non eseguire test combinatori pesanti sul DietPi in produzione mentre gestisce il traffico.
+
+[**Rapporto tecnico delle correzioni SSH, HTTP e QoS 5.30.1**](docs/IPTM_5_30_1_FIX_REPORT.md)
 
 ## Sicurezza e licenza
 
-Le operazioni su iptables e DNS possono interrompere la connettività; utilizzare sempre il rollback e una via di accesso indipendente quando si gestiscono sistemi remoti. Evitare di esporre la console amministrativa su Internet.
-
-Licenza del repository: [GNU GPL v3](LICENSE). Le dipendenze di terze parti possono avere licenze distinte.
+- Non esporre la console PHP su Internet. Limita l'accesso alla LAN di gestione o VPN attendibile; valuta TLS o tunnel SSH.
+- Non inviare password, token, MAC o file di configurazione contenenti segreti in issue GitHub pubbliche.
+- Prima di aggiornare o applicare regole: backup, console di emergenza e test di ripristino.
+- Licenza [GNU GPL v3](LICENSE). Il software è fornito senza garanzia.

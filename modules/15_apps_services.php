@@ -105,7 +105,7 @@ function app_catalog(): array {
         // --- Virtualizzazione ---
         'libvirt' => $e('libvirt / KVM', 'Virt', 'tcp:16509',
             ['/usr/sbin/libvirtd'], ['libvirtd.service'], ['libvirt-daemon'], 'lan'),
-        'docker' => $e('Docker API (non i container)', 'Virt', 'tcp:2375,2376',
+        'docker' => $e('Docker API (non i container) — apertura manuale soltanto', 'Virt', 'tcp:2375,2376',
             ['/usr/bin/docker'], ['docker.service'], ['docker.io', 'docker-ce'], 'lan',
             'Attenzione: esporre l\'API Docker è rischioso; di solito resta solo su localhost.'),
     ];
@@ -227,9 +227,13 @@ function apps_rules(array $S): array {
     $cat = app_catalog();
     $rules = [];
     foreach (array_keys($en) as $id) {
+        if ($id === 'docker') continue; // Docker API is never opened by an app preset.
         if (!isset($cat[$id])) continue;
         $a = $cat[$id];
-        $srcList = ($a['scope'] === 'any' || !$nets) ? [''] : $nets;
+        // A LAN-only service with no configured LAN must fail closed: never
+        // silently turn an internal API, database or printer into a WAN port.
+        if ($a['scope'] !== 'any' && !$nets) continue;
+        $srcList = $a['scope'] === 'any' ? [''] : $nets;
         foreach (apps_parse_ports($a['ports']) as [$proto, $plist]) {
             $plist = array_map('strval', $plist);
             $portArg = count($plist) > 1

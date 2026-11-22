@@ -1,7 +1,7 @@
 <?php
 // ===================== UTILITA' =====================
 function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
-// HTTP(S) updates have no required manual hash, but they must not become a
+// HTTP downloads require an independently obtained SHA-256; HTTP(S) must not become a
 // privileged SSRF route to loopback or link-local services. RFC1918 LAN servers
 // are intentionally allowed; the resolved IP is pinned for the curl connection.
 function iptm_update_safe_ip(string $ip): bool {
@@ -66,11 +66,11 @@ function iptm_update_url_parts(string $url, ?string $originScheme = null): array
     $parts = parse_url($url);
     $scheme = is_array($parts) ? strtolower((string)($parts['scheme'] ?? '')) : '';
     $host = is_array($parts) ? (string)($parts['host'] ?? '') : '';
-    if (!is_array($parts) || !in_array($scheme, ['https','http'], true)
+    if (!is_array($parts) || !in_array($scheme, ['http','https'], true)
         || $host === '' || !filter_var($url, FILTER_VALIDATE_URL)
         || isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment'])
         || (isset($parts['port']) && ($parts['port'] < 1 || $parts['port'] > 65535)))
-        throw new InvalidArgumentException('URL HTTP/HTTPS non valido o credenziali non ammesse');
+        throw new InvalidArgumentException('Aggiornamenti web via HTTP/HTTPS, senza credenziali nell’URL; HTTP richiede SHA-256 verificato');
     if ($originScheme === 'https' && $scheme !== 'https')
         throw new InvalidArgumentException('Redirect HTTPS verso HTTP rifiutato');
     $parts['scheme'] = $scheme;
@@ -101,7 +101,7 @@ function iptm_update_redirect_target(string $current, string $location): string 
     iptm_update_url_parts($next, $base['scheme']);
     return $next;
 }
-/** Fetch one installer ZIP, at most 3 redirects, with DNS pinning on *each* hop.
+/** Fetch one installer ZIP over HTTP(S), at most 3 redirects, with DNS pinning on *each* hop.
  * Reusing the original pinned address for a redirected host is NOT safe.
  * $dest must be a fresh, web-private random name, not a user-chosen path.
  */
@@ -173,9 +173,62 @@ if (!ini_get('date.timezone')) {   // senza date.timezone PHP userebbe UTC: alli
     if ($tz === '' && ($l = @readlink('/etc/localtime')) && preg_match('~zoneinfo/(.+)$~', $l, $m)) $tz = $m[1];
     if ($tz !== '' && in_array($tz, timezone_identifiers_list(), true)) date_default_timezone_set($tz);
 }
-function ip_in_nets(string $ip, string $nets): bool {   // IPv4 in una lista CIDR separata da virgole
-    $l = ip2long($ip); if ($l === false) return false;
-    foreach (explode(',', $nets) as $n) { if ($n === '') continue; [$b, $m] = array_pad(explode('/', $n), 2, '32'); $m = (int)$m; $bl = ip2long($b); if ($bl === false || $m < 0 || $m > 32) continue; $mask = $m === 0 ? 0 : (-1 << (32 - $m)); if (($bl & $mask) === ($l & $mask)) return true; }
+/** Bound login history without resetting an active source's rate limit.
+ * Repeated short-lived IPv6 client addresses previously accumulated forever.
+ * The function is pure: the caller holds the stable fails.json.lock file.
+ */
+function iptm_login_failures_prune(array $entries, int $now, string $current, int $maxSources = 4096): array {
+    $clean = [];
+    foreach ($entries as $address => $times) {
+        if (!is_string($address) || strlen($address) > 100 || !is_array($times)) continue;
+        if ($address !== $current && filter_var($address, FILTER_VALIDATE_IP) === false) continue;
+        $valid=[];
+        // No source needs more than eight timestamps for a five-attempt limit.
+        foreach (array_slice($times, -32) as $t) {
+            if ((is_int($t) || is_float($t) || (is_string($t) && ctype_digit($t)))
+                && (int)$t > $now - 600 && (int)$t <= $now + 60) $valid[]=(int)$t;
+        }
+        if ($valid) $clean[$address] = array_slice($valid, -8);
+    }
+    // Keep the most recent sources. An attacker cannot erase the current
+    // source's lockout by creating many distinct IPv6 privacy addresses.
+    $currentTimes = $clean[$current] ?? [];
+    uasort($clean, fn($a,$b) => end($b) <=> end($a));
+    if (count($clean) > $maxSources) $clean = array_slice($clean,0,$maxSources,true);
+    if ($currentTimes && !isset($clean[$current]) && count($clean) >= $maxSources) array_pop($clean);
+    if ($currentTimes) $clean[$current] = $currentTimes;
+    return $clean;
+}
+/** A malformed ui_nets entry must never be interpreted as /0. */
+function ip_in_nets(string $ip, string $nets): bool {
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) return false;
+    $l = ip2long($ip);
+    foreach (explode(',', $nets) as $entry) {
+        $entry = trim($entry);
+        if ($entry === '') continue;
+        if (!preg_match('~^((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?:/(3[0-2]|[12]?[0-9]))?$~D', $entry, $m)
+            || filter_var($m[1], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) continue;
+        $base = ip2long($m[1]);
+        $prefix = isset($m[2]) ? (int)$m[2] : 32;
+        $mask = $prefix === 0 ? 0 : (-1 << (32 - $prefix));
+        if (($base & $mask) === ($l & $mask)) return true;
+    }
+    return false;
+}
+/** Compare packed IPv6 network prefixes, without relying on ip2long(). */
+function iptm_ip6_in_nets(string $ip, array $nets): bool {
+    $value = @inet_pton($ip);
+    if (!is_string($value) || strlen($value) !== 16) return false;
+    foreach ($nets as $net) {
+        if (!is_string($net) || !preg_match('~^([^/]+)/([0-9]{1,3})$~D', $net, $parts)) continue;
+        $base = @inet_pton($parts[1]);
+        $bits = (int)$parts[2];
+        if (!is_string($base) || strlen($base) !== 16 || $bits > 128) continue;
+        $bytes = intdiv($bits, 8);
+        if ($bytes && substr($value, 0, $bytes) !== substr($base, 0, $bytes)) continue;
+        $rem = $bits % 8;
+        if (!$rem || ((ord($value[$bytes]) ^ ord($base[$bytes])) & (0xff << (8 - $rem))) === 0) return true;
+    }
     return false;
 }
 function herr(string $s): string { $s = trim($s); return 'Errore: ' . ($s !== '' ? $s : 'comando non riuscito (programma non installato o richiesta non valida)'); }
@@ -189,12 +242,10 @@ function ip_ok(): bool {
     $ip = preg_replace('/^::ffff:/', '', $_SERVER['REMOTE_ADDR'] ?? '');
     if (str_contains($ip, ':')) {
         $b = @inet_pton($ip); if ($b === false) return false;
-        foreach (['::1/128', 'fc00::/7', 'fe80::/10'] as $n) {
-            [$a, $p] = explode('/', $n); $x = inet_pton($a); $bits = (int)$p; $ok = true;
-            for ($i = 0; $i < 16 && $bits > 0; $i++, $bits -= 8) { $m = $bits >= 8 ? 0xFF : (0xFF << (8 - $bits)) & 0xFF; if ((ord($b[$i]) & $m) !== (ord($x[$i]) & $m)) { $ok = false; break; } }
-            if ($ok) return true;
-        }
-        return false;
+        // An explicit IPv4 management allowlist must not silently leave all
+        // ULA/link-local IPv6 ranges authorized. Legacy defaults retain their
+        // IPv6 scopes until the operator configures an explicit ACL.
+        return iptm_ip6_in_nets($ip, ALLOWED_NETS6);
     }
     $l = ip2long($ip); if ($l === false) return false;
     foreach (ALLOWED_NETS as $n) {

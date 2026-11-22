@@ -1,6 +1,22 @@
 <?php
 /* IPTM action domain: security. Inherits the authenticated controller scope. */
 switch ($a) {
+case 'ssh_continuity_recover': {
+    $back='p=security';
+    if (($_SESSION['role']??'viewer')!=='admin') {flash('Admin richiesto','err'); break;}
+    $client=(string)($_SERVER['REMOTE_ADDR']??'');
+    $nets=(string)(S_get()['lan_nets']??'');
+    if (!filter_var($client,FILTER_VALIDATE_IP,FILTER_FLAG_IPV4) || !ip_in_nets($client,$nets)) {
+        flash('Recupero disponibile solo dal PC autorizzato nella LAN configurata.','err'); break;
+    }
+    [$rc,$o,$e]=priv('ssh-continuity',null,['repair',$client]);
+    $j=json_decode($o,true);
+    if ($rc!==0 || !is_array($j) || empty($j['ok'])) {
+        flash('Ripristino SSH respinto: '.herr((string)($j['error']??$e??$o)),'err'); break;
+    }
+    audit('SSH session continuity recovery from verified LAN client');
+    flash((string)($j['reason']??'Protezione SSH verificata.'),'ok');break;
+}
 case 'cs_feed_stage': {
     $back='p=crowdsec&t=ecosistema';
     if(($_SESSION['role']??'viewer')!=='admin'){flash('Solo amministratore.','err');break;}

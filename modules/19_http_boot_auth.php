@@ -50,8 +50,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $ff = DATA_DIR . '/fails.json'; $ip = (string)($_SERVER['REMOTE_ADDR'] ?? 'unknown');
         $flock = fopen($ff . '.lock', 'c');
         if (!$flock || !flock($flock, LOCK_EX)) { if (is_resource($flock)) fclose($flock); http_response_code(503); exit('Rate-limit temporaneamente non disponibile'); }
-        $fl = is_file($ff) ? (json_decode((string)file_get_contents($ff), true) ?: []) : [];
-        $fl[$ip] = array_values(array_filter($fl[$ip] ?? [], fn($t) => is_numeric($t) && $t > time() - 600));
+        $stored = is_file($ff) ? @file_get_contents($ff) : null;
+        $decoded = is_string($stored) ? json_decode($stored,true,64) : [];
+        if (!is_array($decoded)) { flock($flock, LOCK_UN); fclose($flock); http_response_code(503); exit('Storico dei tentativi non valido: login sospeso, non azzerato'); }
+        $fl = iptm_login_failures_prune($decoded,time(),$ip);
+        $fl[$ip] ??= [];
         if (count($fl[$ip]) >= 5) { flock($flock, LOCK_UN); fclose($flock); flash('Troppi tentativi: riprova tra 10 minuti.', 'err'); go(); }
         $U = users_get(); $nm = strtolower(trim((string)($_POST['user'] ?? 'admin'))) ?: 'admin'; $u = $U[$nm] ?? null;
         $okp = $u && password_verify((string)($_POST['pw'] ?? ''), $u['hash'] ?? ''); $oko = $okp && (empty($u['totp']) || totp_ok($u['totp'], (string)($_POST['otp'] ?? '')));

@@ -150,7 +150,7 @@ function do_apply(int $secs, string $fam = '4', bool $force = false): string {
             error_log('IPTM preflight '.$incident.' class='.get_class($ex).' file='.basename($ex->getFile()).':'.$ex->getLine());
             return 'Preflight firewall/IoT non disponibile (rif. '.$incident.'). Nessuna regola applicata. Controlla il log PHP e non usare «Forza» per aggirare un errore interno.';
         }
-        if ($pf['block'] !== '' && (str_starts_with($pf['block'], 'LAN→WAN:') || !$force || str_contains($txt,'--mac-source')))
+        if ($pf['block'] !== '' && (!empty(S_get()['continuity_priority']) || str_starts_with($pf['block'], 'LAN→WAN:') || !$force || str_contains($txt,'--mac-source')))
             return $pf['block'] . (str_contains($txt,'--mac-source')
                 ? ' Per le policy MAC non è consentito aggirare il controllo amministrativo con «Forza».'
                 : ' (Con «forza» procedi comunque.)');
@@ -258,6 +258,16 @@ function confirm_pending(): string {
     // Leave the pending watchdog armed so its rollback remains effective.
     if ($fam === '4' && ($ipv6Risk = iptm_mac_ipv6_guard()) !== '') return $ipv6Risk . ' Il watchdog di rollback rimane attivo.';
     $sx = $fam === '6' ? '6' : '';
+    // A failed health check is not safe to confirm, even if the browser stayed
+    // connected. Leave the independent rollback watchdog armed.
+    if (!empty(S_get()['continuity_priority'])) {
+        [$healthCode, $healthOut, $healthErr] = priv('selftest');
+        $failed = array_filter(explode("\n", trim((string)$healthOut)),
+            fn($line) => str_starts_with(trim($line), 'FAIL'));
+        if ($healthCode !== 0 || $failed)
+            return 'Conferma impedita: test gateway fallito. Il ripristino automatico resta attivo; ' .
+                   'verifica DNS, LAN e accesso prima di riprovare. ' . herr($healthErr);
+    }
     $txt = @file_get_contents(DATA_DIR . "/applied$sx.rules");
     if (!is_string($txt) || trim($txt) === '') return 'Snapshot delle regole applicate assente: watchdog ancora attivo.';
     [$c, $e] = write_live($txt, $fam);

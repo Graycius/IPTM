@@ -138,8 +138,12 @@ function iptm_client_navigation_gate(string $txt, array $S, ?array $inputIfaces 
     $outs = array_values(array_filter(array_map('trim', explode(',', (string)($S['masq_ifs'] ?? '')))));
     if (!$outs && $wan !== '') $outs = [$wan];
     if (!$outs) {
-        $warnings[] = 'LAN→WAN: interfaccia di uscita non determinata; verifica routing e topologia, non applicare alla cieca.';
-        return ['block'=>'', 'warn'=>$warnings];
+        $message = 'LAN→WAN: interfaccia di uscita non determinata; verifica routing e topologia.';
+        $forwardDrop = (bool)preg_match('/^:FORWARD\s+DROP\b/m', $txt) || !empty($S['final_drop']);
+        // With a declared LAN and a default-deny FORWARD policy, a missing
+        // egress cannot be considered a successful connectivity check.
+        return ['block'=>$forwardDrop && !empty($S['continuity_priority']) ? $message . ' Applicazione sospesa per evitare disconnessioni.' : '',
+                'warn'=>[$message]];
     }
     // An unscoped masquerade on the shared WAN changes the semantics of
     // modem-side, VPN and container flows. Require cleanup in the draft;

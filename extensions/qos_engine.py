@@ -8,7 +8,7 @@ Deliberately does not estimate internet bandwidth from NIC link speed.
 from __future__ import annotations
 import fcntl, hashlib, json, os, pathlib, re, secrets, subprocess, sys, tempfile, time
 
-VERSION='5.20.25'
+VERSION='5.30.1'
 BASE=pathlib.Path('/var/lib/iptm-qos-engine')
 LOCK=BASE/'lock';STAGE=BASE/'stage.json';STATE=BASE/'active.json'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-watchdog.service')
@@ -509,9 +509,36 @@ def calibration_status():
         current=dict(current,state='stale',error='calibrazione scaduta; controllare il journal di systemd')
     return {'ok':True,'calibration':current or {'state':'idle'},'last_valid':previous}
 
+def interface_idle(iface, *, duration=0.5, threshold_bps=131072):
+    """Protect legitimate traffic from speedtest saturation (read-only NIC counters).
+
+    Return False on unreadable/invalid statistics: never assume a NIC is idle
+    if counters are unavailable. Traffic may begin later; recheck in worker.
+    """
+    if not isinstance(iface,str) or not NIC.fullmatch(iface):return False
+    directory=pathlib.Path('/sys/class/net')/iface/'statistics'
+    def counter():
+        try:
+            return tuple(int((directory/name).read_text()) for name in ('rx_bytes','tx_bytes'))
+        except (OSError,ValueError):return None
+    first=counter()
+    if first is None:return False
+    time.sleep(duration)
+    last=counter()
+    if last is None or any(n<a for n,a in zip(last,first)):return False
+    return sum(b-a for a,b in zip(first,last))/duration < threshold_bps
+
 def calibration_start(iface):
-    # Read-only benchmarking does not require or install the QoS mutation watchdog.
+    # A shaped link cannot be used to estimate line rate, and repeated Ookla
+    # tests are disruptive.  On an active CAKE profile prefer passive RTT.
+    active=read(STATE)
+    if active and active.get('state') in ('confirmed','pending','applying','rollback-failed'):
+        raise QosError('CAKE attivo: la velocità non è ricalibrabile sotto shaping; usa il controllo RTT o disabilita CAKE con il suo rollback')
     audit=topology_report(iface)
+    if not audit['free']:
+        raise QosError('WAN già gestita da un altro QoS: calibrazione velocità non disponibile')
+    if not interface_idle(iface):
+        raise QosError('La rete è in uso: misurazione rinviata per non rallentare i client')
     cur=read(CALIB)
     if cur and cur.get('state')=='running' and time.time()-cur.get('started',0)<1000:
         raise QosError('calibrazione già in esecuzione')
@@ -629,6 +656,15 @@ def calibration_worker():
     samples=[];errors=[]
     try:
         for attempt in range(2):
+            # Re-check immediately before each high-bandwidth measurement.
+            # The existing sample is retained, but one sample cannot authorize
+            # a new bidirectional profile.
+            if not interface_idle(doc['interface']):
+                errors.append('Rete occupata: misurazione sospesa per tutelare il traffico')
+                break
+            if (read(STATE) or {}).get('state') in ('confirmed','pending','applying','rollback-failed'):
+                errors.append('CAKE avviato durante la prova: misurazione interrotta')
+                break
             try:samples.append(speedtest_measurement())
             except QosError as exc:errors.append(str(exc))
         fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
@@ -657,7 +693,7 @@ def calibration_worker():
                 result={'proposal':(old or {}).get('proposal'),'auto_approved':[],
                         'direction_decisions':{'down':'kept','up':'kept'},
                         'kept_previous':True,'reason':reason}
-            latest.update(state='completed',finished=time.time(),attempts=2,
+            latest.update(state='completed',finished=time.time(),attempts=len(samples),
                           samples=samples,errors=errors,**result)
             if result.get('proposal') and result.get('auto_approved'):
                 atom(CALIB_LOG,{'proposal':result['proposal'],'interface':doc['interface'],
@@ -722,7 +758,17 @@ def auto_tick():
         return {'ok':True,'started':False,'reason':'legacy-timer-active'}
     active=read(STATE)
     if active and active.get('state') in ('confirmed','pending','applying','rollback-failed'):
-        return {'ok':True,'started':False,'reason':'CAKE attivo: evitare speedtest sotto shaping'}
+        if active.get('state')!='confirmed':
+            return {'ok':True,'started':False,'reason':'prova CAKE in corso; nessun test pesante'}
+        owned(active)
+        try: rtt=latency_measurement(active['interface'])
+        except QosError as exc:
+            result={'ok':True,'started':False,'mode':'rtt-only','reason':str(exc),'changed':False}
+        else:
+            result={'ok':True,'started':False,'mode':'rtt-only','rtt_ms':round(rtt,2),
+                    'reason':'RTT verificato; i limiti CAKE non cambiano','changed':False}
+        atom(AUTO_STATE,dict(read(AUTO_STATE) or {},last_check=time.time(),last_result=result))
+        return result
     routes=jcmd(['ip','-j','-4','route','show','default'])
     if not routes:raise QosError('nessuna WAN IPv4 di default')
     routes=sorted(routes,key=lambda r:r.get('metric',0))
@@ -730,6 +776,8 @@ def auto_tick():
     if not NIC.fullmatch(interface):raise QosError('interfaccia default non verificata')
     audit=topology_report(interface)
     if not audit['free']:return {'ok':True,'started':False,'reason':'qdisc non libera'}
+    if not interface_idle(interface):
+        return {'ok':True,'started':False,'reason':'Rete occupata: speedtest automatico saltato'}
     return calibration_start(interface)
 
 def latency_measurement(iface):
@@ -749,8 +797,8 @@ def latency_measurement(iface):
 def adaptive_decision(latency,base,current,baseline,high,low):
     """Bounded controller: never recompute original rate from shaped speedtests.
 
-    Three high-RTT samples to reduce; two quiet samples to recover. Each
-    direction stays within 85-100% of the last user-confirmed rate.
+    Three high-RTT samples to reduce; two quiet samples to recover. The
+    default runtime loop remains recovery-only; RTT is not proof of capacity.
     """
     if type(base)!=int or base<1 or type(current)!=int or current<1:
         raise QosError('velocità adattiva non valida')

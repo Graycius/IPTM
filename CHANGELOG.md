@@ -1,3 +1,77 @@
+# IPTM 5.30.1 — Continuità SSH, HTTP Update, QoS non invasivo (22 novembre 2026)
+
+**Priorità:** continuità SSH e traffico lecito, nessuna modifica automatica al kernel durante l'aggiornamento.
+
+- Correzione concreta della perdita SSH nel rules.v4 incollato: `ssh-acc` non conta più i pacchetti `ESTABLISHED` nelle soglie `recent/connlimit`, ma soltanto le nuove connessioni TCP SYN. Conservata l'autorizzazione di management dalla LAN prima dei limiti quando `continuity_priority` è attiva.
+- Nuova azione admin nella pagina Sicurezza: `Recupera SSH da questo PC`, limitata al client IPv4 privato configurato e alle regole TCP/22 già ammesse dalle subnet di management; aggiunge solo eccezioni SSH temporanee specifiche e idempotenti senza flush o cambio policy. Nessuna esecuzione automatica dopo update.
+- `rules_optimizer.py`: nuova diagnosi `SSH_ESTABLISHED_RATE_LIMIT`, correzione in memoria delle sole regole IPTM gestite, mai applicazione diretta delle regole salvate.
+- Aggiornamenti **HTTP o HTTPS** come richiesto. Per HTTP è obbligatorio confrontare lo SHA-256 del file ottenuto con un valore attendibile indicato separatamente. Ogni redirect è riverificato e non si consente downgrade HTTPS→HTTP; no URL con credenziali o loopback/local-link.
+- QoS: ricalibrazione velocità impedita con CAKE o altro proprietario QoS già attivo e rinviata se l'interfaccia WAN è occupata. Verifica nuovamente NIC e CAKE prima di ogni misura di velocità; nessuno speedtest automatico sotto shaping. Controllo orario con CAKE confermato in **sola lettura RTT** senza variare limiti o qdisc.
+- UI QoS: tabella di effettive capacità CAKE/IFB/DSCP; layer7 e classificazione per processo segnalati **non implementati** per evitare carico aggiuntivo e false promesse. Distinzione tra misurazione velocità, adattamento RTT e modifica dei valori confermati.
+- Test mirati PHP/Python, suite da 49.152 configurazioni + 1.300 coppie, casi di recovery SSH idempotenti, test dei redirect HTTP/HTTPS, optimizer ed effetti QoS occupato/CAKE (tutti offline).
+
+**Limiti:** non dimostrata continuità di rete sul DietPi reale. Se SSH è già bloccato prima di aggiornare, la correzione live va azionata esplicitamente dalla console web amministrativa; la rigenerazione di `rules.v4` serve per la persistenza. Il comando di recupero interviene solo se l'origine è una LAN attendibile già autorizzata da `iptables`.
+
+# IPTM 5.30.0 — Security audit, input validation and safe-upgrade (22 novembre 2026)
+
+Versione della serie 5.30 pubblicata come 5.30.0 per compatibilità con il validatore Native Update 5.20.29, che richiede almeno tre componenti numerici.
+
+- Validazione CIDR di gestione `ui_nets` rigorosa: maschere vuote, negative, non numeriche e >32 non diventano `/0`.
+- Gestione IPv6 amministrativa distinta (`ALLOWED_NETS6`): quando `ALLOWED_NETS` viene personalizzato, un IPv6 ULA/LL non bypassa automaticamente le restrizioni IPv4. Accesso da localhost IPv6 preservato; l'ACL di default senza personalizzazioni conserva i precedenti ambiti privati per compatibilità.
+- Alias porte non validi/non risolti rifiutati anche in FORWARD: mai `ACCEPT` o `DROP` generico conseguente a una risoluzione fallita; rifiutati anche abbinamenti porta/protocollo che altrimenti scarterebbero il filtro porta.
+- Importazione e lettura impostazioni legacy tolleranti a tipi JSON inattesi; le righe servizio malformate non generano aperture implicite.
+- Preflight LAN→WAN: con default-drop e protezione della connettività attiva, uscita non determinabile blocca Apply anziché generare un semplice avviso.
+- Download di codice eseguito come root solamente su HTTPS (redirect a HTTP rifiutati); ZIP locale da UI disponibile per reti senza connettività HTTPS. SHA-256 verifica integrità, NON firma digitale.
+- Login: pulizia e limite massimo delle voci IP nello storico dei tentativi falliti; le voci scadute non vengono conservate indefinitamente; il formato JSON storico corrotto non azzera i contatori di sicurezza.
+- UI aggiornamenti allineata al requisito HTTPS per i download via URL.
+- Test aggiuntivi su concorrenza della bozza (compare-and-swap) e 384 configurazioni di servizi TCP/UDP INPUT/FORWARD.
+- Suite di regressioni mirate e strutturali fornita separatamente; nessuna regola applicata al kernel e nessun test client reale eseguito.
+
+Limiti di audit: non è possibile dimostrare assenza totale di bug, race, memory leak o assenza di blocchi leciti per tutte le topologie. L'installazione su DietPi reale, le dipendenze e i test di failover/rollback necessitano collaudo su un dispositivo di prova.
+
+# IPTM 5.20.29 — Priorità continuità di rete e 2.097.152 combinazioni (22 novembre 2026)
+
+- Matrice deterministica offline 16 profili × 131.072 stati, 17 toggle: verifiche strutturali su SSH, routing, DNS, NAT, QUIC/DoT, conntrack, LAN e WAN.
+- Nuova opzione **Proteggi la connettività** (attiva per impostazione predefinita, disattivabile in Sicurezza) per evitare rate-limit generici e conservare risposte ESTABLISHED/RELATED e loopback anche senza SPI.
+- Mantiene isolamento, ACL, DNS e blocchi esplicitamente richiesti; segnala interazioni con QUIC, DoT e zone IoT anziché disattivarli silenziosamente.
+- Anti-lockout sempre generato per LAN attendibili quando la protezione è attiva; il preflight che rileva una perdita di connessione non è aggirabile tramite "Forza".
+- La conferma finale ripete il selftest gateway quando la protezione è attiva: in caso di errore mantiene il watchdog e non rende persistente la bozza.
+- Test unicamente su modelli offline: la copertura non dimostra l'assenza di interruzioni per qualsiasi dispositivo o configurazione reale. Nessuna applicazione automatica sul kernel.
+
+# IPTM 5.20.28 — Matrice di 500.000 combinazioni e controlli di generazione (22 novembre 2026)
+
+- Eseguiti **500.000 scenari riproducibili** di generazione delle regole, con **8.493.232 asserzioni** e 16 opzioni booleane su 8 profili WAN/LAN (sette spazi completi 2^16 + 41.248 casi dell’ottavo). Nessun test modifica iptables in esecuzione.
+- Regolarizzato l’ambito degli accessi SSH generati: `ssh_nets` accetta solo CIDR privati attendibili; voci `/0`, pubbliche o con maschere errate non producono eccezioni INPUT.
+- `lan_nets` rifiuta maschere CIDR malformate invece di degradarle implicitamente a singolo host `/32`.
+- In fase di generazione i nomi delle interfacce WAN/LAN/VPN e l’elenco delle interfacce NAT sono validati anche quando arrivano da settings legacy o import; nomi non validi sospendono le regole dipendenti.
+- Risoluzione fail-closed degli alias porte dei servizi INPUT: alias sconosciuti, ambiti porta vuoti, porte/alias 2375/2376 e intervalli che le includono non producono aperture all’host; le porte non pericolose restano utilizzabili.
+- Schermata **Protezione → Analizza rules.v4**: nuovo pannello compatto, espandibile e read-only **Controllo opzioni attive**, con gli avvisi di generazione per la configurazione selezionata (nessuna modifica al firewall o alla bozza).
+- Suite separata e riproducibile, con bootstrap PHP, fixture e report JSON. Inclusi i regressioni precedenti 49.152 scenari / 1.300 coppie e test Python per l’ottimizzatore.
+- **Limiti:** le 500.000 combinazioni appartengono a un sottoinsieme specificato; non equivalgono alla totalità delle configurazioni possibili. Non sono stati eseguiti test sul kernel né applicazioni reali delle regole sul DietPi.
+
+# IPTM 5.20.27 — Generazione firewall e combinazioni (22 novembre 2026)
+
+- Regole `raw-drop` limitate alla WAN fisica quando veramente separata; in Single-NIC o senza WAN identificabile il blocco anticipato viene sospeso, preservando INPUT/FORWARD e gli eventuali servizi LAN.
+- `LAN → uscita` usa ora la catena gestita `IPTM-LAN-EGRESS`: RETURN per tutte le subnet LAN configurate e ACCEPT soltanto sulle interfacce di uscita autorizzate; nessuna generazione di `FORWARD -s LAN -j ACCEPT` senza WAN.
+- DoT/853 e QUIC/443 limitati alle subnet LAN esplicite, senza blocchi generici su tutte le origini.
+- Aperture automatiche TCP/UDP senza porta e regole del servizio host che espongono Docker TCP/2375/2376 vengono escluse dalla bozza; Docker API non viene aperta tramite profilo app.
+- Profili `solo LAN` con `lan_nets` vuoto adesso falliscono chiusi (in precedenza diventavano accessibili da qualsiasi origine); profili VPN marcati esplicitamente con ambito `any` restano tali.
+- Subnet `lan_nets` usate come rete di fiducia normalizzate e filtrate: niente `0.0.0.0/0`, subnet pubbliche o malformate in auto-aperture UI/SSH.
+- Protezioni di Apply: preflight aggiuntivo sulle sezioni IPTM legacy insicure (TCP generico, Docker, raw globale, UI `0/0`); non modifica regole di altri tool.
+- Rules audit: modalità **Controlla soltanto** (nessun backup/salvataggio della bozza) oppure **Crea bozza corretta** (con backup), senza conferme testuali; avvisi più sintetici.
+- L'analizzatore distingue un blocco raw limitato alla WAN da un blocco globale; segnala NAT senza sorgente, permessi FORWARD ampi e SSH su interfacce fisiche.
+- Test off-line: 49.152 scenari esaustivi per 14 flag sulle tre topologie, 1.300 combinazioni di coppie su 26 opzioni, 526.902 asserzioni; regressioni aggiuntive per software LAN/VPN, SSH, WAN raw e idempotenza.
+- **Limite:** i test combinatori sono esaustivi nel sottoinsieme dichiarato e non per ogni configurazione possibile; iptables-restore --test e rollback sul DietPi reale restano indispensabili. Nessuna modifica al kernel durante l'aggiornamento.
+
+# IPTM 5.20.26 — Audit rules.v4 e bozza sicura
+
+- Nuova pagina Firewall → Analizza rules.v4: carica un file vecchio (o usa la bozza corrente), genera offline una bozza e salva il report nella sessione. Nessuna modifica immediata alle regole attive.
+- Analizzatore Python con parsing statico, limiti di input, diagnostica di precedenza raw/filter, SSH, Docker, DNS, DoT, dispositivi IoT, NAT, VPN e limiti di IPv6.
+- Importazione transazionale della bozza con controllo della revisione, copia di sicurezza e validazione del modello.
+- Generatore protetto: disabilitate aperture LAN TCP indiscriminate e preset API Docker; eliminazione delle aperture SSH TCP22 senza sorgente; limiti SSH prima degli allow di gestione; DoT prima di FORWARD permissivi; risolti raw-drop in conflitto con i servizi ammessi in INPUT.
+- Migrazione settings schema 43; invariati MAC/zone IoT senza conferma di topologia.
+- Test statici dell'analisi sul rules.v4 fornito, idempotenza, sintassi PHP/Python/Bash/JS, validazione manifest e pacchetti. Nessuna prova sulla rete reale.
+
 # IPTM 5.20.25 — DSCP selective safe disable
 
 - Disattivazione DSCP ripetibile anche dopo rigenerazione delle catene iptables: pulizia dello stato obsoleto quando la catena è assente e il backend mangle risponde regolarmente.

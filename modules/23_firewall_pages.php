@@ -30,7 +30,7 @@ function pg_rules() {
     $draftCount = count(chain_rules($items, $ch));
     echo '<section class="iptm-rules-workbench" aria-label="Gestione delle regole firewall">';
     echo '<header class="iptm-workbench-heading"><div><span class="iptm-eyebrow">Firewall / editor regole</span><h2>Regole ' . h($tn) . ' · ' . h($ch) . '</h2><p class="mut">' . $draftCount . ' regole nella bozza · policy ' . h($chs[$ch]) . ' · ordine di valutazione dall’alto verso il basso</p></div>';
-    echo '<div class="iptm-workbench-actions"><a class="btn s" href="?p=wizard">Creazione guidata</a><a class="btn" href="?p=rule&amp;t=' . rawurlencode((string)$tn) . '&amp;c=' . rawurlencode((string)$ch) . '">Nuova regola</a></div></header>';
+    echo '<div class="iptm-workbench-actions"><a class="btn s" href="?p=rulesaudit">Analizza rules.v4</a><a class="btn s" href="?p=wizard">Creazione guidata</a><a class="btn" href="?p=rule&amp;t=' . rawurlencode((string)$tn) . '&amp;c=' . rawurlencode((string)$ch) . '">Nuova regola</a></div></header>';
     echo '<nav class="iptm-workbench-tabs" aria-label="Tabelle iptables">';
     foreach ($M as $b) if ($b['k'] === 'table') {
         $name = $b['name']; $current = $name === $tn;
@@ -372,3 +372,84 @@ function pg_guide() {
 HTML;
 }
 
+
+/** IPTM 5.30.1: one-click offline rules.v4 audit and in-memory hardening. */
+function pg_rulesaudit() {
+    $admin = (($_SESSION['role'] ?? 'viewer') === 'admin');
+    echo '<div class="iptm-task-intro"><div><h2>Analizza e correggi rules.v4</h2>'
+        . '<p>Individua aperture e conflitti. Crea solo una bozza, senza modificare il firewall attivo.</p>'
+        . '</div><a class="btn s" href="?p=rules">Regole</a></div>';
+    if ($admin) {
+        echo '<section class="card"><h3>Nuova bozza sicura</h3><form method="post" enctype="multipart/form-data">'
+            . fh('p=rulesaudit') . '<input type="hidden" name="action" value="rules_audit_import">'
+            . '<label class="fl" for="iptm_rules_audit_file"><span>File rules.v4 (opzionale)</span>'
+            . '<input id="iptm_rules_audit_file" type="file" name="rules_file" accept=".v4,.txt,text/plain" />'
+            . '<small>Se non scegli un file, analizza la bozza corrente. Limite 2 MB.</small></label>'
+            . '<div class="ops"><button class="btn s" type="submit" name="audit_mode" value="audit">Controlla soltanto</button>'
+            . '<button class="g" type="submit" name="audit_mode" value="harden">Crea bozza corretta</button></div></form></section>';
+    }
+    // Quick, read-only cross-check of the CURRENT selected settings. This is
+    // deliberately lightweight even on an Atom N450; the 500k matrix is an
+    // OFFLINE release test, never performed inside a web request.
+    echo '<p class="mut"><strong>Continuità rete:</strong> ' . (!empty(S_get()['continuity_priority'])
+         ? 'attiva' : 'disattivata') . ' · <a href="?p=security">Modifica in Protezione</a></p>';
+    $currentWarnings = [];
+    try {
+        [, $currentWarnings] = gen_sections(S_get());
+    } catch (Throwable $e) {
+        $currentWarnings = ['Controllo delle opzioni temporaneamente non disponibile.'];
+    }
+    $messages = array_values(array_unique(array_filter(array_map('strval', (array)$currentWarnings))));
+    $nb = count($messages);
+    echo '<details class="card"><summary>Controllo opzioni attive (' . $nb . ' avvisi)</summary>';
+    if ($nb === 0) echo '<p>Nessun avviso dai controlli di generazione.</p>';
+    else {
+        echo '<ul>';
+        foreach (array_slice($messages, 0, 20) as $message) echo '<li>' . h($message) . '</li>';
+        if ($nb > 20) echo '<li>Altri ' . ($nb - 20) . ' avvisi: verifica le impostazioni di rete.</li>';
+        echo '</ul>';
+    }
+    echo '<p class="mut">Test di release: 2.097.152 combinazioni offline. La verifica non applica regole e non sostituisce il test con rollback sul sistema.</p></details>';
+    $report = $_SESSION['iptm_rules_audit'] ?? null;
+    if (!is_array($report)) return;
+    $findings = (array)($report['findings'] ?? []);
+    $changes = (array)($report['changes'] ?? []);
+    $count = ['critical'=>0,'high'=>0,'medium'=>0,'low'=>0,'info'=>0];
+    foreach ($findings as $item) {
+        $level = (string)($item['severity'] ?? 'info');
+        $count[$level] = ($count[$level] ?? 0) + 1;
+    }
+    $auditOnly = (($report['mode'] ?? 'harden') === 'audit');
+    echo '<section class="card"><h3>' . ($auditOnly ? 'Controllo della bozza' : 'Bozza corretta') . '</h3><p>' . (int)($report['before']??0)
+         . ' regole originali · ' . (int)($report['after']??0) . ' nella nuova bozza · <b>'
+         . count($changes) . ' modifiche</b></p>';
+    echo '<p class="ops"><span class="b b-jump">Critiche: ' . $count['critical'] . '</span>'
+         . '<span class="b b-jump">Alte: ' . $count['high'] . '</span>'
+         . '<span>Da verificare: ' . ($count['medium'] + $count['low'] + $count['info']) . '</span></p>';
+    echo '<p class="ops">';
+    if (!$auditOnly) echo '<a class="btn" href="?p=apply">Verifica e applica con rollback</a>';
+    echo '<a class="btn s" href="?p=raw">Apri bozza</a></p></section>';
+    echo '<section class="card"><h3>Problemi e correzioni</h3><div class="iptm-rule-table-scroll" role="region" tabindex="0" aria-label="Analisi rules.v4"><table>'
+         . '<thead><tr><th>Rischio</th><th>Problema</th><th>Esito</th></tr></thead><tbody>';
+    foreach ($findings as $item) {
+        if (!is_array($item)) continue;
+        $sev = (string)($item['severity'] ?? 'info');
+        $label = ['critical'=>'Critico','high'=>'Alto','medium'=>'Medio','low'=>'Basso','info'=>'Info'][$sev] ?? 'Info';
+        $resolution = (!$auditOnly && ($item['resolution'] ?? '') === 'automatic') ? 'Corretto' : 'Da verificare';
+        $ln = implode(', ', array_map('intval', (array)($item['lines']??[])));
+        echo '<tr><td>' . h($label) . '</td><td><strong>' . h((string)($item['message']??'')) . '</strong>'
+           . ($ln !== '' ? '<small>Righe: ' . h($ln) . '</small>' : '');
+        $details = (array)($item['details']??[]);
+        if (!empty($details['mac']) && is_array($details['mac']))
+            echo '<small>MAC: ' . h(implode(', ',array_slice($details['mac'],0,16))) . '</small>';
+        echo '</td><td>' . h($resolution) . '</td></tr>';
+    }
+    echo '</tbody></table></div></section>';
+    if ($changes) {
+        echo '<details class="card"><summary>Dettaglio modifiche (' . count($changes) . ')</summary><ul>';
+        foreach ($changes as $item) if (is_array($item))
+            echo '<li>Riga ' . (int)($item['line']??0) . ': ' . h((string)($item['reason']??'')) . '</li>';
+        echo '</ul></details>';
+    }
+    echo '<p class="mut">Regole non applicate. Controlla servizi, MAC, VPN e IPv6 prima del test con rollback.</p>';
+}

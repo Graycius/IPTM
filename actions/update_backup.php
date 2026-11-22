@@ -130,6 +130,15 @@ case 'policy_export': {
                 if (strlen($url)>1500) {
                     flash('URL aggiornamento troppo lungo.', 'err'); break;
                 }
+                // HTTP is supported for LAN deployments. A bare transport hash
+                // is insufficient to authenticate an update: HTTP *requires*
+                // an author-published SHA-256 verified from an independent source.
+                try { $urlScheme = iptm_update_url_parts($url)['scheme']; }
+                catch (InvalidArgumentException $ex) { flash('URL rifiutato: '.$ex->getMessage(),'err'); break; }
+                $httpSha = strtolower(trim((string)($_POST['sha'] ?? '')));
+                if ($urlScheme === 'http' && !preg_match('/^[a-f0-9]{64}$/D', $httpSha)) {
+                    flash('Aggiornamento HTTP: serve SHA-256 attendibile del pacchetto (64 caratteri).','err'); break;
+                }
                 [$dlrc, $dlerr] = iptm_update_download_zip($url, $path);
                 if ($dlrc !== 0) {
                     @unlink($path);

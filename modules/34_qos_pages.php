@@ -25,7 +25,20 @@ function pg_sqm() {
     echo '<p class="mut">I limiti sono espressi in Mbit/s effettivi della connessione. Una NIC a 1 Gbit/s non indica la banda disponibile. Questa sezione non esegue shaping finché non confermi una prova protetta dal watchdog.</p>';
     echo '<table><tr><th>Stato kernel</th><th>WAN</th><th>Download</th><th>Upload</th><th>Topologia</th></tr>';
     echo '<tr><td>'.h((string)($state['state']??'n/d')).'</td><td>'.h((string)($state['interface']??'—')).'</td><td>'.h((string)($state['down_mbit']??'—')).'</td><td>'.h((string)($state['up_mbit']??'—')).'</td><td>'.(!empty($state['verified'])?'CAKE/IFB verificati':'non verificata').'</td></tr></table>';
-    echo '</div>';
+    // State is real kernel/worker status, not a feature claim or marketing label.
+    $verified=!empty($state['verified']) && ($state['state']??'')==='confirmed';
+    $dscpIngress=$verified && ($state['ingress_policy_status']??'')==='verified' && (int)($state['ingress_policy_count']??0)>0;
+    $adaptiveLive=$verified && !empty($state['adaptive']['enabled']);
+    echo '<div class="card"><h3>Capacità verificate</h3><table><thead><tr><th>Funzione</th><th>Stato</th></tr></thead><tbody>';
+    foreach ([
+        ['CAKE upload e download',$verified?'Qdisc confermate':'Da verificare'],
+        ['IPv4 ingresso prima dell’IFB',$dscpIngress?'Filtri verificati':'Non verificato / non attivo'],
+        ['DSCP IPv4', 'Gestione disponibile; controllare policy attiva'],
+        ['Adattamento latenza RTT',$adaptiveLive?'Attivo (limiti confermati)':'Non attivo'],
+        ['Riconoscimento Layer 7','Non implementato'],
+        ['Classificazione per processo','Non implementata'],
+    ] as $cap)echo '<tr><td>'.h($cap[0]).'</td><td>'.h($cap[1]).'</td></tr>';
+    echo '</tbody></table></div>';
     if(($state['state']??'')==='confirmed' && ($state['version']??'')!==APP_VERSION){
         echo '<div class="msg warn">CAKE è confermato da una release precedente. La migrazione automatica post-commit dovrebbe riallineare il watchdog senza rimuovere le qdisc.';
         if($admin)echo '<form method="post">'.fh('p=sqm').'<button class="s" name="action" value="qos_postinstall_ensure">Verifica e completa migrazione QoS</button></form>';
@@ -38,7 +51,7 @@ function pg_sqm() {
     }
     echo '<section id="iptm-qos-calibration" class="iptm-qos-section"><div class="iptm-qos-section-heading"><h3>Calibrazione e controllo RTT</h3><p class="mut">Misure, automazione e latenza sotto carico</p></div><div class="iptm-qos-control-grid">';
     echo '<div class="card iptm-qos-panel"><h3>Calibrazione manuale · Download / Upload</h3>';
-    echo '<p class="mut">Due speedtest reali bidirezionali: con Ookla CLI ufficiale. Job systemd separato; nessuna qdisc viene modificata. In caso di velocità peggiorata o prove incoerenti restano gli ultimi valori validi.</p>';
+    echo '<p class="mut">Due misure solo se la WAN è libera e senza CAKE attivo. Valori proposti, mai applicati automaticamente.</p>';
     echo '<p>Stato: <b>'.h((string)($measurement['state']??'idle')).'</b> · misure: '.h((string)($measurement['attempts']??0)).'/2</p>';
     if(!empty($best)) echo '<p>Ultima proposta affidabile: <b>'.h((string)($best['down_mbit']??'—')).' Mbit/s download</b> / <b>'.h((string)($best['up_mbit']??'—')).' Mbit/s upload</b>.</p>';
     if(!empty($measurement['samples'])){
@@ -57,18 +70,18 @@ function pg_sqm() {
     [$ar,$ao,$ae]=priv('qos-engine',null,['auto-status']);
     $automatic=$ar===0?json_decode($ao,true):null;
     $autoEnabled=!empty($automatic['config']['enabled']);
-    echo '<div class="card iptm-qos-panel"><h3>Calibrazione automatica · ogni ora</h3>';
-    echo '<p class="mut">Download e upload sono approvati separatamente solo dopo due misure coerenti. Se CAKE è già attivo, non si ricalcola la banda fisica da uno Speedtest sotto shaping: il regolatore RTT può agire entro i limiti già confermati.</p>';
+    echo '<div class="card iptm-qos-panel"><h3>Controllo rete · ogni ora</h3>';
+    echo '<p class="mut">Con CAKE attivo misura solo RTT: nessuno speedtest che saturi la connessione. Senza CAKE, misura la banda solo quando la WAN risulta libera.</p>';
     echo '<p>Timer: <b>'.($autoEnabled?'abilitato':'disabilitato').'</b></p>';
     if($admin){
         $action=$autoEnabled?'qos_auto_disable':'qos_auto_enable';
-        echo '<form method="post">'.fh('p=sqm').'<button class="s" name="action" value="'.h($action).'">'.($autoEnabled?'Disattiva timer automatico':'Attiva calibrazione oraria').'</button></form>';
+        echo '<form method="post">'.fh('p=sqm').'<button class="s" name="action" value="'.h($action).'">'.($autoEnabled?'Disattiva timer automatico':'Attiva controllo orario').'</button></form>';
     }
     echo '</div>';
     if(($state['state']??'')==='confirmed'){
         $adaptive=(array)($state['adaptive']??[]);
         echo '<div class="card iptm-qos-panel"><h3>Regolatore RTT adattivo</h3>';
-        echo '<p class="mut">Aggiusta automaticamente il rate CAKE entro 85–100% dei limiti massimi confermati, con campioni RTT e isteresi. Non ricalibra la velocità fisica e non modifica il firewall.</p>';
+        echo '<p class="mut">Controlla RTT e recupera eventuali limiti ridotti da prove precedenti. Non aumenta i limiti oltre quelli confermati e non stima la banda fisica.</p>';
         echo '<p>Stato: <b>'.(!empty($adaptive['enabled'])?'abilitato':'disattivato').'</b> · RTT: '.h((string)($adaptive['last_rtt']??'—')).' ms · Upload attuale: '.h((string)($adaptive['up']??$state['up_mbit']??'—')).' Mbit/s · Download attuale: '.h((string)($adaptive['down']??$state['down_mbit']??'—')).' Mbit/s</p>';
         if($admin){
             $act=!empty($adaptive['enabled'])?'qos_adaptive_disable':'qos_adaptive_enable';
