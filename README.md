@@ -119,5 +119,3 @@ Se SSH viene ripetutamente interrotto per un vecchio limite `recent`, la console
 | Classificazione per processo | **Non implementata** |
 
 Per sicurezza, gli speedtest e la ricalibrazione automatica non devono saturare un collegamento già sagomato o occupato. La modalità RTT è una misura leggera: **non garantisce ottimizzazione automatica della velocità**. L'efficacia reale di CAKE dipende da kernel, interfacce, IFB, driver e carico CPU (anche su Atom N450).
-
-nzia.
