@@ -1,6 +1,6 @@
 ## 5.30.5 — Proxy HTTP LAN trasparente, profili persistenti e fail-open
 
-- Corretto il riconoscimento del binario Squid di Debian attraverso i collegamenti e i percorsi posseduti da root.
+- Corretto il riconoscimento dei binari Debian `/usr/sbin/squid-gnutls` e `/usr/sbin/squid-openssl`, oltre ai collegamenti protetti da root.
 - Le preferenze di configurazione sono salvate alla creazione dell’anteprima anche se Squid non è avviato; la UI precompila IP, interfaccia, subnet e parametri già scelti.
 - Proxy opzionale con intercettazione del solo HTTP TCP/80 via iptables e verifica rigorosa della modalità gateway IPv4, senza intercettazione HTTPS o modifica DNS, routing o browser.
 - NAT IPTM proprietario e reindirizzamento fail-open su stop/crash Squid, watchdog periodico e rimozione del redirect nelle transazioni firewall.

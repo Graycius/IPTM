@@ -2,7 +2,7 @@
 
 ## Risultati e gravità
 
-1. **Alto — rilevamento Squid**, `extensions/cache_proxy.py:trusted_binary`: la verifica storica rigettava symlink e packaging Debian diversi, producendo la falsa diagnosi di installazione assente. Risolto verificando la destinazione e le directory possedute da root, e il database file dpkg.
+1. **Alto — rilevamento Squid**, `extensions/cache_proxy.py:trusted_binary`: la verifica storica rigettava symlink e packaging Debian 13 (`squid-gnutls` e `squid-openssl`), producendo la falsa diagnosi di installazione assente. Risolto verificando la destinazione e le directory possedute da root, e il database file dpkg.
 2. **Alto — applicazione senza possibilità di anteprima**, `extensions/cache_proxy.py:stage`: il preview dipendeva dall'eseguibile Squid anche con servizio fermo. Ora preferenze e configurazione vengono validate e salvate senza installazione.
 3. **Alto — traffico non intercettato**, `extensions/cache_redirect.py`: in precedenza Squid richiedeva configurazione manuale del browser. È disponibile REDIRECT IPv4 solo HTTP/TCP80 con attivazione esplicita; HTTPS/443 non viene MITM/intercettato.
 4. **Critico — potenziale aggiramento filtri forwarding**, `extensions/cache_redirect.py:security_preflight`: il proxy può far passare il traffico client in INPUT/OUTPUT. Disabilitata l'intercettazione automatica quando le ACL di FORWARD sono restrittive o non interpretabili.

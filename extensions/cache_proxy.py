@@ -191,20 +191,27 @@ WantedBy=multi-user.target
 
 def trusted_binary():
     """Resolve Debian usrmerge aliases while rejecting untrusted executable trees."""
-    candidates=[SQUID,pathlib.Path('/usr/bin/squid'),pathlib.Path('/sbin/squid'),pathlib.Path('/bin/squid')]
+    candidates=[SQUID,pathlib.Path('/usr/sbin/squid-gnutls'),pathlib.Path('/usr/sbin/squid-openssl'),
+                pathlib.Path('/usr/bin/squid'),pathlib.Path('/sbin/squid'),pathlib.Path('/bin/squid')]
     # Some Debian variants install Squid below /usr/lib; discover only paths
     # actually reported by dpkg and then apply the same strict root checks.
-    try:
-        listing=command(['dpkg-query','-L','squid'],check=False,timeout=5)
-        if listing.returncode==0:
-            candidates.extend(pathlib.Path(p) for p in listing.stdout.splitlines()
-                              if p.endswith('/squid') and p.startswith(('/usr/sbin/','/usr/bin/','/usr/lib/squid/')))
-    except ProxyError:pass
+    # Debian 13 packages install squid-gnutls or squid-openssl, and the
+    # generic /usr/sbin/squid symlink is not listed in their package file list.
+    # Use only known executable basenames, no wildcard or arbitrary path.
+    valid_names={'squid','squid-gnutls','squid-openssl'}
+    for package in ('squid','squid-openssl'):
+        try:
+            listing=command(['dpkg-query','-L',package],check=False,timeout=5)
+            if listing.returncode==0:
+                candidates.extend(pathlib.Path(filename) for filename in listing.stdout.splitlines()
+                                  if pathlib.Path(filename).name in valid_names and
+                                  filename.startswith(('/usr/sbin/','/usr/bin/')))
+        except ProxyError:pass
     for entry in candidates:
         try:
             if not entry.is_file():continue
             target=entry.resolve(strict=True)
-            if target.name!='squid' or not target.is_file() or not os.access(entry,os.X_OK):continue
+            if target.name not in valid_names or not target.is_file() or not os.access(entry,os.X_OK):continue
             if not str(target).startswith(('/usr/sbin/','/usr/bin/','/usr/lib/squid/')):continue
             # Inspect every component: an attacker must not substitute the binary.
             unsafe=False
@@ -219,10 +226,12 @@ def trusted_binary():
 
 
 def package_installed():
-    try:
-        r=command(['dpkg-query','-W','-f=${Status}','squid'],timeout=5,check=False)
-        return r.returncode==0 and r.stdout.strip()=='install ok installed'
-    except ProxyError:return False
+    for package in ('squid','squid-openssl'):
+        try:
+            r=command(['dpkg-query','-W','-f=${Status}',package],timeout=5,check=False)
+            if r.returncode==0 and r.stdout.strip()=='install ok installed':return True
+        except ProxyError:continue
+    return False
 
 
 def owned_file(path,marker):

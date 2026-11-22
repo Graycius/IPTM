@@ -147,6 +147,24 @@ class Cache5305(unittest.TestCase):
             link=tmp/'alias';link.symlink_to(exe)
             with patch.object(proxy,'SQUID',link):
                 self.assertFalse(proxy.trusted_binary()==exe)
+    def test_15b_debian13_squid_gnutls_binary_is_accepted(self):
+        candidate=Path('/usr/sbin/squid-gnutls')
+        fake=lambda *a,**kw:SimpleNamespace(returncode=0,stdout='/usr/sbin/squid-gnutls\n')
+        with patch.object(proxy,'SQUID',Path('/usr/sbin/no-squid-bin')),\
+             patch.object(proxy,'command',side_effect=fake),\
+             patch.object(Path,'is_file',lambda obj:obj==candidate),\
+             patch.object(Path,'resolve',lambda obj,strict=True:obj),\
+             patch.object(Path,'stat',lambda obj:SimpleNamespace(st_uid=0,st_mode=0o755)),\
+             patch.object(proxy.os,'access',return_value=True):
+            self.assertEqual(proxy.trusted_binary(),candidate)
+
+    def test_15c_squid_openssl_debian_package_is_recognized(self):
+        def cmd(args,**kw):
+            if args[-1]=='squid':return SimpleNamespace(returncode=1,stdout='')
+            return SimpleNamespace(returncode=0,stdout='install ok installed')
+        with patch.object(proxy,'command',side_effect=cmd):
+            self.assertTrue(proxy.package_installed())
+
     def test_16_listen_ip_must_be_primary_in_intercept_mode(self):
         state={'ifname':'bond0','addr_info':[{'family':'inet','local':'192.168.1.1'},
                                                {'family':'inet','local':'192.168.1.165'}]}
