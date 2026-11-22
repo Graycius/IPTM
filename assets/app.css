@@ -1457,7 +1457,7 @@ label:focus-within>.iptm-field-help{display:block}
 @media(max-width:850px){.iptm-qos-control-grid{grid-template-columns:minmax(0,1fr)}.iptm-qos-control-grid>.card:first-child{grid-row:auto}}
 @media(max-width:560px){.iptm-qos-nav{gap:5px;padding:7px}.iptm-qos-nav a{padding:7px 9px;font-size:11px}.iptm-qos-workspace .card{padding:13px}.iptm-qos-control-grid{gap:10px}}
 
-/* 5.30.4 - Network-first navigation and compact interaction surface */
+/* 5.30.5 - Network-first navigation and compact interaction surface */
 .layout{grid-template-columns:244px minmax(0,1fr)!important}
 aside#side{padding:12px 9px!important}
 html.js #primary-menu .iptm-nav-extra{display:none}
@@ -1503,7 +1503,7 @@ html.js #primary-menu.show-extra .iptm-nav-extra,html.js #primary-menu.searching
 .iptm-toggle input[type=checkbox]:checked~.iptm-toggle-off{display:none}
 
 
-/* IPTM 5.30.4 – Console UI. Single presentation layer over stable page handlers.
+/* IPTM 5.30.5 – Console UI. Single presentation layer over stable page handlers.
    Layout is intentionally CSS-only: settings, traffic rules and POST actions
    remain owned by the existing backend, including the rollback watchdog. */
 :root,
@@ -1813,9 +1813,9 @@ body.iptm-console .layout>aside#side{top:var(--cx-header)!important;height:calc(
 }
 
 
-/* IPTM 5.30.4 - Network UX, accessible layout inspired by Bootstrap Italia.
+/* IPTM 5.30.5 - Network UX, accessible layout inspired by Bootstrap Italia.
  * No CDN, web-font or Javascript dependency. Backend forms/CSRF/POST left intact.
- * This layer deliberately follows the stable 5.30.4 design system overrides. */
+ * This layer deliberately follows the stable 5.30.5 design system overrides. */
 :root, :root[data-theme="light"] {
   --bg:#f3f6f9; --card:#fff; --fg:#173047; --mut:#4e6578;
   --bd:#d6e0e9; --pri:#0068b7; --ok:#167557; --warn:#955600;
@@ -2248,7 +2248,7 @@ body:has(.wrap.narrow) .wrap.narrow button{background:#0068b7;color:#fff;font-we
 body:has(.wrap.narrow) :where(button,input,a):focus-visible{outline:3px solid #155ed1!important;outline-offset:3px!important}
 
 
-/* IPTM 5.30.4 — clear, neutral network navigation (fix inherited blue nav).
+/* IPTM 5.30.5 — clear, neutral network navigation (fix inherited blue nav).
  * Main navigation regions must not inherit the old global nav gradient. */
 body.iptm-console main nav.iptm-network-flow,
 body.iptm-console main nav.iptm-workflows,

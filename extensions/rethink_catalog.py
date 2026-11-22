@@ -9,7 +9,7 @@ import hashlib,json,os,pathlib,stat,sys,tempfile,time,urllib.error,urllib.parse,
 
 URL='https://raw.githubusercontent.com/serverless-dns/blocklists/main/config.json'
 CACHE=pathlib.Path('/var/cache/iptm-rethinkdns/catalog.json')
-USER_AGENT='IPTM-catalog-check/5.30.4'
+USER_AGENT='IPTM-catalog-check/5.30.5'
 MAX_AGE=24*3600
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

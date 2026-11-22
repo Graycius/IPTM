@@ -1,5 +1,5 @@
 #!/bin/bash
-# iptm-helper v5.30.4 (build 20261122.10.iptm-5.30.4) - operazioni privilegiate per iptables-manager.php (chiamato via sudo, senza argomenti liberi)
+# iptm-helper v5.30.5 (build 20261122.10.iptm-5.30.5) - operazioni privilegiate per iptables-manager.php (chiamato via sudo, senza argomenti liberi)
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # /usr/local: suricata/suricata-update compilati da sorgenti
 # P6 RC2: version must be a side-effect-free metadata command. In RC1 the
 # header included "(build ...)" but the version regex expected " -" directly
@@ -2668,14 +2668,14 @@ iptm_modules_deploy() {
   [ "$(id -u)" -eq 0 ] || return 1
   python3 -B - <<'IPTM_NATIVE_VERIFY'
 import hashlib,json,pathlib,sys
-root=pathlib.Path('/usr/local/lib/iptables-manager/web/releases/5.30.4')
+root=pathlib.Path('/usr/local/lib/iptables-manager/web/releases/5.30.5')
 if not root.is_dir() or root.is_symlink() or root.stat().st_uid!=0 or root.stat().st_mode&0o022:
     raise SystemExit('Release nativa non protetta')
 manifest=root/'native-manifest.json'
 if not manifest.is_file() or manifest.is_symlink() or manifest.stat().st_uid!=0 or manifest.stat().st_mode&0o022:
     raise SystemExit('Manifest nativo assente')
 record=json.loads(manifest.read_bytes())
-if record.get('version')!='5.30.4':raise SystemExit('Release native errata')
+if record.get('version')!='5.30.5':raise SystemExit('Release native errata')
 checks=record.get('sha256')
 if not isinstance(checks,dict) or len(checks)<40:raise SystemExit('Manifest native incompleto')
 for rel,digest in checks.items():
@@ -2686,7 +2686,7 @@ for rel,digest in checks.items():
         raise SystemExit('Moduli non protetti')
     if not isinstance(digest,str) or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:
         raise SystemExit('Hash native non corretto')
-print('moduli native 5.30.4 verificati')
+print('moduli native 5.30.5 verificati')
 IPTM_NATIVE_VERIFY
 }
 
@@ -2712,7 +2712,7 @@ After=local-fs.target
 Before=dnscrypt-proxy.service
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/dns_tls_guard.py recover-boot
+ExecStart=/usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/dns_tls_guard.py recover-boot
 [Install]
 WantedBy=multi-user.target
 EOT_IPTM_DNS_BOOT
@@ -2722,7 +2722,7 @@ EOT_IPTM_DNS_BOOT
 
 iptm_retention_install() {
   [ "$(id -u)" -eq 0 ] || return 1
-  local script=/usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/retention_manager.py
+  local script=/usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/retention_manager.py
   [ -f "$script" ] && [ ! -L "$script" ] || return 1
   if [ -f /etc/systemd/system/iptm-retention.service ] &&
      grep -Fq "$script run" /etc/systemd/system/iptm-retention.service; then
@@ -2734,7 +2734,7 @@ iptm_retention_install() {
 iptm_upgrade_state_guard() {
   python3 -B - <<'IPTM_NETWORK_UPGRADE_GUARD'
 import json, pathlib, os, stat, sys
-version='5.30.4'
+version='5.30.5'
 active={'pending','confirmed','reconciling','rollback-incomplete','applying','rollback-failed','starting'}
 files=(
 '/var/lib/iptm-network-runtime/transaction.json',
@@ -2778,7 +2778,7 @@ IPTM_NETWORK_UPGRADE_GUARD
 }
 
 case "${1:-}" in
-  ping)     iptm_modules_deploy >/dev/null || { echo "manifest release non valido" >&2; exit 1; }; if [ -f /var/lib/iptm-update-recovery/pending.json ]; then /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/postinstall.py schedule >/dev/null 2>&1 || true; fi; echo ok; exit 0 ;;
+  ping)     iptm_modules_deploy >/dev/null || { echo "manifest release non valido" >&2; exit 1; }; if [ -f /var/lib/iptm-update-recovery/pending.json ]; then /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/postinstall.py schedule >/dev/null 2>&1 || true; fi; echo ok; exit 0 ;;
   cat)      cat "$R4" ;;
   cat6)     cat "$R6" ;;
   test)     ipt_restore_test; exit $? ;;
@@ -3083,7 +3083,7 @@ EOF
     rm -f -- "$ZIP"
     actual=$(sha256sum "$w/package.zip" | awk '{print $1}')
     [ "$actual" = "$expected" ] || { echo 'SHA-256 del pacchetto diverso da quello autorizzato' >&2; exit 1; }
-    /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/native_update.py "$web" "$w/package.zip" "$expected" "$force"
+    /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/native_update.py "$web" "$w/package.zip" "$expected" "$force"
     exit $?
     ;;
   sysctl-audit)
@@ -3603,14 +3603,14 @@ PY_DNSCRYPT_STATUS
             exit 0 ;;
 
   sqm-engine-check) # Read-only availability / networking diagnostic; no speedtest traffic.
-            engine=/usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/sqm_measure.py
+            engine=/usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/sqm_measure.py
             [ -f "$engine" ] && [ ! -L "$engine" ] || { echo 'module=missing'; exit 69; }
             python3 -B "$engine" --check; exit $? ;;
   sqm-speedtest)  # Two-way measurement only; no qdisc changes.
             mkdir -p /run/lock || exit 1
             exec 7>/run/lock/iptm-sqm-speedtest.lock || exit 1
             flock -n 7 || { echo 'busy: speedtest già in corso' >&2; exit 75; }
-            engine=/usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/sqm_measure.py
+            engine=/usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/sqm_measure.py
             [ -f "$engine" ] && [ ! -L "$engine" ] || { echo 'err speedtest: modulo misura assente' >&2; exit 69; }
             command -v python3 >/dev/null 2>&1 || exit 69
             out=$(python3 -B "$engine" 2>&1); rc=$?
@@ -4400,7 +4400,7 @@ if [ -n "$SQM_IF" ]; then
             exit 0 ;;
   rollback-prepare)
              [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[46]$ ]] || exit 2
-             src=/usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/firewall_recovery.py
+             src=/usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/firewall_recovery.py
              [ -f "$src" ] && [ ! -L "$src" ] || exit 70
              exec /usr/bin/python3 -B "$src" "$2" ;;
   rollback-arm)   # watchdog univoco per transazione: un job vecchio non può agire sulla nuova
@@ -5137,7 +5137,7 @@ PY_LAN
     ;;
   device-insights)
     [ "$#" -eq 1 ] || exit 2
-    script=/usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/device_insights.py
+    script=/usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/device_insights.py
     [ -r "$script" ] || { echo 'Modulo statistiche non installato' >&2; exit 1; }
     exec python3 -B "$script" ;;
   security)
@@ -5171,110 +5171,110 @@ PY_LAN
             exec python3 "$SCRIPT" "$@" ;;
   pihole-secret)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(save|status|clear)$ ]] || exit 2
-    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/pihole_credentials.py "$2" ;;
+    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/pihole_credentials.py "$2" ;;
   zapret)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(install|install-latest|latest|configure|preview|status)$ ]] || exit 2
-    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/zapret_manager.py "$2" ;;
+    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/zapret_manager.py "$2" ;;
   zapret2)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(install-latest|latest|configure|preview|status)$ ]] || exit 2
-    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/zapret2_manager.py "$2" ;;
+    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/zapret2_manager.py "$2" ;;
   diag)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(snapshot|status|start|clear)$ ]] || exit 2
-    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/maintenance_diagnostics.py "$2" ;;
+    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/maintenance_diagnostics.py "$2" ;;
   anti-dpi-live)
     shift; op="${1:-}"; case "$op" in status|stop|confirm|boot|persist-enable|persist-disable) [ "$#" -eq 1 ] ;; preflight|start) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(zapret2|classic)$ ]] ;; boot-health) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/antidpi_live.py "$@" ;;
+    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/antidpi_live.py "$@" ;;
   anti-dpi-sources)
     shift; op="${1:-}"; case "$op" in catalog|start) [ "$#" -eq 1 ] ;; status) [ "$#" -eq 1 ] || { [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(zapret2|classic)$ ]]; } ;; preview|apply) [ "$#" -ge 2 ] && [ "$#" -le 3 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] && { [ "$#" -eq 2 ] || [[ "${3:-}" =~ ^(zapret2|classic)$ ]]; } ;; fetch) [ "$#" -eq 5 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] && [[ "${3:-}" =~ ^(zapret2|classic)$ ]] && [[ "${4:-}" =~ ^[0-9]{1,8}$ ]] && [[ "${5:-}" =~ ^[0-9]{1,4}$ ]] ;; work) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/antidpi_sources.py "$@" ;;
+    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/antidpi_sources.py "$@" ;;
   network-guard)
     shift; case "${1:-}" in preflight|snapshot|dhcp-preflight) [ "$#" -eq 1 ] ;; verify) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_guard.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_guard.py "$@" ;;
   rescue)
     [ "$#" -le 2 ] && { [ "$#" -eq 1 ] || [[ "${2:-}" =~ ^(save|status|restore)$ ]]; } || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_guard.py rescue "${2:-restore}" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_guard.py rescue "${2:-restore}" ;;
   net-alias)
     shift; case "${1:-}" in status|preview|install-guard|expire|boot-recover) [ "$#" -eq 1 ] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; confirm|rollback) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_alias_trial.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_alias_trial.py "$@" ;;
   net-runtime)
     shift; case "${1:-}" in install-guard|stage|status|expire|boot-recover|health-check) [ "$#" -eq 1 ] ;; dhcp-stage) [ "$#" -eq 7 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] && [[ "${3:-}" =~ ^[0-9./]{9,18}$ ]] && [[ "${4:-}" =~ ^[0-9.]{7,15}$ ]] && [[ "${5:-}" =~ ^[0-9.]{7,15}$ ]] && [[ "${6:-}" =~ ^[0-9]{1,5}$ ]] && [ "${7:-}" = ISOLATED-L2 ] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; confirm|rollback) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_runtime.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_runtime.py "$@" ;;
   net-safety)
     shift; case "${1:-}" in owner) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] ;; dhcp) [ "$#" -eq 3 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] && [[ "${3:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_audit.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_audit.py "$@" ;;
   pihole-bind)
     shift; case "${1:-}" in status|install-guard|expire|boot-recover|rollback) [ "$#" -eq 1 ] ;; preview|apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] ;; confirm) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_runtime.py pihole-bind "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_runtime.py pihole-bind "$@" ;;
   nm-safe)
     [ "$#" -eq 4 ] && [[ "${2:-}" =~ ^(check|up|down)$ ]] && [[ "${3:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] && [[ "${4:-}" =~ ^[0-9.]{7,15}$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_audit.py "nm-${2}" "$3" "$4" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_audit.py "nm-${2}" "$3" "$4" ;;
   nm-config)
     [ "$#" -eq 4 ] && [[ "${2:-}" =~ ^(profile-save|bond-add|bond-remove)$ ]] && [[ "${3:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] && [[ "${4:-}" =~ ^[0-9.]{7,15}$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_audit.py "$2" "$3" "$4" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_audit.py "$2" "$3" "$4" ;;
   sqm-reconcile)
     shift; case "${1:-}" in status|install-guard|preview|apply|expire|boot-recover) [ "$#" -eq 1 ] ;; confirm|rollback) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/sqm_uplink.py reconcile "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/sqm_uplink.py reconcile "$@" ;;
   nm-bond-live)
     [ "$#" -eq 4 ] && [[ "${2:-}" =~ ^(attach|detach)$ ]] && [[ "${3:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] && [[ "${4:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_audit.py bond-live "$2" "$3" "$4" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_audit.py bond-live "$2" "$3" "$4" ;;
   nm-profile)
     [ "$#" -eq 4 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] && [[ "${3:-}" =~ ^[0-9.]{7,15}$ ]] && [[ "${4:-}" =~ ^[0-9.]{9,18}/(8|9|[12][0-9]|30)$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_audit.py nm-prepare "$2" "$3" "$4" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_audit.py nm-prepare "$2" "$3" "$4" ;;
   sqm-uplink)
     shift; case "${1:-}" in status|install-guard|expire|boot-recover) [ "$#" -eq 1 ] ;; preview|apply) [ "$#" -eq 3 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] && [[ "${3:-}" =~ ^[0-9]{1,5}$ ]] ;; preview-multi|apply-multi) [ "$#" -ge 5 ] && [ "$#" -le 9 ] && [ $(( $# % 2 )) -eq 1 ] ;; confirm|rollback) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/sqm_uplink.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/sqm_uplink.py "$@" ;;
   net-audit)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(inventory|impact|pihole-schema|pihole-probe|pihole-dhcp|dhcp-preview)$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/network_audit.py "$2" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/network_audit.py "$2" ;;
   multi-nic)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(status|inventory|preview|save|clear|legacy-retire)$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/multinic_manager.py "$2" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/multinic_manager.py "$2" ;;
   fabric-runtime)
     shift; case "${1:-}" in status|preview|install-guard|expire|boot-recover) [ "$#" -eq 1 ] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[0-9a-f]{64}$ ]] ;; confirm|rollback) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[0-9a-f]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/fabric_runtime.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/fabric_runtime.py "$@" ;;
   live-rule-cleanup)
     shift; case "${1:-}" in scan) [ "$#" -eq 1 ] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/live_rule_cleanup.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/live_rule_cleanup.py "$@" ;;
   qos-postinstall)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(check|ensure)$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/postinstall.py "$2" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/postinstall.py "$2" ;;
   qos-policy)
-    shift; case "${1:-}" in status|stage|disable) [ "$#" -eq 1 ] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/qos_policy.py "$@" ;;
+    shift; case "${1:-}" in status|stage|disable|failopen|reconcile) [ "$#" -eq 1 ] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; *) exit 2 ;; esac || exit 2
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/qos_policy.py "$@" ;;
   upgrade-cleanup)
     shift; case "${1:-}" in scan|apply|report) [ "$#" -eq 1 ] ;; retire) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/upgrade_cleanup.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/upgrade_cleanup.py "$@" ;;
   ssh-continuity)
     [ "$#" -eq 3 ] && [ "${2:-}" = repair ] &&
       [[ "${3:-}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/ssh_continuity.py repair "$3" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/ssh_continuity.py repair "$3" ;;
   rules-performance)
     [ "$#" -eq 1 ] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/rules_performance.py ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/rules_performance.py ;;
   cache-proxy)
-    shift; case "${1:-}" in status|stage|disable) [ "$#" -eq 1 ] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/cache_proxy.py "$@" ;;
+    shift; case "${1:-}" in status|stage|disable|failopen|reconcile) [ "$#" -eq 1 ] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; *) exit 2 ;; esac || exit 2
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/cache_proxy.py "$@" ;;
   qos-engine)
     shift; case "${1:-}" in status|traffic-inspect|stage|install-guard|disable|calibrate-status|adaptive-enable|adaptive-disable|auto-enable|auto-disable|auto-status) [ "$#" -eq 1 ] ;; inspect|calibrate-start) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; confirm|rollback) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/qos_engine.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/qos_engine.py "$@" ;;
   compat6-readiness)
     [ "$#" -eq 2 ] && [ "${2:-}" = report ] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/compat6_readiness.py report ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/compat6_readiness.py report ;;
   security-stack)
     shift; case "${1:-}" in status|crowdsec-stage|suricata-stage|suricata-sources|plan) [ "$#" -eq 1 ] ;; crowdsec-apply|suricata-apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/security_stack.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/security_stack.py "$@" ;;
   nm-editor)
     shift; case "${1:-}" in inventory|stage|preview|trial-status) [ "$#" -eq 1 ] ;; apply) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]] ;; activate-trial) [ "$#" -eq 3 ] && [[ "${2:-}" =~ ^[a-fA-F0-9-]{36}$ ]] && [[ "${3:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] ;; confirm-trial|revert-trial) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-f0-9]{24}$ ]] ;; delete-inactive) [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[a-fA-F0-9-]{36}$ ]] ;; *) exit 2 ;; esac || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/nm_control.py "$@" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/nm_control.py "$@" ;;
   retention)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(status|preview|run|install|configure|trigger)$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/retention_manager.py "$2" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/retention_manager.py "$2" ;;
   sqm-v3-status)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/sqm_measure.py --v3 status "$2" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/sqm_measure.py --v3 status "$2" ;;
   sqm-v2-status)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/sqm_measure.py --v2 status "$2" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/sqm_measure.py --v2 status "$2" ;;
   security-integrations)
     [ "$#" -eq 1 ] || exit 2
     exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/iptm-crowdsec-audit.py --integrations ;;
@@ -5283,25 +5283,25 @@ PY_LAN
     exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/iptm-crowdsec-audit.py --eve-summary ;;
   operator-insights)
     [ "$#" -eq 2 ] && [[ "${2:-}" =~ ^(crowdsec|suricata|network|qos)$ ]] || exit 2
-    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/operator_insights.py "$2" ;;
+    exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/operator_insights.py "$2" ;;
   integration-status)
     [ "$#" -eq 1 ] || exit 2
     exec /usr/bin/python3 -B /usr/local/lib/iptables-manager/iptm-crowdsec-audit.py --integration-status ;;
   privileges-audit)
     [ "$#" -eq 1 ] || exit 2
-    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/root_privileges.py ;;
+    exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/root_privileges.py ;;
   dns-guard)
     case "${2:-}" in
       status|events|preview|apply|confirm|revert|recover-boot|compat-preview|compat-apply) [ "$#" -eq 2 ] || exit 2 ;;
       watchdog) [ "$#" -eq 3 ] && [[ "${3:-}" =~ ^[a-f0-9]{32}$ ]] || exit 2 ;;
       *) exit 2 ;;
     esac
-    script=/usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/dns_tls_guard.py
+    script=/usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/dns_tls_guard.py
     [ -f "$script" ] && [ ! -L "$script" ] || { echo 'IPTM: modulo DNS Guard assente' >&2; exit 1; }
     exec python3 -B "$script" "${@:2}" ;;
   modules-deploy) iptm_modules_deploy; exit $? ;;
-  dns-harden) shift; mode="${1:-}"; profile="${2:-}"; [ "$#" -eq 2 ] && [[ "$mode" =~ ^(preview|apply)$ ]] && [[ "$profile" =~ ^(balanced|strict|compatible)$ ]] || exit 2; exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/dns_policy.py "$mode" "$profile" ;;
-  traffic-policy) shift; mode="${1:-}"; [ "$#" -eq 1 ] && [[ "$mode" =~ ^(preview|apply|show)$ ]] || exit 2; exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.4/extensions/traffic_policy.py "$mode" ;;
+  dns-harden) shift; mode="${1:-}"; profile="${2:-}"; [ "$#" -eq 2 ] && [[ "$mode" =~ ^(preview|apply)$ ]] && [[ "$profile" =~ ^(balanced|strict|compatible)$ ]] || exit 2; exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/dns_policy.py "$mode" "$profile" ;;
+  traffic-policy) shift; mode="${1:-}"; [ "$#" -eq 1 ] && [[ "$mode" =~ ^(preview|apply|show)$ ]] || exit 2; exec python3 -B /usr/local/lib/iptables-manager/web/releases/5.30.5/extensions/traffic_policy.py "$mode" ;;
   version) iptm_print_version; exit $? ;;
   *)        echo "uso: iptm-helper <comando> (su-*, cs-*, tool-*, wg-*, ipset-*, lists-*, sqm-*, rollback-*, watch, maintenance, ping, version, ...)" >&2; exit 2 ;;
 esac

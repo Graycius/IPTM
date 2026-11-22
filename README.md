@@ -10,7 +10,7 @@ IPTM è un'interfaccia web per la gestione di firewall iptables, protezione dell
 - **DNS e privacy:** integrazione con Pi-hole, Unbound e DNSCrypt; diagnosi e gestione delle configurazioni disponibili.
 - **Qualità del traffico:** gestione CAKE bidirezionale e IFB quando la topologia è compatibile, policy DSCP, misure RTT e ricalibrazione manuale della banda con limiti CAKE temporaneamente sospesi e ripristino automatico.
 - **Sicurezza e diagnostica:** integrazione opzionale CrowdSec e Suricata, audit delle regole, monitoraggio dello stato e classificazione applicativa diagnostica.
-- **Cache HTTP:** installazione opzionale Squid, proxy esplicito riservato alle subnet LAN selezionate, passaggio HTTPS CONNECT senza intercettazione TLS.
+- **Cache HTTP:** installazione opzionale Squid, proxy esplicito oppure intercettazione HTTP/80 automatica per le LAN servite dal gateway IPv4 IPTM, memorizzazione delle preferenze e disattivazione indipendente dal servizio. HTTPS resta cifrato, senza intercettazione TLS.
 - **Aggiornamenti e archivi:** importazione/export delle impostazioni, pacchetti di aggiornamento nativi verificati, rotazione conservativa dei backup e log IPTM.
 
 ## Ambiente

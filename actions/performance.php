@@ -10,17 +10,25 @@ case 'cache_proxy_stage': {
         if($raw===false||$raw===null){flash('Valore proxy non valido: '.$key,'err');break 2;}
         $data[$key]=$raw;
     }
-    $data['interface']=(string)($_POST['interface']??'');$data['listen_ip']=(string)($_POST['listen_ip']??'');
+    foreach (['interface','listen_ip','allowed_nets'] as $key) {
+        if(!isset($_POST[$key])||!is_string($_POST[$key])){flash('Campo proxy non valido: '.$key,'err');break 2;}
+    }
+    $data['interface']=$_POST['interface'];$data['listen_ip']=$_POST['listen_ip'];
+    $mode=$_POST['intercept_http']??'0';
+    if(!is_string($mode)||!in_array($mode,['0','1'],true)){
+        flash('Modalità proxy non valida.','err');break;
+    }
+    $data['intercept_http']=$mode==='1';
     $nets=(string)($_POST['allowed_nets']??'');
     if(strlen($nets)>500){flash('Elenco LAN troppo lungo.','err');break;}
     $data['allowed_nets']=array_values(array_filter(array_map('trim',preg_split('/[\r\n,;]+/',$nets)),fn($n)=>$n!==''));
     [$rc,$out,$err]=priv('cache-proxy',json_encode($data,JSON_THROW_ON_ERROR),['stage']);
-    $result=$rc===0?json_decode($out,true):null;
+    $result=json_decode($out,true);
     if($rc!==0||!is_array($result)||empty($result['ok'])||!preg_match('/^[a-f0-9]{64}$/D',(string)($result['sha256']??''))){
         unset($_SESSION['iptm_cache_proxy_stage']);flash('Anteprima proxy rifiutata: '.herr((string)($result['error']??$out.$err)),'err');break;
     }
     $_SESSION['iptm_cache_proxy_stage']=['hash'=>$result['sha256'],'created'=>time()];
-    flash('Anteprima proxy pronta. Nessuna regola o servizio modificato.','ok');break;
+    flash('Preferenze proxy salvate e anteprima pronta. Nessuna regola o servizio modificato.','ok');break;
 }
 case 'cache_proxy_apply': {
     $back='p=performance';$pending=$_SESSION['iptm_cache_proxy_stage']??null;$hash=(string)($_POST['cache_sha256']??'');
@@ -28,9 +36,9 @@ case 'cache_proxy_apply': {
         !preg_match('/^[a-f0-9]{64}$/D',$hash)||!hash_equals((string)$pending['hash'],$hash)){
         flash('Anteprima del proxy assente o scaduta.','err');break;
     }
-    [$rc,$out,$err]=priv('cache-proxy',null,['apply',$hash]);$result=$rc===0?json_decode($out,true):null;
+    [$rc,$out,$err]=priv('cache-proxy',null,['apply',$hash]);$result=json_decode($out,true);
     if($rc!==0||empty($result['ok'])){flash('Attivazione proxy non riuscita: '.herr((string)($result['error']??$out.$err)),'err');break;}
-    unset($_SESSION['iptm_cache_proxy_stage']);flash('Proxy LAN attivato; configura il client con l’indirizzo indicato.','ok');break;
+    unset($_SESSION['iptm_cache_proxy_stage']);flash(!empty($result['redirect'])?'Proxy HTTP trasparente attivo sulla LAN (solo TCP/80).':'Proxy esplicito attivato: configura il client con l’indirizzo indicato.','ok');break;
 }
 case 'cache_proxy_firewall_draft': {
     $back='p=performance';
@@ -40,7 +48,7 @@ case 'cache_proxy_firewall_draft': {
     if(!is_array($status)||empty($status['ok'])||empty($status['active'])){
         flash('Prima attiva un proxy LAN verificato.','err');break;
     }
-    $profile=(array)($status['profile']??[]);
+    $profile=(array)($status['applied_profile']??[]);
     $iface=(string)($profile['interface']??'');
     $ip=(string)($profile['listen_ip']??'');
     $port=$profile['port']??null;
@@ -77,7 +85,8 @@ case 'cache_proxy_firewall_draft': {
 case 'cache_proxy_disable': {
     $back='p=performance';
     if(($_SESSION['role']??'viewer')!=='admin'){flash('Accesso amministratore richiesto.','err');break;}
-    [$rc,$out,$err]=priv('cache-proxy',null,['disable']);$result=$rc===0?json_decode($out,true):null;
+    unset($_SESSION['iptm_cache_proxy_stage']);
+    [$rc,$out,$err]=priv('cache-proxy',null,['disable']);$result=json_decode($out,true);
     flash($rc===0&&!empty($result['ok'])?'Proxy IPTM disabilitato.':'Disabilitazione proxy fallita: '.herr((string)($result['error']??$out.$err)),$rc===0&&!empty($result['ok'])?'ok':'err');break;
 }
 }

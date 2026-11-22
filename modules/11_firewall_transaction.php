@@ -232,6 +232,14 @@ function do_apply(int $secs, string $fam = '4', bool $force = false): string {
     }
     if (time() >= (int)(json_decode($pendingData, true)['until'] ?? 0))
         return 'Finestra di sicurezza scaduta durante il preflight: nessuna regola caricata; watchdog mantenuto per riconciliazione.';
+    // A transparent HTTP redirect would move FORWARD traffic into INPUT and
+    // could bypass a newly applied IoT/MAC policy. Remove only IPTM-owned NAT
+    // interception before changing firewall tables; squid remains available.
+    if ($fam === '4') {
+        [$cacheOffRc,$cacheOffOut,$cacheOffErr] = priv('cache-proxy',null,['failopen']);
+        if ($cacheOffRc !== 0)
+            return 'Protezione proxy: impossibile rimuovere il redirect HTTP prima di Apply. Regole non caricate; watchdog rimane attivo. '.herr($cacheOffOut.$cacheOffErr);
+    }
     $GLOBALS['_iptm_post_stage']='firewall:restore_live';
     [$c, $o, $e] = priv('restore' . $sx, $txt);
     if ($c) {
@@ -317,6 +325,10 @@ function confirm_pending(): string {
         priv('ipset-persist');
         @copy(DATA_DIR . '/settings.json', DATA_DIR . '/last-good.json');
         @file_put_contents(DATA_DIR . '/last-good.time', (string)time());
+        // Re-enable only if current FORWARD security policy permits the HTTP
+        // proxy's alternate INPUT/OUTPUT path; otherwise leave direct traffic.
+        [$cacheRc,$cacheOut,$cacheErr]=priv('cache-proxy',null,['reconcile']);
+        if ($cacheRc!==0)$GLOBALS['apply_notes'][]=['err','Proxy HTTP: controllo dopo Apply non riuscito: '.herr($cacheOut.$cacheErr)];
     } else iptm_draft_remove_if_same($txt,'6');
     return '';
 }

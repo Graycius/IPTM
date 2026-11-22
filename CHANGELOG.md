@@ -1,3 +1,12 @@
+## 5.30.5 — Proxy HTTP LAN trasparente, profili persistenti e fail-open
+
+- Corretto il riconoscimento del binario Squid di Debian attraverso i collegamenti e i percorsi posseduti da root.
+- Le preferenze di configurazione sono salvate alla creazione dell’anteprima anche se Squid non è avviato; la UI precompila IP, interfaccia, subnet e parametri già scelti.
+- Proxy opzionale con intercettazione del solo HTTP TCP/80 via iptables e verifica rigorosa della modalità gateway IPv4, senza intercettazione HTTPS o modifica DNS, routing o browser.
+- NAT IPTM proprietario e reindirizzamento fail-open su stop/crash Squid, watchdog periodico e rimozione del redirect nelle transazioni firewall.
+- Rifiuto preventivo dell’intercettazione quando il filtro FORWARD contiene ACL restrittive o catene sconosciute, evitando aggiramenti delle policy IoT e MAC.
+- Disattivazione indipendente dall’avvio/installazione Squid, preservando le preferenze.
+
 # IPTM 5.30.4 — Rafforzamento stati QoS, recupero firewall e proxy
 
 - Validazione rigorosa dello stato CAKE e delle identità delle interfacce prima della calibrazione.
