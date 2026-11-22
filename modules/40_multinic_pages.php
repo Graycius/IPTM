@@ -203,6 +203,41 @@ function pg_multinic(): void {
                 echo '<label>'.h($pair[1]).'<input name="dhcp_secondary_'.h($pair[0]).'" maxlength="32" placeholder="192.168.20.50" required></label>';
             echo '<button class="s" type="submit" name="action" value="dhcp_dual_preview">Controlla pool e subnet</button></form>';
             if(is_array($_SESSION['iptm_dual_dhcp_preview']??null))echo '<p class="mut">Validazione completata: il servizio DHCP <b>non è stato avviato</b>.</p>';
+
+            echo '<div class="card"><h3>Reservation DHCP (static host)</h3>';
+            echo '<p class="mut">Verifica MAC/IP/hostname rispetto a subnet e pool. <b>Controlla</b> solo valida; <b>Applica su Pi-hole</b> scrive `dhcp.hosts` tramite pihole-FTL.</p>';
+            $chk=$_SESSION['iptm_dhcp_reservations_check']??null;
+            if(is_array($chk)){
+                if(!empty($chk['ok'])) echo '<p class="msg ok">Ultimo controllo: <b>'.(int)($chk['count']??0).'</b> reservation valide · subnet '.h((string)($chk['subnet']??'')).'</p>';
+                else {
+                    echo '<div class="msg err"><b>Errori reservation</b><ul>';
+                    foreach((array)($chk['errors']??[]) as $e){
+                        if(!is_array($e)) continue;
+                        echo '<li>'.h((string)($e['code']??'err')).': '.h((string)($e['message']??'')).(isset($e['index'])?' (riga '.(((int)$e['index'])+1).')':'').'</li>';
+                    }
+                    if(!empty($chk['error'])) echo '<li>'.h((string)$chk['error']).'</li>';
+                    echo '</ul></div>';
+                }
+                if(!empty($chk['warnings']) && is_array($chk['warnings'])){
+                    echo '<div class="msg warn"><b>Avvisi</b><ul>';
+                    foreach($chk['warnings'] as $w){
+                        if(!is_array($w)) continue;
+                        echo '<li>'.h((string)($w['message']??'')).'</li>';
+                    }
+                    echo '</ul></div>';
+                }
+            }
+            $ftlAddr=h((string)($primaryIp??''));
+            echo '<form method="post" class="iptm-classic-form">'.fh('p=multinic');
+            echo '<label>Server CIDR<input name="dhcp_res_address" value="'.$ftlAddr.'" maxlength="32" required placeholder="192.168.1.1/24"></label>';
+            echo '<label>Pool start<input name="dhcp_res_start" value="'.h((string)($ftl['start']??'')).'" maxlength="32" required></label>';
+            echo '<label>Pool end<input name="dhcp_res_end" value="'.h((string)($ftl['end']??'')).'" maxlength="32" required></label>';
+            echo '<label>Gateway<input name="dhcp_res_gateway" value="'.h((string)($ftl['router']??'')).'" maxlength="32" required></label>';
+            echo '<label>Reservation (una per riga: <code>mac ip [hostname]</code> oppure JSON)<textarea name="dhcp_reservations" rows="6" maxlength="60000" placeholder="aa:bb:cc:dd:ee:ff 192.168.1.50 laptop-soggiorno"></textarea></label>';
+            echo '<label><input type="checkbox" name="allow_in_pool" value="1"> Consentire IP dentro il pool dinamico (solo avviso)</label>';
+            echo '<p class="ops"><button class="s" type="submit" name="action" value="dhcp_reservations_check">Controlla</button> ';
+            echo '<button class="g" type="submit" name="action" value="dhcp_reservations_apply" onclick="return confirm(\'Scrivere queste reservation su Pi-hole (dhcp.hosts)?\');">Applica su Pi-hole</button></p></form></div>';
+
             echo '<details class="iptm-dhcp-activate"><summary>Attivazione DHCP da console</summary><p>Prima configura e attiva la scheda con IP statico e verifica che Pi-hole resti sul master primario. Per l&#39;attivazione usa il terminale locale e conferma la separazione fisica delle reti.</p><code>sudo iptm-helper net-runtime install-guard</code><p>Prepara il piano con <code>net-runtime dhcp-stage</code>, quindi usa <code>apply HASH</code> e <code>confirm TOKEN</code> entro 180 secondi. Nessuna attivazione automatica da questa pagina.</p></details>';
         }
     }

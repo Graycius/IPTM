@@ -180,12 +180,13 @@ function pg_apply() {
 
     echo '<div class=ops data-iptm-layout="ui-08ace85272">';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=rules_verify><button class=s>Test facoltativo</button></form>';
-    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=apply><label class=fl>Ripristino se non confermo entro (secondi)<input type=number name=secs value='.ROLLBACK_SECS.' min=15 max=600 data-iptm-layout="ui-f6b5c7f77c"></label>' . ($dnsGuardRemoved?'<label><input type=checkbox name=confirm_dns_guard_removal value=1 required> Confermo la rimozione delle protezioni DoT/DNS indicate</label>':'') . '<button class=g>Applica con rollback</button></form>';
-    echo '</div><p class=mut>Conferma e ripristino saranno visibili nel riquadro di stato durante una prova attiva. Il caricamento può ricreare le catene runtime di Docker, CrowdSec e fail2ban; verifica la checklist dei servizi.</p></section>';
+    if ($dnsGuardRemoved) echo '<p class="msg warn">La bozza non include alcune protezioni DNS/DoT presenti su disco: verranno rimosse all’applicazione.</p>';
+    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=apply><input type=hidden name=secs value="'.(int)ROLLBACK_SECS.'"><button class=g>Applica ora</button></form>';
+    echo '</div><p class=mut>Le regole vengono applicate e confermate in un solo passaggio. Il caricamento può ricreare le catene runtime di Docker, CrowdSec e fail2ban.</p></section>';
     echo '<details class="card iptm-apply-advanced"><summary><b>Strumenti avanzati</b> · sintassi, pulizia, regole manuali e operazioni sul file</summary><div class=ops data-iptm-layout="ui-0e001e227c">';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=test><button class=s>Test solo sintassi</button></form>';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=policy_export><button class=s>Esporta policy YAML</button></form>';
-    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=save_file>' . ($dnsGuardRemoved?'<label><input type=checkbox name=confirm_dns_guard_removal value=1 required> Confermo la rimozione delle protezioni DNS/DoT salvate su disco</label>':'') . '<button class=s>Salva soltanto su disco</button></form>';
+    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=save_file><button class=s>Salva soltanto su disco</button></form>';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=draft_reset><button class=d>Scarta bozza</button></form></div>';
 
         // --- Pulizia regole obsolete / inutili ---
@@ -359,7 +360,7 @@ function pg_guide() {
 <li><b>Port knocking</b> (Sicurezza), <b>QoS/SQM</b> con CAKE (Rete), <b>IPv6</b> semplice (Rete), <b>Storico</b> con differenze e registro delle operazioni.</li>
 <li><b>Account</b>: più utenti (amministratore o sola lettura), autenticazione a due fattori TOTP, notifiche Telegram/webhook.</li></ul></details>
 <details><summary>Aggiornare a una nuova versione</summary><p>Copia sul DietPi i file nuovi (<code>iptables-manager.php</code>, <code>iptm-helper</code>, <code>install-dietpi.sh</code>, <code>update-dietpi.sh</code>) e, come root: <pre>bash update-dietpi.sh</pre>Mantiene impostazioni, utenti, backup e regole; controlla la sintassi prima di sostituire i file e conserva la versione precedente in <code>/var/lib/iptables-manager/</code>.</p></details>
-<details open><summary>Flusso sicuro</summary><ol><li>Modifica → «Salva (bozza)»: il firewall attivo non cambia.</li><li>«Applica impostazioni» (o Amministrazione → Applica &amp; Backup): carica nel kernel con <b>rollback automatico</b>.</li><li>Premi <b>Conferma</b> entro il tempo: salva su <code>/etc/iptables/rules.v4</code> (backup datato) e le regole sopravvivono al riavvio tramite <code>netfilter-persistent</code>.</li></ol></details>
+<details open><summary>Flusso sicuro</summary><ol><li>Modifica → «Salva (bozza)»: il firewall attivo non cambia.</li><li>«Applica ora»: carica nel kernel e salva subito su <code>/etc/iptables/rules.v4</code> (con backup datato).</li></ol></details>
 <details><summary>Installazione su DietPi (Debian 13 Trixie)</summary>
 <ol><li>Da <code>dietpi-software</code> installa un web server con PHP (es. Lighttpd/Nginx/Apache + PHP-FPM).</li>
 <li>Copia sul DietPi <code>iptables-manager.php</code> e <code>install-dietpi.sh</code>, poi come root: <pre>bash install-dietpi.sh ./iptables-manager.php /var/www</pre></li>

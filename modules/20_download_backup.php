@@ -1,8 +1,16 @@
 <?php
 // ===================== DOWNLOAD BACKUP =====================
-if (isset($_GET['dl']) && preg_match('/^rules\.v[46]\.\d{8}-\d{6}$/D', $_GET['dl']) && is_file(DATA_DIR . '/backups/' . $_GET['dl'])) {
+if (isset($_GET['dl']) && preg_match('/^rules\.v[46]\.\d{8}-\d{6}$/D', (string)$_GET['dl'])) {
     if (($_SESSION['role'] ?? '') !== 'admin') { http_response_code(403); exit('Solo admin'); }
-    header('Content-Type: text/plain'); header('Cache-Control: private, no-store'); header('X-Content-Type-Options: nosniff'); header('Content-Disposition: attachment; filename="' . $_GET['dl'] . '"'); readfile(DATA_DIR . '/backups/' . $_GET['dl']); exit;
+    $base = realpath(DATA_DIR . '/backups');
+    $path = $base !== false ? realpath(DATA_DIR . '/backups/' . $_GET['dl']) : false;
+    if ($base === false || $path === false || !str_starts_with($path, $base . DIRECTORY_SEPARATOR) || !is_file($path) || is_link(DATA_DIR . '/backups/' . $_GET['dl'])) {
+        http_response_code(404); exit('Backup non trovato');
+    }
+    header('Content-Type: text/plain'); header('Cache-Control: private, no-store'); header('X-Content-Type-Options: nosniff');
+    header('Content-Disposition: attachment; filename="' . basename($path) . '"');
+    header('X-Content-Type-Options: nosniff');
+    readfile($path); exit;
 }
 if (($_GET['dl'] ?? '') === 'config-bundle') {
     if (($_SESSION['role'] ?? '') !== 'admin') { http_response_code(403); exit('Solo admin'); }

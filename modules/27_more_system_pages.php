@@ -59,7 +59,7 @@ function pg_crowdsec() {
         . '</div>';
     echo '<section class="card iptm-crowdsec-workspace"><h2>CrowdSec</h2><p class="mut">Analisi eventi, decisioni e sorgenti log. I componenti firewall si configurano anche in <a href="?p=security">Firewall → Policy</a>.</p>';
     if (($info['helper'] ?? '') === 'old') {
-        echo '<div class="msg err">Helper di sistema non aggiornato (manca <code>cs-info</code>). Aggiorna anche <code>iptm-helper</code> con lo stesso zip della 3.9.x.</div>';
+        echo '<div class="msg err">Helper di sistema non aggiornato (manca <code>cs-info</code>). Aggiorna anche <code>iptm-helper</code> con lo stesso zip della release corrente.</div>';
     }
     if (!$info['installed']) {
         echo '<div class="msg err">CrowdSec non risulta installato. Vai in <a href="?p=progs">Strumenti → Programmi</a> e installa «CrowdSec + bouncer».</div></section>';

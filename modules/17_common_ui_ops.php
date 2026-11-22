@@ -1,4 +1,28 @@
 <?php
+
+// ===================== FORM UI (shared) =====================
+function dd(string $label, string $ctl, string $help = ''): string {
+    return '<div class="dd"><label>' . $label . '</label><div>' . $ctl . ($help ? '<small>' . $help . '</small>' : '') . '</div></div>';
+}
+function dd_radio(array $S, string $k, string $label, string $help = ''): string {
+    // One accessible switch replaces mutually exclusive enable/disable radios.
+    $on = !empty($S[$k]);
+    $ctl = '<label class="iptm-toggle"><input type=hidden name="' . h($k) . '" value=0>'
+         . '<input type=checkbox name="' . h($k) . '" value=1 aria-label="' . h($label) . '"' . ($on ? ' checked' : '') . '>'
+         . '<span class="iptm-toggle-track" aria-hidden="true"></span>'
+         . '<span class="iptm-toggle-on">Attivo</span><span class="iptm-toggle-off">Disattivo</span></label>';
+    return dd($label, $ctl, $help);
+}
+function dd_in(array $S, string $k, string $label, string $ph = '', string $help = '', string $w = '260px', string $extra = ''): string {
+    return dd($label, '<input name="' . h($k) . '" value="' . h($S[$k] ?? '') . '" placeholder="' . h($ph) . '" style="max-width:' . $w . '" ' . $extra . '>', $help);
+}
+function s_form(string $sec, string $body, string $back, bool $partial = false): string {
+    return '<form method=post class="acc">' . fh($back) . '<input type=hidden name=action value=settings_save><input type=hidden name=sec value="' . h($sec) . '">'
+        . ($partial ? '<input type=hidden name=_partial value=1>' : '')
+        . $body
+        . '<p class="sticky iptm-simple-actions"><button class="g" name=apply value=1>Salva e applica</button> <button type=submit class="s">Salva per dopo</button><small class="mut">Salva le impostazioni; «Salva e applica» le attiva subito.</small></p></form>';
+}
+
 // ===================== MIGLIORAMENTI UX / OPS (badge, search, backup, history, checklist) =====================
 
 /** Campiona statistiche su disco (max 1 ogni ~15 min). */
@@ -125,7 +149,7 @@ function post_apply_checklist(): array {
             'ok' => $haveLive ? ($active ? true : null) : null,
             'detail' => !$haveLive ? 'Stato del firewall non leggibile; verifica dal gateway'
                 : ($active ? 'Catene IPTM-MAC-IN/FWD e relativi agganci presenti nel kernel'
-                    : 'Policy configurata, ma non rilevata nel kernel: potrebbe essere ancora in bozza; vai su Applica con rollback'),
+                    : 'Policy configurata, ma non rilevata nel kernel: potrebbe essere ancora in bozza; vai su Applica'),
         ];
     } elseif ($iotVlan) {
         $items[] = [

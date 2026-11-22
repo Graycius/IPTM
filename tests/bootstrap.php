@@ -6,5 +6,6 @@ function alias_map($s){return ['ports'=>[]];}
 function list_sets($s){return [];}
 function fq_parse($s){return [];}
 require dirname(__DIR__) . '/modules/02_rule_model.php';
+require dirname(__DIR__) . '/modules/30_features_core.php';
 require dirname(__DIR__) . '/modules/03_rule_generation.php';
 require dirname(__DIR__) . '/modules/15_apps_services.php';

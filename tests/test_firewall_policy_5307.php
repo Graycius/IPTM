@@ -62,7 +62,7 @@ check5307(!str_contains($heads,'Salti MAC IoT incompleti'),'UI-managed MAC does 
 check5307(str_contains($heads,'livello 3'),'L2 warning');
 check5307(count(iptm_policy_findings(str_repeat('x',2_100_000)))===1,'bounded audit fails closed');
 check5307(iptm_policy_findings("*filter\n:INPUT DROP [0:0]\nCOMMIT\n")===[],'clean draft no fake issue');
-check5307(!str_contains((string)file_get_contents(dirname(__DIR__).'/modules/41_performance_pages.php'),'intercept_http'),'transparent proxy removed');
+check5307(!str_contains((string)file_get_contents(dirname(__DIR__).'/modules/41_performance_pages.php'),'intercept_http'),'legacy HTTP interception absent');
 $S=S_def();$S['lan_nets']='192.168.50.0/24';$S['wan_if']='eth0';$S['single_nic']=0;
 $GLOBALS['_if']['eth0']=['8.8.8.2/24'];
 check5307(str_contains(iptm_scope_input_accept('-A INPUT -s 192.168.50.0/24 -p tcp --dport 445 -j ACCEPT',$S),'-i bond0'),'source matched to LAN instead of broad non-WAN');

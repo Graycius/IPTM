@@ -1,25 +1,6 @@
 <?php
 // ===================== PAGINE "STILE DD-WRT" =====================
-function dd(string $label, string $ctl, string $help = ''): string { return '<div class=dd><label>' . $label . '</label><div>' . $ctl . ($help ? '<small>' . $help . '</small>' : '') . '</div></div>'; }
-function dd_radio(array $S, string $k, string $label, string $help = ''): string {
-    // One accessible switch replaces mutually exclusive enable/disable radios.
-    // The explicit 0 ensures unchecked options reach settings_save in partial forms.
-    $on = !empty($S[$k]);
-    $ctl = '<label class="iptm-toggle"><input type=hidden name="' . h($k) . '" value=0>'
-         . '<input type=checkbox name="' . h($k) . '" value=1 aria-label="' . h($label) . '"' . ($on ? ' checked' : '') . '>'
-         . '<span class="iptm-toggle-track" aria-hidden="true"></span>'
-         . '<span class="iptm-toggle-on">Attivo</span><span class="iptm-toggle-off">Disattivo</span></label>';
-    return dd($label,$ctl,$help);
-}
-function dd_in(array $S, string $k, string $label, string $ph = '', string $help = '', string $w = '260px', string $extra = ''): string {
-    return dd($label, '<input name=' . $k . ' value="' . h($S[$k]) . '" placeholder="' . h($ph) . '" style="max-width:' . $w . '" ' . $extra . '>', $help);
-}
-function s_form(string $sec, string $body, string $back, bool $partial = false): string {
-    return '<form method=post class=acc>' . fh($back) . '<input type=hidden name=action value=settings_save><input type=hidden name=sec value=' . $sec . '>'
-        . ($partial ? '<input type=hidden name=_partial value=1>' : '')
-        . $body .
-        '<p class="sticky iptm-simple-actions"><button class=g name=apply value=1>Salva e applica</button> <button type=submit class=s>Salva per dopo</button><small class=mut>Applicazione con ripristino automatico se la connessione non viene confermata.</small></p></form>';
-}
+// dd / dd_radio / dd_in / s_form: definiti in 17_common_ui_ops.php
 function wan_warn(array $S) { if (!wan_ready($S)) echo '<div class="msg err">⚠ WAN non definita: i filtri «dal WAN» non verranno generati. Impostala in <a href="?p=setup">Setup</a>.</div>'; }
 
 

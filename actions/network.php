@@ -147,6 +147,82 @@ switch ($a) {
             flash('Analisi di sicurezza rete completata: nessuna configurazione modificata.');
             break;
         }
+        case 'dhcp_reservations_apply':
+        case 'dhcp_reservations_check': {
+            $back = 'p=multinic';
+            $address = trim((string)($_POST['dhcp_res_address'] ?? ''));
+            $start = trim((string)($_POST['dhcp_res_start'] ?? ''));
+            $end = trim((string)($_POST['dhcp_res_end'] ?? ''));
+            $gateway = trim((string)($_POST['dhcp_res_gateway'] ?? ''));
+            $raw = (string)($_POST['dhcp_reservations'] ?? '');
+            if (strlen($raw) > 60000) { flash('Lista reservation troppo grande.', 'err'); break; }
+            $entries = [];
+            // Accept JSON array or lines: mac,ip[,hostname]
+            $trim = trim($raw);
+            if ($trim !== '' && ($trim[0] === '[' || $trim[0] === '{')) {
+                $decoded = json_decode($trim, true);
+                if (!is_array($decoded)) { flash('JSON reservation non valido.', 'err'); break; }
+                $entries = isset($decoded['reservations']) && is_array($decoded['reservations'])
+                    ? $decoded['reservations']
+                    : (array_is_list($decoded) ? $decoded : []);
+            } else {
+                foreach (preg_split('/\R/', $raw) ?: [] as $line) {
+                    $line = trim($line);
+                    if ($line === '' || str_starts_with($line, '#')) continue;
+                    $parts = preg_split('/[\s,;]+/', $line);
+                    if (!$parts || count($parts) < 2) {
+                        flash('Riga reservation non valida: ' . $line, 'err');
+                        break 2;
+                    }
+                    $row = ['mac' => $parts[0], 'ip' => $parts[1]];
+                    if (!empty($parts[2])) $row['hostname'] = $parts[2];
+                    $entries[] = $row;
+                }
+            }
+            $mode = ($a === 'dhcp_reservations_apply') ? 'apply' : 'check';
+            $payload = [
+                'address' => $address,
+                'start' => $start,
+                'end' => $end,
+                'gateway' => $gateway,
+                'allow_in_pool' => !empty($_POST['allow_in_pool']),
+                'reservations' => $entries,
+                'mode' => $mode,
+            ];
+            $json = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+            [$rc, $out, $err] = priv('net-audit', $json, ['dhcp-reservations']);
+            $result = json_decode($out, true);
+            if (!is_array($result)) {
+                flash('Reservation DHCP: operazione non disponibile: ' . herr(substr($err ?: $out, 0, 300)), 'err');
+                break;
+            }
+            $_SESSION['iptm_dhcp_reservations_check'] = $result;
+            if (empty($result['ok'])) {
+                $msgs = [];
+                foreach ((array)($result['errors'] ?? []) as $e) {
+                    if (is_array($e)) {
+                        $msgs[] = (($e['code'] ?? '') !== '' ? '[' . $e['code'] . '] ' : '')
+                            . (string)($e['message'] ?? 'errore')
+                            . (isset($e['index']) ? ' (riga ' . ((int)$e['index'] + 1) . ')' : '');
+                    }
+                }
+                if (!$msgs && !empty($result['error'])) $msgs[] = (string)$result['error'];
+                flash('Reservation DHCP non valide: ' . implode(' · ', array_slice($msgs, 0, 12)), 'err');
+            } elseif ($mode === 'apply') {
+                if (empty($result['applied'])) {
+                    flash('Validazione ok ma applicazione non confermata: ' . herr((string)($result['error'] ?? 'esito sconosciuto')), 'err');
+                } else {
+                    audit('dhcp-reservations applied n=' . (int)($result['hosts_written'] ?? $result['count'] ?? 0));
+                    flash('Reservation applicate su Pi-hole: ' . (int)($result['hosts_written'] ?? $result['count'] ?? 0) . ' host (dhcp.hosts).');
+                }
+            } else {
+                $warnN = count((array)($result['warnings'] ?? []));
+                flash('Reservation DHCP valide: ' . (int)($result['count'] ?? 0) . ' host'
+                    . ($warnN ? (' · avvisi: ' . $warnN) : '')
+                    . '. Usa «Applica su Pi-hole» per scriverle.');
+            }
+            break;
+        }
         case 'dhcp_dual_preview': {
             $back='p=multinic';
             $primary=[];$secondary=[];

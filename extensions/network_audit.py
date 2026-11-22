@@ -19,7 +19,7 @@ import subprocess
 import sys
 from typing import Any
 
-VERSION = '5.30.12'
+VERSION = '5.30.22'
 MAX_FILES = 384
 MAX_FILE_BYTES = 256 * 1024
 IFACE_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,14}$')
@@ -57,9 +57,9 @@ PACKAGES = ('network-manager', 'ifupdown', 'systemd-networkd', 'dhcpcd5', 'dnsma
 # Local-only: no device discovery, credentials, remote commands or vendor APIs.
 LOCAL_ROUTER_FEATURES = {
     'guest_isolation': {'linux': ['802.1Q VLAN', 'iptables zone rules'], 'mode':'local'},
-    'parental_schedules': {'linux': ['iptables time matches', 'Pi-hole groups'], 'mode':'design-only'},
+    'parental_schedules': {'linux': ['iptables time matches', 'IPTM ACL schedules'], 'mode':'local'},
     'per_device_qos': {'linux': ['tc CAKE', 'iptables marks'], 'mode':'design-only'},
-    'dhcp_reservations': {'linux': ['Pi-hole FTL v6 REST API'], 'mode':'design-only'},
+    'dhcp_reservations': {'linux': ['Pi-hole FTL v6 API', 'IPTM reservation validator'], 'mode':'local'},
     'vpn_access': {'linux': ['WireGuard'], 'mode':'local'},
     'traffic_statistics': {'linux': ['vnStat', 'tc', 'iptables counters'], 'mode':'local'},
     'dns_privacy': {'linux': ['Pi-hole', 'Unbound', 'DNSCrypt'], 'mode':'local'},
@@ -362,6 +362,202 @@ def validate_dhcp(primary: dict, secondary: dict) -> dict:
                             'router DHCP disabled in both segments','DNS accessible from secondary VLAN',
                             'confirmed console and rollback before activation'],
             'execution_enabled': False}
+
+
+
+def validate_dhcp_reservations(
+    entries,
+    *,
+    address: str,
+    start: str,
+    end: str,
+    gateway: str,
+    allow_in_pool: bool = False,
+    max_entries: int = 256,
+) -> dict:
+    """Validate static DHCP host reservations against a LAN/subnet and pool.
+
+    Returns structured errors so the UI can show actionable messages.
+    Does not write configuration or contact Pi-hole.
+    """
+    errors: list[dict] = []
+    warnings: list[dict] = []
+    if not isinstance(entries, list):
+        raise ValueError('DHCP reservation: lista host obbligatoria')
+    if len(entries) > max_entries:
+        raise ValueError(f'DHCP reservation: massimo {max_entries} voci')
+    try:
+        iface = ipaddress.ip_interface(address)
+        if not isinstance(iface, ipaddress.IPv4Interface):
+            raise ValueError()
+        net = iface.network
+        pool_lo = _ip(start)
+        pool_hi = _ip(end)
+        gw = _ip(gateway)
+        server = iface.ip
+    except (TypeError, ValueError) as exc:
+        raise ValueError('DHCP reservation: subnet/pool/gateway non validi') from exc
+    if not net.is_private or not 8 <= net.prefixlen <= 30:
+        raise ValueError('DHCP reservation: rete privata /8-/30 obbligatoria')
+    if pool_lo not in net or pool_hi not in net or int(pool_lo) > int(pool_hi):
+        raise ValueError('DHCP reservation: pool fuori subnet o invertito')
+
+    seen_mac: set[str] = set()
+    seen_ip: set[str] = set()
+    seen_host: set[str] = set()
+    normalized: list[dict] = []
+    host_re = re.compile(r'^(?=.{1,63}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')
+    mac_re = re.compile(r'^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+
+    for index, row in enumerate(entries):
+        if not isinstance(row, dict):
+            errors.append({'code': 'row-type', 'index': index, 'message': 'Voce non oggetto'})
+            continue
+        unknown = set(row) - {'mac', 'ip', 'hostname', 'name', 'comment'}
+        if unknown:
+            errors.append({
+                'code': 'unknown-field',
+                'index': index,
+                'message': 'Campi non supportati: ' + ','.join(sorted(unknown)),
+            })
+            continue
+        mac = str(row.get('mac') or '').strip().lower()
+        ip_s = str(row.get('ip') or '').strip()
+        host = str(row.get('hostname') or row.get('name') or '').strip()
+        comment = str(row.get('comment') or '').strip()
+        if not mac or not mac_re.fullmatch(mac):
+            errors.append({'code': 'mac-invalid', 'index': index, 'message': f'MAC non valido: {mac or "(vuoto)"}'})
+            continue
+        try:
+            ip = _ip(ip_s)
+        except ValueError:
+            errors.append({'code': 'ip-invalid', 'index': index, 'message': f'IP non valido: {ip_s or "(vuoto)"}'})
+            continue
+        if ip not in net:
+            errors.append({'code': 'ip-outside-subnet', 'index': index, 'message': f'{ip} fuori dalla subnet {net}'})
+            continue
+        if ip in (net.network_address, net.broadcast_address):
+            errors.append({'code': 'ip-network-broadcast', 'index': index, 'message': f'{ip} è network/broadcast'})
+            continue
+        if ip in (gw, server):
+            errors.append({'code': 'ip-gateway-server', 'index': index, 'message': f'{ip} coincide con gateway o server DHCP'})
+            continue
+        if int(pool_lo) <= int(ip) <= int(pool_hi):
+            if allow_in_pool:
+                warnings.append({
+                    'code': 'ip-in-pool',
+                    'index': index,
+                    'message': f'{ip} è dentro il pool dinamico {pool_lo}-{pool_hi}',
+                })
+            else:
+                errors.append({
+                    'code': 'ip-in-pool',
+                    'index': index,
+                    'message': f'{ip} è dentro il pool dinamico {pool_lo}-{pool_hi}: scegli un IP fuori range o restringi il pool',
+                })
+                continue
+        if mac in seen_mac:
+            errors.append({'code': 'mac-duplicate', 'index': index, 'message': f'MAC duplicato: {mac}'})
+            continue
+        if str(ip) in seen_ip:
+            errors.append({'code': 'ip-duplicate', 'index': index, 'message': f'IP duplicato: {ip}'})
+            continue
+        if host:
+            if not host_re.fullmatch(host) or host.lower() in ('localhost', 'broadcasthost'):
+                errors.append({'code': 'hostname-invalid', 'index': index, 'message': f'Hostname non valido: {host}'})
+                continue
+            key = host.lower()
+            if key in seen_host:
+                errors.append({'code': 'hostname-duplicate', 'index': index, 'message': f'Hostname duplicato: {host}'})
+                continue
+            seen_host.add(key)
+        if comment and (len(comment) > 80 or any(c in comment for c in '\n\r\x00')):
+            errors.append({'code': 'comment-invalid', 'index': index, 'message': 'Commento troppo lungo o non testuale'})
+            continue
+        seen_mac.add(mac)
+        seen_ip.add(str(ip))
+        item = {'mac': mac, 'ip': str(ip)}
+        if host:
+            item['hostname'] = host
+        if comment:
+            item['comment'] = comment
+        normalized.append(item)
+
+    ok = not errors
+    return {
+        'ok': ok,
+        'reservations': normalized,
+        'count': len(normalized),
+        'errors': errors,
+        'warnings': warnings,
+        'subnet': str(net),
+        'pool': {'start': str(pool_lo), 'end': str(pool_hi)},
+        'gateway': str(gw),
+        'server': str(server),
+    }
+
+
+
+def apply_dhcp_reservations(
+    entries,
+    *,
+    address: str,
+    start: str,
+    end: str,
+    gateway: str,
+    allow_in_pool: bool = False,
+    mode: str = 'check',
+) -> dict:
+    """Validate and optionally apply reservations to local Pi-hole FTL.
+
+    mode:
+      check — validation only
+      apply — write dhcp.hosts via pihole-FTL after successful validation
+    """
+    if mode not in ('check', 'apply'):
+        raise ValueError('DHCP reservation: mode deve essere check o apply')
+    result = validate_dhcp_reservations(
+        entries,
+        address=address,
+        start=start,
+        end=end,
+        gateway=gateway,
+        allow_in_pool=allow_in_pool,
+    )
+    result['applied'] = False
+    result['mode'] = mode
+    if not result.get('ok') or mode != 'apply':
+        return result
+    if os.geteuid() != 0:
+        raise ValueError('DHCP reservation apply: richiede root')
+    if not shutil.which('pihole-FTL'):
+        raise ValueError('DHCP reservation apply: pihole-FTL non trovato')
+    # Pi-hole static hosts: "mac,ip" or "mac,ip,hostname"
+    lines = []
+    for row in result['reservations']:
+        item = f"{row['mac']},{row['ip']}"
+        if row.get('hostname'):
+            item += ',' + row['hostname']
+        lines.append(item)
+    # Read current value for rollback message
+    prev_rc, prev_out = command(['pihole-FTL', '--config', 'dhcp.hosts'], timeout=5)
+    previous = prev_out.strip() if prev_rc == 0 else ''
+    # Set as JSON array of strings (FTL config CLI)
+    payload = json.dumps(lines, separators=(',', ':'))
+    rc, out = command(['pihole-FTL', '--config', 'dhcp.hosts', payload], timeout=10)
+    if rc != 0:
+        raise ValueError('DHCP reservation apply fallito: ' + (out or 'exit non zero')[:220])
+    # Verify read-back contains all MAC addresses
+    verify_rc, verify_out = command(['pihole-FTL', '--config', 'dhcp.hosts'], timeout=5)
+    if verify_rc != 0:
+        raise ValueError('DHCP reservation: lettura post-apply fallita')
+    missing = [row['mac'] for row in result['reservations'] if row['mac'] not in verify_out.lower()]
+    if missing:
+        raise ValueError('DHCP reservation: apply non verificato per MAC ' + ','.join(missing[:8]))
+    result['applied'] = True
+    result['previous_hosts'] = previous[:2000]
+    result['hosts_written'] = len(lines)
+    return result
 
 
 def pihole_dhcp_patch(plan: dict) -> dict:
@@ -1027,12 +1223,37 @@ def main(argv: list[str]) -> int:
             print(json.dumps(result,ensure_ascii=False));return 0
         except SafetyError as exc:
             print(json.dumps({'ok':False,'error':str(exc)},ensure_ascii=False));return 2
-    if len(argv)!=1 or argv[0] not in ('inventory','impact','pihole-schema','pihole-probe','pihole-dhcp','dhcp-preview'):
-        print('uso: iptm-helper net-audit inventory|impact|pihole-schema|pihole-probe|dhcp-preview',file=sys.stderr)
+    if len(argv)!=1 or argv[0] not in ('inventory','impact','pihole-schema','pihole-probe','pihole-dhcp','dhcp-preview','dhcp-reservations'):
+        print('uso: iptm-helper net-audit inventory|impact|pihole-schema|pihole-probe|dhcp-preview|dhcp-reservations',file=sys.stderr)
         return 2
     if os.geteuid()!=0:
         print('Audit da console root o helper autorizzato',file=sys.stderr)
         return 1
+    if argv[0]=='dhcp-reservations':
+        raw=sys.stdin.buffer.read(65537)
+        if len(raw)>65536:
+            print(json.dumps({'ok':False,'error':'DHCP reservation: input oltre 64 KiB'}))
+            return 2
+        try:
+            data=json.loads(raw)
+            if not isinstance(data,dict):
+                raise ValueError('DHCP reservation: JSON oggetto richiesto')
+            entries=data.get('reservations', data.get('hosts', []))
+            mode=str(data.get('mode') or 'check')
+            result=apply_dhcp_reservations(
+                entries,
+                address=str(data.get('address') or ''),
+                start=str(data.get('start') or ''),
+                end=str(data.get('end') or ''),
+                gateway=str(data.get('gateway') or ''),
+                allow_in_pool=bool(data.get('allow_in_pool')),
+                mode=mode,
+            )
+            print(json.dumps(result, ensure_ascii=False))
+            return 0 if result.get('ok') else 2
+        except (ValueError, TypeError, KeyError, OSError) as exc:
+            print(json.dumps({'ok':False,'error':str(exc),'errors':[{'code':'fatal','message':str(exc)}]}, ensure_ascii=False))
+            return 2
     if argv[0]=='dhcp-preview':
         raw=sys.stdin.buffer.read(8193)
         if len(raw)>8192:

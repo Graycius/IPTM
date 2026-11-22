@@ -69,9 +69,31 @@ case 'su_source_apply': {
         'Aggiornamento bloccato o fallito: '.herr((string)($res['error']??$e??$o)),$c===0?'ok':'err');break;
 }
 case 'cs_autodetect': {
-            $d = cs_detect(); if ($d['chain'] === '') { flash('Nessuna catena CrowdSec rilevata: il bouncer è avviato? (in modo nftables non serve nulla: usa una tabella propria)', 'err'); break; }
-            $S = S_get(); $S['crowdsec'] = 1; $S['cs_set'] = ''; S_put($S); [$c, $o] = priv('cs-chains', null, cs_chains_for($S, '')); priv('cs-svc', null, ['restart', 'bouncer']);
-            flash('CrowdSec collegato: ' . trim($o) . ' Set rilevati: ' . (implode(', ', $d['sets']) ?: 'nessuno ancora (compaiono con le prime decisioni)') . '. Il bouncer è stato riavviato; le regole del firewall non cambiano.'); $back = 'p=system'; break;
+            $d = cs_detect();
+            $mode = (string)($d['mode'] ?? 'unknown');
+            $usable = !empty($d['usable']) || (($d['chain'] ?? '') !== '');
+            if (!$usable) {
+                $hint = 'Avvia o configura il bouncer: systemctl status crowdsec-firewall-bouncer.';
+                if ($mode === 'nftables') $hint = 'Modo nftables: verifica bouncer active e tabella nft (nft list tables | grep -i crowdsec).';
+                elseif ($mode === 'ipset') $hint = 'Modo ipset: verifica i set crowdsec-* (ipset list -t).';
+                elseif ($mode === 'iptables' || $mode === 'unknown') $hint = 'Modo iptables: avvia il bouncer e attendi CROWDSEC_CHAIN, oppure esegui il setup bouncer.';
+                flash('CrowdSec non rilevato nel kernel. ' . $hint, 'err');
+                break;
+            }
+            $S = S_get(); $S['crowdsec'] = 1; $S['cs_set'] = '';
+            if (($d['chain'] ?? '') !== '' && !in_array($mode, ['nftables', 'ipset'], true)) {
+                S_put($S);
+                [$c, $o] = priv('cs-chains', null, cs_chains_for($S, ''));
+                priv('cs-svc', null, ['restart', 'bouncer']);
+                flash('CrowdSec collegato (iptables): ' . trim($o) . ' Set: ' . (implode(', ', $d['sets']) ?: 'nessuno ancora') . '. Bouncer riavviato; regole IPTM invariate.');
+            } else {
+                S_put($S);
+                flash('CrowdSec abilitato in IPTM (modo ' . $mode . '). ' .
+                    (!empty($d['nft_table']) ? 'Tabella nft rilevata. ' : '') .
+                    'Set: ' . (implode(', ', $d['sets']) ?: 'nessuno ancora') .
+                    '. Nessuna catena iptables necessaria in questo modo.');
+            }
+            $back = 'p=system'; break;
         }
         case 'tool_install': {
             $tk = (string)($_POST['tool'] ?? ''); $arg = trim((string)($_POST['arg'] ?? '')); $def = tool_defs()[$tk] ?? null;

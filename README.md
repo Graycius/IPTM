@@ -21,6 +21,16 @@ Linux Debian/DietPi, PHP 8+, Python 3, Bash, systemd e iptables. Le funzionalit�
 - **Ingress LAN e anti-spoof:** collegamento delle subnet alle interfacce reali o alle associazioni esplicite, vincoli su INPUT/FORWARD/DNS NAT e protezione RFC1918 soltanto sulle interfacce esterne pubbliche verificate; anteprima nella pagina WAN, LAN e NAT.
 
 
+## Release 5.30.22 — sicurezza e integrazioni
+
+La 5.30.22 introduce protezioni per la sessione e l'accesso web, controlli incrociati delle impostazioni e riconoscimento CrowdSec anche in ambienti nftables/ipset. Include le evoluzioni dalla 5.30.12: retention/ripristino release, prestazioni UI, ricalibrazione, applicazione, e prenotazioni DHCP Pi-hole.
+
+- **Pacchetto nativo:** [IPTM_5.30.22_UPDATE.zip](release/IPTM_5.30.22_UPDATE.zip).
+- **Note e limiti della release:** [IPTM 5.30.22 — note di rilascio](release/IPTM_5.30.22_RELEASE_NOTES.md).
+- Squid rimane escluso dalle funzionalità; è presente soltanto il ritiro sicuro dei residui di installazioni precedenti.
+
+**Avvertenza per gateway remoti:** nella 5.30.22 l'applicazione firewall può confermare automaticamente la transazione senza una verifica manuale della raggiungibilità SSH/LAN. Inoltre, la sincronizzazione DHCP Pi-hole può sostituire l'intero elenco `dhcp.hosts`. Prima dell'installazione effettuare backup e collaudo in ambiente di prova. La suite CI esegue test offline, **non** convalida la continuità della rete sul DietPi reale.
+
 ## Novità 5.30.12 — sola diagnostica prestazionale, nessun proxy HTTP
 
 La cache HTTP LAN è stata eliminata dall’interfaccia, dal controller, dalla gestione dei programmi e dall’helper: non esistono più attivazione, configurazione né reindirizzamenti HTTP gestiti dall’applicazione. L’aggiornamento nativo dismette prima della sostituzione dell’helper soltanto i componenti con ownership IPTM verificabile, usando le regole di rimozione exact-match del motore già installato. Se i redirect NAT non sono verificabili o i file sono stati modificati, **l’aggiornamento viene bloccato** prima del cambio di runtime: nessun flush di `nat`, `filter` o riduzione di `FORWARD DROP`.

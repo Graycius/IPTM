@@ -17,7 +17,7 @@ case 'warden_retire': {
                 flash('Warden disattivato ma salvataggio preferenza fallito: controllare impostazioni e backup.','err');
             }
             audit('iot-warden retired (backup created; live firewall unmodified)');
-            flash('Automazioni precedenti archiviate con backup. Nessuna catena live rimossa. Backup: '.(string)($result['backup']??'n/d').'. Ora prepara la pulizia della bozza e applicala con rollback.');
+            flash('Automazioni precedenti archiviate con backup. Nessuna catena live rimossa. Backup: '.(string)($result['backup']??'n/d').'. Ora prepara la pulizia della bozza e applicala da Applica.');
             break;
         }
         case 'warden_script_switch': {
@@ -166,7 +166,7 @@ case 'warden_retire': {
             flock($zoneLock,LOCK_UN); fclose($zoneLock);
             if (!$stageOk) break;
             unset($_SESSION['zone_plan']); audit('zona IoT staged only');
-            flash('Zone IPv4 e IPv6 salvate nelle rispettive bozze. NON attive: applica e conferma entrambe dalla pagina Applica/IPv6 con rollback separato. '.implode('; ',array_slice($warnings,0,3)));
+            flash('Zone IPv4 e IPv6 salvate nelle rispettive bozze. NON attive: applica IPv4 e IPv6 dalla pagina Applica. '.implode('; ',array_slice($warnings,0,3)));
             $back='p=apply'; break;
         }
         case 'mac_plan': {
@@ -240,6 +240,25 @@ case 'warden_retire': {
             $_SESSION['mac_plan']=['data'=>$j,'request'=>$req,'rev'=>$rev,'s_sha'=>hash('sha256',$settingsJson),'time'=>time()];
             flash('Anteprima MAC preparata: nessuna regola è stata applicata al kernel.');
             unset($GLOBALS['_iptm_mac_stage']);
+            break;
+        }
+        case 'mac_pending_resume': {
+            $back = 'p=zones';
+            if (($_SESSION['role'] ?? '') !== 'admin') { flash('Solo amministratore.', 'err'); break; }
+            $plan = iptm_mac_pending_read();
+            if (!is_array($plan)) { flash('Nessun piano MAC sospeso da riprendere.', 'err'); break; }
+            // Re-run planning from stored request so ownership/IPv6 checks run again.
+            $req = $plan['request'] ?? null;
+            if (!is_array($req)) { flash('Piano sospeso incompleto: eliminerlo e genera una nuova anteprima.', 'err'); break; }
+            $_SESSION['mac_plan'] = [
+                'data' => $plan['data'] ?? ['ready_to_stage' => false],
+                'request' => $req,
+                'rev' => (string)($plan['rev'] ?? ''),
+                's_sha' => (string)($plan['s_sha'] ?? ''),
+                'time' => time(),
+                'resumed' => true,
+            ];
+            flash('Piano MAC ripreso in sessione. Verifica IPv6 e premi «Salva nelle bozze» se i controlli sono ok.');
             break;
         }
         case 'mac_pending_clear': {
@@ -348,7 +367,7 @@ case 'warden_retire': {
                 if ($ipv6Skipped)
                     flash('Policy MAC salvata SOLO nella bozza IPv4: IPv6 interamente disabilitato sul gateway, nessuna bozza IPv6 modificata. LIVE INVARIATO. Se IPv6 torna attivo, IPTM blocca l’applicazione IPv4 finché non rigeneri la policy. Il traffico locale L2 resta fuori dal controllo di DietPi.','ok');
                 else
-                    flash('Policy MAC salvata nelle bozze IPv4/IPv6. LIVE INVARIATO: verifica e applica con rollback separato per famiglia.');
+                    flash('Policy MAC salvata nelle bozze IPv4/IPv6. LIVE INVARIATO: verifica e applica da Applica (IPv4/IPv6).');
                 $back='p=apply';
             } catch(Throwable $ex) {
                 $r4=false;$r6=$ipv6Skipped;

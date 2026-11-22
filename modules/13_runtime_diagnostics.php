@@ -33,19 +33,47 @@ function fix_chain_decls(string $txt): array {   // [testo, catene dichiarate in
     }
     return [$fixed ? ser($M) : $txt, $fixed, $missing];
 }
-function cs_detect(): array {   // set numerati (IPv4/IPv6) e catena del bouncer presenti ora nel kernel
+function cs_detect(): array {   // set, catena iptables e/o tabella nft del bouncer
     $inv = ipset_inventory(); $s4 = []; $s6 = [];
-    foreach (array_keys($inv['sets']) as $n) { if (preg_match('/^' . CS_V4 . '(-[A-Za-z0-9_.]+)?$/', $n)) $s4[] = $n; elseif (preg_match('/^' . CS_V6 . '(-[A-Za-z0-9_.]+)?$/', $n)) $s6[] = $n; }
+    foreach (array_keys($inv['sets'] ?? []) as $n) {
+        if (preg_match('/^' . CS_V4 . '(-[A-Za-z0-9_.]+)?$/', $n)) $s4[] = $n;
+        elseif (preg_match('/^' . CS_V6 . '(-[A-Za-z0-9_.]+)?$/', $n)) $s6[] = $n;
+    }
     natsort($s4); natsort($s6); $ch = '';
-    foreach (array_keys(live_dump()['chains']['filter'] ?? []) as $c) { if (!preg_match('/^crowdsec/i', $c) || preg_match('/_LOG$/i', $c)) continue; if ($ch === '' || $c === CS_CHAIN) $ch = $c; }
-    return ['sets' => array_values($s4), 'sets6' => array_values($s6), 'chain' => $ch];
+    foreach (array_keys(live_dump()['chains']['filter'] ?? []) as $c) {
+        if (!preg_match('/^crowdsec/i', $c) || preg_match('/_LOG$/i', $c)) continue;
+        if ($ch === '' || $c === CS_CHAIN) $ch = $c;
+    }
+    $st = cs_status();
+    $mode = (string)($st['mode'] ?? 'unknown');
+    $nft = !empty($st['nft_table']);
+    $svc = (string)($st['svc'] ?? '');
+    $active = ($svc === 'active' || str_starts_with($svc, 'active'));
+    $usable = ($ch !== '') || ($nft && $mode === 'nftables') || ($active && in_array($mode, ['nftables', 'ipset'], true));
+    return [
+        'sets' => array_values($s4),
+        'sets6' => array_values($s6),
+        'chain' => $ch,
+        'mode' => $mode,
+        'nft_table' => $nft,
+        'svc' => $svc,
+        'usable' => $usable,
+    ];
 }
-function cs_status(): array {   // stato del servizio e origine di ogni set (dal commento delle regole in CROWDSEC_CHAIN)
-    $r = ['svc' => '', 'origin' => []]; [$c, $o] = priv('cs-status'); if ($c !== 0) return $r;
+function cs_status(): array {   // stato servizio, modo bouncer, nft/chain, origini set
+    $r = ['svc' => '', 'mode' => 'unknown', 'nft_table' => false, 'chain_v4' => false, 'chain_v6' => false, 'origin' => []];
+    [$c, $o] = priv('cs-status');
+    if ($c !== 0) return $r;
     foreach (explode("\n", $o) as $l) {
+        $l = trim($l);
         if (str_starts_with($l, 'service ')) $r['svc'] = trim(substr($l, 8));
-        elseif (preg_match('/--match-set (crowdsec6?-blacklists\S*) src/', $l, $m) && preg_match('/--comment (?:"([^"]*)"|(\S+))/', $l, $q)) $r['origin'][$m[1]] = trim($q[1] !== '' ? $q[1] : ($q[2] ?? ''));
+        elseif (str_starts_with($l, 'mode ')) $r['mode'] = trim(substr($l, 5));
+        elseif ($l === 'nft_table yes') $r['nft_table'] = true;
+        elseif ($l === 'chain_v4 yes') $r['chain_v4'] = true;
+        elseif ($l === 'chain_v6 yes') $r['chain_v6'] = true;
+        elseif (preg_match('/--match-set (crowdsec6?-blacklists\S*) src/', $l, $m) && preg_match('/--comment (?:"([^"]*)"|(\S+))/', $l, $q)) {
+            $r['origin'][$m[1]] = trim($q[1] !== '' ? $q[1] : ($q[2] ?? ''));
+        }
     }
     return $r;
 }
-

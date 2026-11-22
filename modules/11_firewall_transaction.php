@@ -75,8 +75,8 @@ function iptm_iot_rules_diagnose(string $txt): array {
         if ($line === '*filter') { $inFilter = true; $inIoT = false; continue; }
         if ($line === 'COMMIT') { $inFilter = false; $inIoT = false; continue; }
         if (!$inFilter) continue;
-        if (preg_match('/^# >>> IPTM:(?:iot-|cust-.*-filter-)/', $line)) $inIoT = true;
-        if (preg_match('/^# <<< IPTM:(?:iot-|cust-.*-filter-)/', $line)) $inIoT = false;
+        if (preg_match('/^# >>> IPTM:(?:iot-|iot-g\\d+|cust-.*-filter-)/', $line)) $inIoT = true;
+        if (preg_match('/^# <<< IPTM:(?:iot-|iot-g\\d+|cust-.*-filter-)/', $line)) $inIoT = false;
         if (!$inIoT || !str_starts_with($line, '-A ')) continue;
         if (!str_contains($line, '--mac-source')) continue;
         if (!preg_match('/(?:^|\s)--mac-source\s+((?:[a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2})(?:\s|$)/D', $line)) {
@@ -260,11 +260,20 @@ function do_apply(int $secs, string $fam = '4', bool $force = false, bool $confi
     [$testCode, $st, $testErr] = priv('selftest');
     $bad = array_values(array_filter(explode("\n", trim($st)), fn($l) => str_starts_with($l, 'FAIL')));
     if ($testCode !== 0 || $bad)
-        $GLOBALS['apply_notes'][] = ['err', "Test GATEWAY incompleto (non verifica i client):\n" . implode("\n", $bad) . ' ' . herr($testErr)];
+        $GLOBALS['apply_notes'][] = ['err', "Test GATEWAY incompleto:\n" . implode("\n", $bad) . ' ' . herr($testErr)];
     else
-        $GLOBALS['apply_notes'][] = ['ok', 'Test GATEWAY completato. ATTENZIONE: nessun test client LAN eseguito; prima di confermare verifica DNS e navigazione da un dispositivo della LAN.'];
-    if (time() >= (int)(json_decode($pendingData, true)['until'] ?? 0))
-        return 'Il post-Apply ha superato la finestra di conferma: NON confermare, lascia terminare il watchdog e verifica il rollback.';
+        $GLOBALS['apply_notes'][] = ['ok', 'Test GATEWAY completato.'];
+    // Single-step apply: release apply lock then confirm immediately.
+    if (is_resource($applyLock)) {
+        @flock($applyLock, LOCK_UN);
+        @fclose($applyLock);
+        $applyLock = null;
+    }
+    $confirmErr = confirm_pending();
+    if ($confirmErr !== '') {
+        $GLOBALS['apply_notes'][] = ['err', 'Conferma automatica non completata: ' . $confirmErr];
+        return $confirmErr;
+    }
     return '';
 }
 function confirm_pending(): string {

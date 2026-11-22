@@ -149,11 +149,18 @@ case 'sec_preset': {
                 $S['harden']['tcp_fastopen_off'] = !empty($S['tcp_fastopen_off']) ? 1 : 0;
             }
             $S = iptm_safe_settings($S);
+            $cross = iptm_settings_cross_validate($S);
+            if ($cross) { flash('Impostazioni incomplete o incoerenti: ' . implode('; ', $cross), 'err'); break; }
             $old = S_get(); $before = ser($M); $M2 = $M; $warn = regen($M2, $S, $sec === 'setup' && !empty($_POST['confirm_dns_guard_removal']));
             // Blocca solo se la rigenerazione TOGLIE/cambia regole senza modifiche tue; le sole aggiunte (nuove regole generate da un aggiornamento) passano e sono mostrate nel riepilogo.
             if ($S == $old && !rules_equiv(ser($M2), $before) && model_delta($before, ser($M2))[1] > 0) { flash('Annullato per proteggere le tue regole: le impostazioni salvate non corrispondono alla bozza (rigenerandola cambierebbero regole pur senza modifiche tue). Nulla è stato toccato. Riallinea da «Importa regole» (dopo «Azzera impostazioni») oppure da un backup in Storico.', 'err'); break; }
-            S_put($S); $M = $M2; save_model(); flash(delta_msg($before, ser($M)));
-            flash('Impostazioni salvate nella bozza (' . count(gen_sections($S)[0]) . ' sezioni di regole generate).'); foreach ($warn as $w) flash('⚠ ' . $w, 'err');
+            if (function_exists('settings_snapshot')) settings_snapshot('pre-save-' . $sec);
+            S_put($S); $M = $M2; save_model();
+            $nSec = count(gen_sections($S)[0]);
+            $summary = function_exists('iptm_settings_section_summary') ? iptm_settings_section_summary($sec, $S) : $sec;
+            flash(delta_msg($before, ser($M)));
+            flash('Impostazioni «' . $sec . '» salvate nella bozza (' . $nSec . ' sezioni). ' . $summary);
+            foreach ($warn as $w) flash('⚠ ' . $w, 'err');
             if ($sec === 'security') {
                 $miss = []; $stt = tools_status();
                 if ($GLOBALS['_iptm_tools_status_error'] ?? '') {
@@ -164,7 +171,7 @@ case 'sec_preset': {
                 }
             }
             // Changing a UI form does not apply kernel sysctl. Use Hardening → preview/apply explicitly.
-            if (!empty($_POST['apply'])) { if (apply_result(do_apply(ROLLBACK_SECS))) flash('Applicate. Conferma entro ' . ROLLBACK_SECS . ' s o torna tutto com\'era.'); $back = 'p=apply'; }
+            if (!empty($_POST['apply'])) { if (apply_result(do_apply(ROLLBACK_SECS, '4', true, true))) flash('Impostazioni applicate e confermate.'); $back = 'p=apply'; }
             break;
         }
         case 'settings_reset': {
@@ -229,7 +236,11 @@ case 'sec_preset': {
             $o = ser($M); file_put_contents(DATA_DIR . '/pre-zero.rules', $o); file_put_contents(DATA_DIR . '/backups/rules.v4.' . date('Ymd-His'), $o);
             if (($A['base'] ?? 'zero') !== 'keep') $M = parse_rules(zero_skeleton());
             S_put($S2); $warn = regen($M, $S2); save_model(); /* Procedura guidata: niente sysctl, ipset o liste live; applicazione separata con rollback. */ if ($v6 && !v6_put(v6_gen($v6))) throw new RuntimeException('Bozza IPv6 non salvata: verifica spazio e permessi');
-            flash('Configurazione creata nella bozza (' . count(gen_sections($S2)[0]) . ' blocchi di regole). Controlla le differenze e applica con rollback.'); foreach (array_merge($w, $warn) as $x) flash('⚠ ' . $x, 'err'); $back = 'p=apply'; break;
+            flash('Configurazione creata nella bozza (' . count(gen_sections($S2)[0]) . ' blocchi di regole).'); foreach (array_merge($w, $warn) as $x) flash('⚠ ' . $x, 'err');
+            if (!empty($_POST['apply_now'])) {
+                if (apply_result(do_apply(ROLLBACK_SECS, '4', true, true))) flash('Configurazione applicata e confermata.');
+            }
+            $back = 'p=apply'; break;
         }
         case 'regen_now': { $before = ser($M); $S = S_get(); $warn = regen($M, $S); save_model(); flash('Bozza rigenerata dalle impostazioni salvate. ' . delta_msg($before, ser($M))); foreach ($warn as $w) flash('⚠ ' . $w, 'err'); $back = 'p=apply'; break; }
         case 'post_scan': {

@@ -422,7 +422,7 @@ function iptm_page_update(): void {   // distribuzione nativa modulare
     else echo '<form method=post action="?p=update" enctype="multipart/form-data" class="iptm-classic-form">' . fh('p=update') . '<input type=hidden name=action value=update_apply>'
         . '<label class=fl><span>ZIP installabile: Native Update (max 8 MiB; PHP: ' . h(ini_get('upload_max_filesize')) . ')</span><input type=file name=pkg accept=".zip" required></label>'
         . '<p class=mut><b>Non caricare</b> il Kit completo, Sorgenti e test, README o uno ZIP che contiene altri ZIP. Se hai scaricato il Kit, estrailo sul computer e seleziona soltanto l’archivio Native Update.</p>'
-        . '<label><input type=checkbox name=force value=1> Consenti soltanto la stessa versione (es. nuova build della versione corrente); non permette downgrade</label>'
+        . '<label><input type=checkbox name=force value=1> Forza reinstallazione della stessa versione <b>o downgrade</b> a una release precedente (verifica backup e regole attive)</label>'
         . '<p><button class=g type=submit >Installa pacchetto completo</button></p></form>';
     if (!$ro) echo '<details class=card><summary><b>Scarica aggiornamento via HTTP / HTTPS</b></summary>'
         . '<p class=mut>HTTP supportato, anche sulla LAN, con SHA-256 obbligatorio da fonte attendibile. HTTPS disponibile. Nessun downgrade da HTTPS a HTTP.</p>'
@@ -430,9 +430,42 @@ function iptm_page_update(): void {   // distribuzione nativa modulare
         . '<input type=hidden name=action value=update_url_apply>'
         . '<label class=fl><span>URL HTTP o HTTPS dello ZIP (max 8 MiB)</span><input name=package_url type=url maxlength=1500 placeholder="http://server.lan/releases/IPTM.zip" required></label>'
         . '<label class=fl><span>SHA-256 attendibile (obbligatorio per HTTP)</span><input name=sha maxlength=64 pattern="[a-fA-F0-9]{64}" placeholder="64 caratteri esadecimali"></label>'
-        . '<label><input type=checkbox name=force value=1> Consenti soltanto la stessa versione, mai downgrade</label>'
+        . '<label><input type=checkbox name=force value=1> Forza stessa versione o <b>downgrade</b> (richiede conferma esplicita)</label>'
         . '<p><button class=g type=submit >Scarica e installa</button></p></form></details>';
-    echo '<p class=mut>Installazioni precedenti al multi-NIC: nessuna seconda scheda richiesta per installare l’aggiornamento; configurazione WAN, DHCP, indirizzi IP e firewall conservati. Gli updater modulari supportano solo il formato nativo e verificano la unità di recupero prima di confermare il risultato. Le release successive utilizzano un archivio nativo e il journal di recovery. Nessuna regola firewall viene cambiata aprendo questa pagina.</p></div>';
+        // Local release rollback (keep last three on disk after prune).
+    [$rlc, $rlo] = priv('release-list');
+    $localReleases = [];
+    if ($rlc === 0) {
+        $decoded = json_decode($rlo, true);
+        if (is_array($decoded) && !empty($decoded['releases']) && is_array($decoded['releases'])) {
+            $localReleases = array_values(array_filter($decoded['releases'], static fn($v) => is_string($v) && preg_match('/^\d+(?:\.\d+){1,3}$/', $v)));
+        }
+    }
+    echo '<div class="card"><h3>Release locali (max 3)</h3>';
+    echo '<p class="mut">Dopo ogni aggiornamento restano al massimo le tre release più recenti. Puoi ripristinarne una (downgrade/switch) senza ricaricare uno ZIP.</p>';
+    if (!$localReleases) {
+        echo '<p class="mut">Nessuna release locale elencabile.</p>';
+    } else {
+        echo '<table class="tbl"><tr><th>Versione</th><th></th></tr>';
+        foreach ($localReleases as $ver) {
+            $current = ($ver === APP_VERSION);
+            echo '<tr><td><code>'.h($ver).'</code>'.($current ? ' <span class="b b-ACCEPT">attiva</span>' : '').'</td><td>';
+            if (!$ro && !$current) {
+                echo '<form method="post" class="ops" onsubmit="return confirm(\'Ripristinare la release '.h($ver).'? Verrà usato force e un journal di recovery.\');">'
+                    . fh('p=update')
+                    . '<input type="hidden" name="action" value="release_rollback">'
+                    . '<input type="hidden" name="target_version" value="'.h($ver).'">'
+                    . '<button class="s" type="submit">Ripristina questa versione</button></form>';
+            } elseif ($current) {
+                echo '<span class="mut">in uso</span>';
+            }
+            echo '</td></tr>';
+        }
+        echo '</table>';
+    }
+    echo '</div>';
+
+echo '<p class=mut>Installazioni precedenti al multi-NIC: nessuna seconda scheda richiesta per installare l’aggiornamento; configurazione WAN, DHCP, indirizzi IP e firewall conservati. Gli updater modulari supportano solo il formato nativo e verificano la unità di recupero prima di confermare il risultato. Le release successive utilizzano un archivio nativo e il journal di recovery. Nessuna regola firewall viene cambiata aprendo questa pagina.</p></div>';
     [$cr, $co, $ce] = priv('upgrade-cleanup', null, ['report']);
     $clean = $cr === 0 ? json_decode($co, true) : null;
     echo '<div class="card"><h3>Pulizia automatica post-aggiornamento</h3>';
@@ -1255,7 +1288,7 @@ function pg_security_operations(): void {
         }
         echo '</div>';
     }
-    echo '<p class=ops><a class="btn s" href="?p=rules">Modifica bozza regole</a> <a class="btn s" href="?p=apply">Verifica e applica con rollback</a></p></div>';
+    echo '<p class=ops><a class="btn s" href="?p=rules">Modifica bozza regole</a> <a class="btn s" href="?p=apply">Verifica e applica</a></p></div>';
 }
 
 function pg_impact() {
@@ -1419,7 +1452,7 @@ function pg_v6(bool $embedded = false) {
             if ($adminV4) echo '<div class="ops"><form method="post">'.fh($embedded?'p=apply':'p=v6').'<input type="hidden" name="action" value="ipv6_kernel_confirm"><button class="g">Conferma definitivamente</button></form><form method="post">'.fh($embedded?'p=apply':'p=v6').'<input type="hidden" name="action" value="ipv6_kernel_rollback"><button class="d">Ripristina subito IPv6 precedente</button></form></div>';
         } elseif ($adminV4) {
             echo '<p class="mut">Il controllo modifica i flag correnti <code>all</code>, <code>default</code> e ogni interfaccia; crea <code>/etc/sysctl.d/99-iptm-ipv6.conf</code> per applicarli ai riavvii e alle interfacce future. Watchdog di 120 secondi: senza conferma tenta il rollback automatico. Non cambia il backend firewall.</p>';
-            echo '<form method="post">'.fh($embedded?'p=apply':'p=v6').'<input type="hidden" name="action" value="ipv6_kernel_apply"><label class="fl"><span>Operazione</span><select name="ipv6_mode"><option value="disable">Disabilita IPv6 su tutte le interfacce</option><option value="enable">Riabilita IPv6 su tutte le interfacce</option></select></label><button class="g">Applica con rollback</button></form>';
+            echo '<form method="post">'.fh($embedded?'p=apply':'p=v6').'<input type="hidden" name="action" value="ipv6_kernel_apply"><label class="fl"><span>Operazione</span><select name="ipv6_mode"><option value="disable">Disabilita IPv6 su tutte le interfacce</option><option value="enable">Riabilita IPv6 su tutte le interfacce</option></select></label><button class="g">Applica ora</button></form>';
         } else echo '<p class="mut">Operazione disponibile soltanto a un amministratore collegato via IPv4 e senza transazioni pendenti.</p>';
     }
     echo '</div>';
@@ -1430,7 +1463,7 @@ function pg_v6(bool $embedded = false) {
         dd('Prefissi fidati', '<input name=lan_prefix value="' . h($V['lan_prefix']) . '" data-iptm-layout="mw420">', 'Separati da virgola (es. fe80::/10,2001:db8:1::/64). Da questi prefissi si accede ai servizi.') .
         dd('Servizi', $ck('icmp', 'ICMPv6 (necessario)') . $ck('dhcp6', 'DHCPv6 client') . $ck('ssh', 'SSH') . $ck('log', 'Log scarti') . $ck('crowdsec', 'CrowdSec IPv6') . $ck('bogon', 'Scarta ULA/documentazione dal WAN') . $ck('ssh_rl', 'Limite tentativi SSH')) . dd('WireGuard IPv6 / NAT66', $ck('wg_on', 'Consenti traffico WireGuard IPv6') . '<label class=fl><span>Interfaccia VPN</span>' . sel('wg_if', $wgOpts, (string)$V['wg_if']) . '</label><label class=fl><span>Porta UDP WireGuard</span><input name=wg_port value="' . h((string)$V['wg_port']) . '" data-iptm-layout="ui-ebb13c75de"></label>' . $ck('wg_input', 'I client raggiungono il router') . $ck('wg_lan', 'I client raggiungono LAN e Internet'), 'Attivala se il server DietPi-WireGuard usa IPv6/NAT66 e il firewall IPv6 IPTM è attivo. La porta deve coincidere con quella del server.') . dd('Set CrowdSec IPv6', '<input name=cs_sets value="' . h($V['cs_sets']) . '" data-iptm-layout="mw420">', 'Set del bouncer (crowdsec6-blacklists-0 … -3). Devono esistere al momento dell\'applicazione.') . dd('Porta SSH', '<input name=ssh_port value="' . h($V['ssh_port']) . '" data-iptm-layout="ui-ebb13c75de">') . dd('Altre porte TCP', '<input name=ports value="' . h($V['ports']) . '" placeholder="80,443" data-iptm-layout="mw240">') .
         '<p><button>💾 Genera la bozza IPv6</button></p></form><h3>Regole IPv6 (bozza)</h3><form method=post>' . fh($embedded ? 'p=apply' : 'p=v6') . '<input type=hidden name=rev6 value=' . h($v6Rev) . '><input type=hidden name=action value=v6_raw><textarea name=txt rows=18 spellcheck=false>' . h($txt) . '</textarea><p class=ops data-iptm-layout="ui-19678f38f5"><button class=s>Salva testo</button>
-<button class=s name=action value=v6_test>🔎 Verifica sintassi</button><button class=g name=action value=v6_apply>🚀 Applica con rollback</button><button class=s name=action value=v6_write disabled title="Usa Applica con rollback e poi Conferma">Solo salva su file (bloccato)</button><button class=d name=action value=v6_reset>Scarta bozza</button></p></form></div>';
+<button class=s name=action value=v6_test>🔎 Verifica sintassi</button><button class=g name=action value=v6_apply>🚀 Applica ora</button><button class=s name=action value=v6_write disabled title="Usa Applica ora">Solo salva su file (bloccato)</button><button class=d name=action value=v6_reset>Scarta bozza</button></p></form></div>';
 }
 /** True if WAN and LAN share a NIC or WAN carries multiple IPv4 addresses. */
 function iptm_shared_wan_lan(array $S): bool {
@@ -1454,7 +1487,7 @@ function pg_zero() {
     $pre = $SS ? zero_prefill(array_merge(S_def(), $SS)) : [];
     $if = sys_ifaces(); $nets = []; foreach ($if as $n => $a) foreach ($a as $x) $nets[net_of($x)] = $n; $sv = []; foreach (ZSVC as $k => $v) $sv[$k] = $v[0];
     echo '<div class="card"><h2>Wizard dell’intero sistema — controlli preliminari</h2><p>Prima di generare una bozza controlla il gateway, i servizi e l’accesso di recupero. Le domande successive includono LAN, WAN, NAT, DNS, DHCP, WireGuard, Docker, CrowdSec, liste IP, log, IPv6 e porte amministrative. I valori non rilevabili vanno confermati manualmente.</p><div class="ops"><a class="btn s" href="?p=piholehealth">Pi-hole web e DNS</a><a class="btn s" href="?p=health">Audit DietPi e Lynis</a><a class="btn s" href="?p=crowdsec&t=logaudit">CrowdSec e log</a><a class="btn s" href="?p=health#health-policy">Preflight &amp; Commit · Salute</a></div><p class="mut">Il wizard prepara soltanto la bozza, senza riavviare servizi, installare software, toccare sysctl o applicare regole.</p></div>';
-    echo '<div class="iptm-task-intro"><div><span class="iptm-eyebrow">CONFIGURAZIONE / SETUP</span><h2>Configurazione guidata completa</h2><p>Controlla rete, servizi, DNS, regole e protezioni prima di generare una bozza. La procedura non applica automaticamente regole al firewall.</p></div><a class="btn s" href="?p=apply">Stato applicazione</a></div><div class="iptm-safety-note" role="note"><strong>Prima di iniziare</strong><span>Verifica LAN, SSH e porte della console IPTM e di Pi-hole. Dopo la creazione della bozza controlla le differenze e applica solo con rollback e conferma.</span></div><div class="card iptm-wizard-surface" id=zero><div class=steps id=zprog aria-label="Avanzamento configurazione"></div><div id=zbody aria-live=polite></div></div><script>window.ZERO=' . json_encode(['ifaces' => array_map(fn($a) => implode(', ', $a), $if), 'nets' => $nets, 'svcs' => $sv, 'bl' => array_map(fn($b) => $b[0], BL_PRESETS), 'geo' => GEO_NAMES, 'fh' => fh('p=apply'), 'pre' => $pre, 'pre_src' => $src], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) . ';</script>';
+    echo '<div class="iptm-task-intro"><div><span class="iptm-eyebrow">CONFIGURAZIONE / SETUP</span><h2>Configurazione guidata completa</h2><p>Controlla rete, servizi, DNS, regole e protezioni prima di generare una bozza. La procedura non applica automaticamente regole al firewall.</p></div><a class="btn s" href="?p=apply">Stato applicazione</a></div><div class="iptm-safety-note" role="note"><strong>Prima di iniziare</strong><span>Verifica LAN, SSH e porte della console IPTM e di Pi-hole. Dopo la creazione della bozza controlla le differenze e usa «Applica ora» quando la bozza è pronta.</span></div><div class="card iptm-wizard-surface" id=zero><div class=steps id=zprog aria-label="Avanzamento configurazione"></div><div id=zbody aria-live=polite></div></div><script>window.ZERO=' . json_encode(['ifaces' => array_map(fn($a) => implode(', ', $a), $if), 'nets' => $nets, 'svcs' => $sv, 'bl' => array_map(fn($b) => $b[0], BL_PRESETS), 'geo' => GEO_NAMES, 'fh' => fh('p=apply'), 'pre' => $pre, 'pre_src' => $src], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) . ';</script>';
 }
 function pg_admin() {
     $U = users_get(); $me = $U[me()] ?? ['role' => 'viewer', 'totp' => '']; $adm = ($me['role'] ?? 'viewer') === 'admin'; $N = notify_cfg(); [, $conf] = priv('conf'); [, $bk] = priv('backend'); $bk = trim($bk);

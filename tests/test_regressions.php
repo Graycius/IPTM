@@ -8,6 +8,7 @@ $root = dirname(__DIR__);
 require $root . '/modules/00_bootstrap.php';
 require $root . '/modules/01_core_utilities.php';
 require $root . '/modules/02_rule_model.php';
+require $root . '/modules/30_features_core.php';
 require $root . '/modules/03_rule_generation.php';
 require $root . '/modules/12_policy_analysis.php';
 function tested(string $name,bool $ok): void { echo ($ok?'PASS ':'FAIL ').$name."\n"; if (!$ok) exit(1); }

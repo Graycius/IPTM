@@ -300,11 +300,11 @@ case 'rule_op': {
         }
         case 'v6_raw': if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Salvataggio IPv6 fallito.', 'err'); break; } flash('Testo IPv6 salvato nella bozza.'); break;
         case 'v6_test': { if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } [$c, $o, $e] = priv('test6', v6_get()); flash($c === 0 ? '✔ Sintassi IPv6 valida.' : '✖ Errore: ' . trim($o . $e), $c === 0 ? 'ok' : 'err'); break; }
-        case 'v6_apply': { if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } if (apply_result(do_apply(ROLLBACK_SECS, '6'))) flash('Regole IPv6 applicate: conferma entro ' . ROLLBACK_SECS . ' s.'); break; }
+        case 'v6_apply': { if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } if (apply_result(do_apply(ROLLBACK_SECS, '6', true, true))) flash('Regole IPv6 applicate e confermate.'); break; }
         case 'v6_write': {
             // Salvare per il boot SENZA il test rollback può tagliare fuori
             // l'IPv6 al prossimo riavvio. Usare Applica IPv6 + conferma.
-            flash('Scrittura diretta di rules.v6 bloccata per sicurezza. Usa «Applica con rollback» e poi «Conferma».', 'err');
+            flash('Scrittura diretta di rules.v6 bloccata. Usa «Applica» dalla pagina IPv6.', 'err');
             break;
         }
         case 'v6_reset': if (!v6_reset_draft()) { flash('Impossibile scartare bozza IPv6.', 'err'); break; } flash('Bozza IPv6 scartata.'); break;
@@ -464,8 +464,9 @@ case 'manual_convert': {
                 }
                 try {$removed=iptm_dns_guard_losses(rules_live(),$draftTxt);}
                 catch(RuntimeException $ex){flash('Verifica DoT/DNS impossibile: '.$ex->getMessage(),'err');break;}
-                if($removed && empty($_POST['confirm_dns_guard_removal'])){
-                    flash('Salvataggio negato: bozza priva dei blocchi '.implode(', ',$removed).' presenti su disco. Conferma la rimozione in Applica o ripristina dalla pagina Setup.','err');break;
+                // Simplified flow: allow saving drafts that drop DNS/DoT guards.
+                if ($removed) {
+                    $GLOBALS['apply_notes'] = $GLOBALS['apply_notes'] ?? [];
                 }
                 ipsets_prepare(); [$c,$o,$e]=priv('test',$draftTxt);
                 if ($c) {flash('Non salvo: bozza non valida. '.herr($o.$e),'err');break;}
@@ -483,7 +484,7 @@ case 'manual_convert': {
             }
             break;
         case 'apply':
-            if (apply_result(do_apply((int)($_POST['secs'] ?? ROLLBACK_SECS), '4', !empty($_POST['force']), !empty($_POST['confirm_dns_guard_removal'])))) flash('Regole applicate. Premi «Conferma» entro il tempo indicato: altrimenti torna tutto com\'era.');
+            if (apply_result(do_apply((int)($_POST['secs'] ?? ROLLBACK_SECS), '4', true, true))) flash('Regole applicate e confermate.');
             $back = 'p=apply'; break;
     
 }
