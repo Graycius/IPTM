@@ -120,46 +120,4 @@ Se SSH viene ripetutamente interrotto per un vecchio limite `recent`, la console
 
 Per sicurezza, gli speedtest e la ricalibrazione automatica non devono saturare un collegamento già sagomato o occupato. La modalità RTT è una misura leggera: **non garantisce ottimizzazione automatica della velocità**. L'efficacia reale di CAKE dipende da kernel, interfacce, IFB, driver e carico CPU (anche su Atom N450).
 
-## Controlli automatici e revisione del codice
-
-Il repository contiene configurazioni GitHub per eseguire controlli **su commit, pull request e periodicamente**, senza installare strumenti sul DietPi:
-
-| Controllo | Copertura | Configurazione |
-| --- | --- | --- |
-| **CodeQL** | Python, JavaScript e GitHub Actions | [Workflow](.github/workflows/codeql.yml) |
-| **Semgrep Community** | Analisi statica orientata alla sicurezza, **incluso PHP** | [Workflow](.github/workflows/semgrep.yml) |
-| **Security CI** | Syntax PHP/Python/JS/Bash, regressioni SSH/QoS/firewall | [Workflow](.github/workflows/security-ci.yml) |
-| **Dependency Review** | Variazioni dipendenze nelle pull request | [Workflow](.github/workflows/dependency-review.yml) |
-| **Dependabot** | Aggiornamento versioni delle GitHub Actions | [Configurazione](.github/dependabot.yml) |
-| **GitHub Copilot Code Review** | Revisione **AI delle pull request**, se l'account è abilitato | [Istruzioni specifiche IPTM](.github/copilot-instructions.md) |
-
-**Importante:** il commit dei workflow li rende disponibili ma la loro esecuzione dipende dalle autorizzazioni e impostazioni Actions / Code Security del repository. Copilot Code Review richiede l'attivazione dell'utente nelle impostazioni GitHub e può consumare crediti AI. Le istruzioni nel repository non attivano un abbonamento.
-
-Per attivare l'AI di revisione: **Settings → Rules → Rulesets** e scegli la revisione automatica di Copilot per le pull request, se disponibile sul piano. Vedi [la guida alla revisione AI](https://docs.github.com/en/copilot/how-tos/copilot-on-github/set-up-copilot/configure-code-review). Per vulnerabilità e segnalazioni, leggi [SECURITY.md](SECURITY.md).
-
-## Organizzazione del progetto
-
-```text
-loader/       avvio PHP della console
-modules/      generatore, pagine, stato, preflight e UI
-actions/      azioni autenticate e aggiornamenti
-extensions/   analisi rules.v4, rete, DNS, QoS, recovery SSH
-runtime/      helper privilegiato e servizi di supporto
-assets/       CSS e JavaScript
-installer/    prima installazione e documentazione
-tests/        regressioni offline, test combinatori e concorrenza
-.github/      controlli CI, security scanning e istruzioni AI
-docs/images/  diagrammi SVG della documentazione
-release/      archivi installabili e sorgente completo
-```
-
-**Test:** le suite offline verificano regressioni e combinazioni scelte; **non** garantiscono la correttezza di ogni possibile rete o l'assenza totale di bug. Non eseguire test combinatori pesanti sul DietPi in produzione mentre gestisce il traffico.
-
-[**Rapporto tecnico delle correzioni SSH, HTTP e QoS 5.30.1**](docs/IPTM_5_30_1_FIX_REPORT.md)
-
-## Sicurezza e licenza
-
-- Non esporre la console PHP su Internet. Limita l'accesso alla LAN di gestione o VPN attendibile; valuta TLS o tunnel SSH.
-- Non inviare password, token, MAC o file di configurazione contenenti segreti in issue GitHub pubbliche.
-- Prima di aggiornare o applicare regole: backup, console di emergenza e test di ripristino.
-- Licenza [GNU GPL v3](LICENSE). Il software è fornito senza garanzia.
+nzia.
