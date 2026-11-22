@@ -11,7 +11,7 @@ def get(n):
     spec=importlib.util.spec_from_file_location('iptm_test_'+p.stem,p)
     mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
     return mod
-rp=get('rules_performance.py'); proxy=get('cache_proxy.py')
+rp=get('rules_performance.py')
 fw=get('firewall_recovery.py'); qos=get('qos_engine.py');traffic=get('traffic_observer.py')
 RULES='''*filter
 :INPUT DROP [0:0]
@@ -23,7 +23,6 @@ RULES='''*filter
 -A FORWARD -m hashlimit --hashlimit-above 2000kb/s --hashlimit-name bwup -j DROP
 COMMIT
 '''
-PROFILE={'interface':'bond0','listen_ip':'192.168.1.1','port':3128,'allowed_nets':['192.168.1.0/24'],'disk_mib':128,'memory_mib':16}
 
 class AuditTests(unittest.TestCase):
     def test_quic_and_drop_rate(self):
@@ -40,31 +39,6 @@ class AuditTests(unittest.TestCase):
         for raw in ('','\x00','X'*(rp.MAX_BYTES+1),'-A INPUT -j DROP\n'*30001):
             with self.subTest(length=len(raw)):
                 with self.assertRaises(rp.AuditError):rp.analyze(raw)
-
-class ProxyTests(unittest.TestCase):
-    def test_acl_security(self):
-        conf=proxy.config_text(proxy.parse_config(PROFILE))
-        self.assertIn('http_port 192.168.1.1:3128',conf)
-        self.assertIn('http_access deny CONNECT !SSL_ports',conf)
-        self.assertLess(conf.index('http_access deny blocked_dst'),conf.index('http_access allow iptm_clients'))
-        self.assertIn('http_access deny all',conf)
-        self.assertNotIn('ssl_bump',conf)
-    def test_bad_configs(self):
-        for bad in (dict(PROFILE,listen_ip='0.0.0.0'),dict(PROFILE,listen_ip='8.8.8.8'),
-                    dict(PROFILE,port=True),dict(PROFILE,port=80),
-                    dict(PROFILE,interface='../etc'),dict(PROFILE,allowed_nets=['0.0.0.0/0']),
-                    dict(PROFILE,allowed_nets=['192.168.2.0/24']),
-                    dict(PROFILE,allowed_nets=['192.168.1.0/24\nallow all']),
-                    dict(PROFILE,disk_mib=10**50),dict(PROFILE,evil=1)):
-            with self.subTest(bad=bad):
-                with self.assertRaises(proxy.ProxyError):proxy.parse_config(bad)
-    def test_no_missing_software_activation(self):
-        with patch.object(proxy,'SQUID',Path('/nonexistent/squid')):
-            with self.assertRaises(proxy.ProxyError):proxy.verify_ownership()
-    def test_interface_binding_required(self):
-        v={'ifname':'bond0','addr_info':[{'family':'inet','local':'192.168.2.2'}]}
-        with patch.object(proxy,'command',return_value=SimpleNamespace(stdout=json.dumps([v]))):
-            with self.assertRaises(proxy.ProxyError):proxy.verify_interface(PROFILE)
 
 class FirewallTests(unittest.TestCase):
     def test_missing_set_drop_only(self):

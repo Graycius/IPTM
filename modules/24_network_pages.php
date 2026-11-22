@@ -624,11 +624,14 @@ function pg_setup() {
     echo '<div class=card><h2>Setup di base</h2><p class=mut>Indica quali interfacce sono «WAN» (verso Internet/modem) e quali reti sono «LAN». Le sezioni Sicurezza e NAT usano questi dati.</p><p>Rilevate: ';
     foreach ($if as $n => $a) { echo '<a href="#" class=chip data-fill=wan_if data-v="' . h($n) . '">' . h($n) . '</a>'; foreach ($a as $ad) echo '<a href="#" class=chip data-fill=lan_nets data-v="' . h(net_of($ad)) . '" data-add=1 title="aggiungi alla LAN">' . h($ad) . ' → rete ' . h(net_of($ad)) . '</a>'; }
     echo '</p>';
-    $b = dd_in($S, 'wan_if', 'Interfaccia WAN', 'eth0', 'Verso Internet/modem. Clic su un nome sopra per compilarla.', '200px') . dd_radio($S, 'single_nic', 'WAN e LAN sulla stessa interfaccia', 'Es. un solo cavo/bond: il «lato WAN» viene riconosciuto dalle subnet LAN invece che dall\'interfaccia.') .
+    $b = dd_in($S, 'wan_if', 'Interfaccia WAN', 'eth0', 'Verso Internet/modem. Clic su un nome sopra per compilarla.', '200px') . dd_in($S, 'lan_if', 'Interfaccia LAN dedicata (facoltativa)', 'bond0', 'Usala solo quando gli accessi alle subnet LAN entrano realmente da questa interfaccia. Con più VLAN/interfacce LAN lascia vuoto e usa una WAN dedicata.', '220px') . dd_radio($S, 'wan_rfc1918_spoof', 'Blocca sorgenti RFC1918 sulla WAN pubblica verificata', 'Attivo solo con interfaccia WAN distinta, indirizzo pubblico verificato e nessun indirizzo privato sulla WAN. Disabilitato automaticamente su bond0 condivisa, doppio NAT, CGNAT o topologia sconosciuta.') . dd_in($S, 'external_ifs', 'Altre interfacce esterne non fidate (facoltative)', 'ppp0,eth1', 'Separale con virgole. I blocchi RFC1918 si generano solo se l’interfaccia ha un unico IPv4 pubblico, non ospita LAN e non è condivisa con VPN/VLAN. WAN dietro NAT privato: nessun blocco automatico.', '350px') .
+        dd_in($S, 'lan_ingress_map', 'Associa rete LAN → ingresso (facoltativo)', '192.168.1.0/24=bond0,192.168.10.0/24=bond0.10,10.19.165.0/24=wg0', 'Per VLAN/VPN inoltrate che non hanno un indirizzo locale riconoscibile. La scheda deve esistere e non può essere WAN. L’associazione errata può bloccare SSH: verifica la bozza.', '100%') .
+        dd_radio($S, 'single_nic', 'WAN e LAN sulla stessa interfaccia', 'Es. un solo cavo/bond: il «lato WAN» viene riconosciuto dalle subnet LAN invece che dall\'interfaccia.') .
         dd_in($S, 'lan_nets', 'Reti LAN', '192.168.1.0/24,192.168.10.0/24', 'CIDR separati da virgola.', '420px') .
         '<h3>NAT e routing</h3>' . dd_in($S, 'masq_ifs', 'Interfacce di uscita NAT (opz.)', 'bond0,wg0', 'Vuoto = WAN configurata. Se indicate, il NAT si applica esclusivamente alle subnet LAN indicate, mai a tutto il traffico dell’interfaccia.', '260px') . dd_in($S, 'drop_chain', 'Catena di scarto (opz.)', 'LOG-DROP', 'Le opzioni «scarta» saltano a questa catena (es. con log) invece di DROP. Vuoto = DROP.', '200px') .
         dd_radio($S, 'nat_masq', 'NAT / Masquerade verso la WAN', 'Condivide la connessione: la LAN esce con l\'IP della WAN.') . dd_radio($S, 'mss', 'Clamp MSS al PMTU', 'Evita blocchi su connessioni PPPoE/VPN.') .
-        '<div class=msg><b>DNS configurabile in un solo punto.</b> Reindirizzamento LAN, blocco DoT e architettura Pi-hole / Unbound / DNSCrypt sono stati spostati in <a href="?p=dns"><b>DNS &amp; Privacy</b></a>.</div>';
+        '<h3>Protezione DNS LAN</h3>' . dd_radio($S, 'dns_redirect', 'Forza DNS locale per la LAN (TCP/UDP 53)', 'Reindirizza soltanto le subnet LAN configurate; se l’ingresso non è verificato resta il vincolo per IP sorgente.') . dd_in($S, 'dns_ip', 'IP DNS locale', '192.168.1.165', 'Destinazione Pi-hole / Unbound / DNSCrypt. Nessuna modifica automatica del kernel.', '250px') . dd_radio($S, 'dot_block', 'Blocca DNS-over-TLS (TCP/UDP 853)', 'Mantiene i blocchi della LAN anche con ingresso non verificato. Non blocca automaticamente DoH/HTTPS.') . '<div class=msg><b>Gestione servizi DNS:</b> Pi-hole, Unbound e DNSCrypt restano in <a href="?p=dns"><b>DNS &amp; Privacy</b></a>. Le regole firewall DNS sono modificabili qui, nella stessa pagina del loro ambito LAN.</div>';
+    $b.='<p><label><input type=checkbox name=confirm_dns_guard_removal value=1> Confermo la rimozione dei blocchi DoT/DNS esistenti se le relative opzioni sono disattivate (solo bozza, da verificare prima di applicare)</label></p>';
     if (!empty($S['nat_masq']) && !empty($S['single_nic'])) {
         $nets = array_values(array_filter(array_map('trim', explode(',', (string)($S['lan_nets'] ?? '')))));
         $outs = array_values(array_unique(array_filter(array_map('trim', explode(',',
@@ -641,6 +644,26 @@ function pg_setup() {
             $b .= '<div class="msg err" role="alert"><strong>NAT incompleto.</strong> Indica almeno una subnet LAN e un’interfaccia di uscita per generare le regole.</div>';
         }
     }
+    // Detect a saved-DNS-policy/draft mismatch before the operator applies it.
+    try {
+        $guardLoss=iptm_dns_guard_losses(rules_live(),ser($M));
+    }catch(RuntimeException $e){$guardLoss=[];echo '<div class="msg err">Verifica protezioni DNS non disponibile: '.h($e->getMessage()).'</div>';}
+    if($guardLoss){
+        echo '<div class="msg warn" role="alert"><strong>Regole DNS/DoT presenti in rules.v4 ma mancanti nella bozza</strong><p>'.h(implode(', ',$guardLoss)).'. Non applicare una bozza che le elimina senza aver verificato le intenzioni. Ripristina dalla copia su disco con verifica delle tre subnet, senza toccare il firewall attivo.</p>';
+        echo '<form method=post>'.fh('p=setup').'<input type=hidden name=action value=dns_guard_restore_disk><button class=g>Ripristina DoT/DNS dal file su disco (solo bozza)</button></form></div>';
+    }
+    $netRows=[];
+    foreach(preg_split('/[\s,;]+/',trim((string)($S['lan_nets']??'')),-1,PREG_SPLIT_NO_EMPTY) as $subnet) {
+        if(!v_ok('nets',$subnet) || !iptm_scope_within_lan($subnet,(string)($S['lan_nets']??'')))continue;
+        $match=iptm_ingress_for_source($subnet,$S);
+        $netRows[]='<tr><td><code>'.h($subnet).'</code></td><td>'.($match===''?'<span class="mut">ingresso non verificato</span>':'<code>'.h($match).'</code>').'</td></tr>';
+    }
+    $protected=iptm_external_spoof_ifaces($S);
+    $b.='<div class="msg"><strong>Anteprima vincoli d’ingresso (senza applicare)</strong><p>INPUT, permessi FORWARD da LAN e reindirizzamento DNS vengono limitati a un ingresso attendibile quando verificabile. <b>Ingresso non verificato</b> non disattiva DoT o DNS: restano i vincoli per subnet sorgente, meno forti di un vincolo per interfaccia. Le policy IoT gestite dalla UI restano valide.</p>';
+    if($netRows)$b.='<table><thead><tr><th>Rete autorizzata</th><th>Ingresso generato</th></tr></thead><tbody>'.implode('',$netRows).'</tbody></table>';
+    $b.='<p>Anti-spoof RFC1918 attivabile su: <b>'.($protected?h(implode(', ',$protected)):'nessuna interfaccia esterna pubblica verificata').'</b>.</p>';
+    if(!$protected && !empty($S['wan_rfc1918_spoof']))$b.='<p class="mut">In doppio NAT, su bond0 condivisa o con topologia incerta il blocco viene sospeso per non interrompere la rete.</p>';
+    $b.='</div>';
     echo s_form('setup', $b, 'p=setup') . '</div>';
     echo '<div class=card><h3>IP forwarding del kernel</h3><p>Stato attuale: ' . ($fw === '1' ? '<span class="b b-ACCEPT">attivo</span>' : '<span class="b b-DROP">disattivo</span>') . ' — necessario per fare da router/NAT.</p>
 <form method=post class=ops data-iptm-layout="ui-491198ddb7">' . fh('p=setup') . '<input type=hidden name=action value=forward_sysctl><button name=v value=1 class=g>Attiva (persistente)</button><button name=v value=0 class=d disabled title="Disponibile soltanto da console per sicurezza">Disattiva (solo console)</button></form></div>';
@@ -655,6 +678,7 @@ function opt_rows(array $S, array $defs): string {   // [chiave, tipo(r|t), etic
 function pg_security() {
     $S = S_get(); wan_warn($S);
     echo '<div class="msg"><b>Preflight &amp; Commit sicurezza:</b> la procedura guidata interattiva è in <a href="?p=health#health-policy"><b>Sistema → Salute DietPi</b></a>. In questa pagina puoi gestire singole opzioni della policy; QoS rimane indipendente.</div>';
+    global $M; echo iptm_policy_review_ui(ser($M),$S);
     echo '<div class="msg"><b>Modalità anti-disconnessione:</b> disabilitate nel backend le regole raw rpfilter, SYNPROXY, NOTRACK loopback e altre protezioni non sicure sulla WAN condivisa. Le vecchie bozze contenenti tali regole vengono rifiutate da Applica, anche con Forza. <a href="?p=apply">Controlla e rigenera la bozza</a>.</div>';
     echo '<div class="card"><strong>SSH instabile?</strong> ' . 'Ripristina l’accesso dal PC che usa questa console. Non riavvia né sostituisce le regole firewall.'
         . '<form method="post">'.fh('p=security')
@@ -700,7 +724,7 @@ function pg_security() {
         '</div></details><details class=fw-acc><summary><span>Accesso servizi e anti brute-force</span><small>SSH, Telnet e port knocking</small></summary><div class=fw-acc-body>' . opt_rows($S, [
         ['ssh_acc', 'r', 'Limiti SSH per rete (connlimit + recent)', 'Per ogni rete: max connessioni simultanee e max nuovi tentativi nel periodo.'], ['ssh_nets', 't', 'Reti', 'CIDR separati da virgola.', '420px'],
         ['ssh_acc_port', 't', 'Porta SSH'], ['ssh_conn', 't', 'Max connessioni simultanee'], ['ssh_hits', 't', 'Max tentativi nel periodo'], ['ssh_secs', 't', 'Periodo (secondi)'], ['ssh_name', 't', 'Nome lista «recent»', '', '160px'],
-        ['ssh_limit', 'r', 'Limita SSH dal WAN', 'Dopo N nuove connessioni nel periodo, scarta.'], ['ssh_port', 't', 'Porta SSH (WAN)'], ['telnet_limit', 'r', 'Limita Telnet dal WAN'], ['telnet_port', 't', 'Porta Telnet'],
+        ['ssh_limit', 'r', 'Limita SSH dal WAN', 'Dopo N nuove connessioni nel periodo, scarta.'], ['ssh_port', 't', 'Porta SSH (WAN)'], 
         ['lim_hits', 't', 'Max connessioni nel periodo (WAN)'], ['lim_secs', 't', 'Periodo (WAN, secondi)'],
         ['knock_on', 'r', 'Port knocking', 'La porta resta chiusa finché non «bussi» in ordine sulle porte indicate.'], ['knock_ports', 't', 'Sequenza di porte TCP', '2 o più, es. 7000,8000,9000', '260px'], ['knock_target', 't', 'Porta da aprire'], ['knock_secs', 't', 'Secondi di apertura'], ['knock_nets', 't', 'Solo da queste reti (opz.)', 'CIDR separati da virgola.', '300px']]) .
         '</div></details><details class=fw-acc><summary><span>Chiusura e policy finale</span><small>Porte non autorizzate e DROP finale</small></summary><div class=fw-acc-body>' . opt_rows($S, [
@@ -709,7 +733,7 @@ function pg_security() {
         ['logdrop_on', 'r', 'Gestisci la catena di scarto con log', 'Crea il log con limiti per sorgente (utile a CrowdSec). Il nome della catena è in Setup.'],
         ['ld_src_rate', 't', 'Log: soglia per sorgente'], ['ld_src_burst', 't', 'Log: burst per sorgente'], ['ld_glob_rate', 't', 'Log: tetto globale'], ['ld_glob_burst', 't', 'Log: burst globale'], ['ld_prefix', 't', 'Prefisso nel log', '', '200px']]) .
         '</div></details><details class=fw-acc><summary><span>Anti-lockout e hardening avanzato</span><small>Port scan, SYNPROXY, stealth e protezioni host</small></summary><div class=fw-acc-body><p class=mut>Ispirate a pfSense/OPNsense, alle guide CIS e a iptables-essentials. Le opzioni «dal WAN» richiedono la WAN definita in Setup.</p>' . opt_rows($S, [
-        ['lockout_on', 'r', 'Anti-lockout (gestione sempre raggiungibile)', 'Come in pfSense: la LAN può sempre aprire SSH e questa pagina, qualunque cosa blocchino liste o regole.'], ['mgmt_ports', 't', 'Porte di gestione', 'es. 22,80,443', '200px'],
+        ['lockout_on', 'r', 'Anti-lockout (gestione sempre raggiungibile)', 'Mantiene aperte le porte di gestione dalla LAN; se la protezione SSH è attiva, SSH viene filtrato da connlimit/recent prima delle aperture generiche.'], ['mgmt_ports', 't', 'Porte di gestione', 'es. 22,80,443', '200px'],
         ['drop_frag', 'r', 'Scarta i frammenti IP', 'Raro nel traffico legittimo; usato in alcuni attacchi.'],
         ['portscan', 'r', 'Rilevamento port scan', 'Chi tocca troppe porte chiuse viene bannato. Le reti locali sono escluse. Parametri configurabili sotto.'],
         ['ps_hits', 't', 'Port scan: tentativi (hitcount)', 'Soglia di porte diverse toccate (default 14)', '120px'],
@@ -751,8 +775,9 @@ function svc_table(string $pk, array $rows, bool $fwd): string {
 }
 function pg_router() {
     $S = S_get();
-    $b = '<h3>Servizi del router (INPUT)</h3><p class=mut>Traffico <b>verso questo host</b> da accettare. Ogni riga: interfaccia, sorgente, destinazione, protocollo, porte. Le righe «dopo SSH» vengono valutate dopo i limiti SSH.</p>' . svc_table('s_in', $S['svc_in'], false) .
+    $b = '<div class="msg warn"><b>Scope LAN e controllo regole:</b> una subnet sorgente non identifica la scheda di ingresso. Con WAN dedicata IPTM esclude la WAN dagli ACCEPT LAN; con LAN dedicata puoi impostarla in Setup. Le regole scritte manualmente richiedono verifica. <a href="?p=rulesaudit">Analizza bozza</a>.</div><h3>Servizi del router (INPUT)</h3><p class=mut>Traffico <b>verso questo host</b> da accettare. Ogni riga: interfaccia, sorgente, destinazione, protocollo, porte. Le righe «dopo SSH» vengono valutate dopo i limiti SSH.</p>' . svc_table('s_in', $S['svc_in'], false) .
         '<h3>Regole di transito (FORWARD)</h3><p class=mut>Traffico <b>attraverso</b> il router da accettare (VPN, uscita verso Internet, tra subnet…).</p>' . svc_table('s_fw', $S['svc_fwd'], true);
+    global $M; echo iptm_policy_review_ui(ser($M),$S);
     echo '<div class=card><h2>Accesso al router e transito</h2>' . s_form('router', $b, 'p=router') . '</div>';
 }
 function pg_import() {

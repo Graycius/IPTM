@@ -100,7 +100,7 @@ function iptm_recovery_prepare(string $snapshot, string $family): array {
     if($testRc!==0)return [1,'','Preflight delle vecchie regole fallito: '.herr($out.$testErr)];
     return [0,$prepared,$err];
 }
-function do_apply(int $secs, string $fam = '4', bool $force = false): string {
+function do_apply(int $secs, string $fam = '4', bool $force = false, bool $confirmDnsGuardRemoval = false): string {
     $GLOBALS['apply_notes'] = [];
     $GLOBALS['_iptm_post_stage']='firewall:locking';
     // Serialize applies before reading pending/draft; competing POSTs must not race
@@ -126,6 +126,11 @@ function do_apply(int $secs, string $fam = '4', bool $force = false): string {
     // This guard is mandatory, including with the 'force' checkbox.
     if ($fam === '4' && ($ipv6Risk = iptm_mac_ipv6_guard()) !== '') return $ipv6Risk;
     $txt = $fam === '6' ? v6_get() : $onDiskDraft; // immutable snapshot already revision-checked
+    if ($fam === '4' && !$confirmDnsGuardRemoval) {
+        try {$removed=iptm_dns_guard_losses(rules_live(),$txt);}
+        catch(RuntimeException $ex){return 'Confronto protezioni DNS non disponibile: '.$ex->getMessage();}
+        if($removed)return 'Protezione DNS/DoT su disco mancante dalla bozza: '.implode(', ',$removed).'. Ripristina in Setup oppure conferma espressamente la rimozione nella pagina Applica. Nessuna regola live modificata.';
+    }
     if ($fam === '4' && ($bad = iptm_reject_unsafe_rules($txt)) !== '') return $bad;
     if ($fam === '4' && ($iotIssues = iptm_iot_rules_diagnose($txt)))
         return 'Policy IoT non applicabile: '.implode('; ', $iotIssues).'. Rigenera la bozza IoT: nessuna regola caricata.';
@@ -232,14 +237,6 @@ function do_apply(int $secs, string $fam = '4', bool $force = false): string {
     }
     if (time() >= (int)(json_decode($pendingData, true)['until'] ?? 0))
         return 'Finestra di sicurezza scaduta durante il preflight: nessuna regola caricata; watchdog mantenuto per riconciliazione.';
-    // A transparent HTTP redirect would move FORWARD traffic into INPUT and
-    // could bypass a newly applied IoT/MAC policy. Remove only IPTM-owned NAT
-    // interception before changing firewall tables; squid remains available.
-    if ($fam === '4') {
-        [$cacheOffRc,$cacheOffOut,$cacheOffErr] = priv('cache-proxy',null,['failopen']);
-        if ($cacheOffRc !== 0)
-            return 'Protezione proxy: impossibile rimuovere il redirect HTTP prima di Apply. Regole non caricate; watchdog rimane attivo. '.herr($cacheOffOut.$cacheOffErr);
-    }
     $GLOBALS['_iptm_post_stage']='firewall:restore_live';
     [$c, $o, $e] = priv('restore' . $sx, $txt);
     if ($c) {
@@ -325,10 +322,6 @@ function confirm_pending(): string {
         priv('ipset-persist');
         @copy(DATA_DIR . '/settings.json', DATA_DIR . '/last-good.json');
         @file_put_contents(DATA_DIR . '/last-good.time', (string)time());
-        // Re-enable only if current FORWARD security policy permits the HTTP
-        // proxy's alternate INPUT/OUTPUT path; otherwise leave direct traffic.
-        [$cacheRc,$cacheOut,$cacheErr]=priv('cache-proxy',null,['reconcile']);
-        if ($cacheRc!==0)$GLOBALS['apply_notes'][]=['err','Proxy HTTP: controllo dopo Apply non riuscito: '.herr($cacheOut.$cacheErr)];
     } else iptm_draft_remove_if_same($txt,'6');
     return '';
 }

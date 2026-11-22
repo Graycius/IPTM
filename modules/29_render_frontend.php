@@ -55,7 +55,7 @@ function iptm_page_description(string $page): string {
 // Stable ?p= routes and POST action names stay unchanged to preserve bookmarks and forms.
 $MENU = [
     'overview' => ['Panoramica', ['status'=>'Stato generale', 'topology'=>'Mappa della rete', 'stats'=>'Statistiche', 'conns'=>'Connessioni', 'monitor'=>'Monitoraggio']],
-    'uplink' => ['Connessione e rete', ['multinic'=>'Interfacce e VLAN', 'setup'=>'Indirizzamento e NAT', 'router'=>'Routing e servizi', 'sqm'=>'Qualità del traffico', 'performance'=>'Prestazioni e cache', 'vpn'=>'VPN e tunnel', 'forward'=>'Porte inoltrate', 'v6'=>'IPv6', 'v6convert'=>'Conversione IPv6']],
+    'uplink' => ['Connessione e rete', ['multinic'=>'Interfacce e VLAN', 'setup'=>'Indirizzamento e NAT', 'router'=>'Routing e servizi', 'sqm'=>'Qualità del traffico', 'performance'=>'Prestazioni firewall', 'vpn'=>'VPN e tunnel', 'forward'=>'Porte inoltrate', 'v6'=>'IPv6', 'v6convert'=>'Conversione IPv6']],
     'clients' => ['Rete locale', ['devices'=>'Dispositivi', 'zones'=>'Zone e isolamento', 'access'=>'Permessi di accesso', 'deviceinsights'=>'Attività dispositivi', 'apps'=>'Servizi e porte']],
     'dns' => ['DNS e privacy', ['dns'=>'Resolver DNS', 'piholelists'=>'Filtri Pi-hole', 'dnsguard'=>'DNS protetto', 'piholehealth'=>'Salute Pi-hole', 'unbound'=>'Unbound', 'dnsaudit'=>'Audit DNS']],
     'firewall' => ['Protezione', ['security'=>'Firewall', 'rules'=>'Regole', 'rulesaudit'=>'Analizza rules.v4', 'rule'=>'Nuova regola', 'wizard'=>'Procedura guidata', 'chains'=>'Catene', 'crowdsec'=>'CrowdSec', 'ips'=>'Suricata', 'lists'=>'Liste e GeoIP', 'harden'=>'Hardening', 'avscan'=>'Antivirus', 'traffic'=>'Analisi HTTPS', 'attacks'=>'Attacchi', 'raw'=>'Editor regole', 'manual'=>'Conversione manuale']],
@@ -96,7 +96,7 @@ $MENU_ALIASES = [
     'multinic' => 'network fabric dual lan wan bridge bonding vlan switch rete interfacce secondo dhcp',
     'setup' => 'nat interfacce legacy route router lan wan',
     'sqm' => 'cake traffic shaping qos bandwidth upload download speedtest calibrazione velocità',
-    'performance'=>'proxy caching squid http performance velocita CDN CDN DNS regole firewall iptables sicurezza',
+    'performance'=>'prestazioni velocita audit overhead regole firewall iptables CAKE RTT sicurezza DNS',
     'dnsguard' => 'antidpi anti-dpi zapret dnscrypt tls dot doh privacy',
     'dns' => 'pihole pi-hole ftl dhcp dnscrypt unbound',
     'piholelists' => 'adlist whitelist regex rethinkdns importazione',

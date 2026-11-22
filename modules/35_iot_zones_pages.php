@@ -135,6 +135,7 @@ function pg_zones() {
     $inventory=iptm_security_read('mac-inventory');
     $inventoryReady=!empty($inventory['ok']);
     $iotPolicySaved=(array)($S['iot_policies']??[]);
+    $iotPolicyCount=count(array_filter($iotPolicySaved,fn($flags)=>is_array($flags)&&$flags));
     $savedKinds=(array)($S['iot_devices']??[]);
     $selectedSaved=array_fill_keys((array)($S['iot_selected_macs']??[]),true);
     $iotSource=[];
@@ -160,7 +161,8 @@ function pg_zones() {
     }
     $suggested=count(array_filter($iotSource,fn($dev)=>$dev['hint']));
     echo '<section class="iptm-zone-policy" aria-label="Dispositivi e filtri IoT">';
-    echo '<h3>Dispositivi e filtri IoT</h3><p><a class="btn s" href="?p=topology">Apri mappa interattiva della rete</a></p>'; 
+    echo '<h3>Dispositivi e filtri IoT</h3><p><a class="btn s" href="?p=topology">Apri mappa interattiva della rete</a></p>';
+    echo '<p class="msg"><b>Policy IoT salvate: '.(int)$iotPolicyCount.'.</b> Le sezioni IPTM:iot-&lt;mac&gt; rimangono nella bozza finché sono abilitate qui. Rimuovi i filtri soltanto deselezionandoli e salvando: nessuna disattivazione automatica.</p>'; 
     echo '<p class="mut">Una riga per dispositivo. <b>Seleziona</b> prepara l’anteprima MAC. <b>Salva tutte le selezioni</b> memorizza classi, selezione e filtri IoT in una singola bozza, senza applicazione al kernel. Passa sui flag per la descrizione completa.</p>';
     if ($inventoryReady) {
         echo '<p class="mut">Dispositivi individuati: '.count((array)($inventory['devices']??[])).' · IoT suggeriti dal vendor: '.$suggested.'. Rilevazione OUI locale, senza inviare indirizzi MAC online. <a href="?p=devices">Inventario e classificazione</a></p>';
