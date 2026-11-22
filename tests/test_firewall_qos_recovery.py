@@ -203,7 +203,7 @@ class QosLifecycleTests(unittest.TestCase):
         with patch.object(qos,'read',side_effect=reader), \
              patch.object(qos,'atom'), \
              patch.object(qos,'owned'), \
-             patch.object(qos,'qroots',return_value=[{'handle':'5ca1:'}]), \
+             patch.object(qos,'qroots',side_effect=lambda dev:[{'handle':'5ca1:' if dev=='eth0' else '5ca2:'}]), \
              patch.object(qos,'latency_measurement',return_value=99), \
              patch.object(qos,'adaptive_qdisc_bytes',return_value=None), \
              patch.object(qos.time,'time',return_value=4000), \
@@ -227,7 +227,7 @@ class QosLifecycleTests(unittest.TestCase):
         with patch.object(qos,'read',side_effect=reader), \
              patch.object(qos,'atom'), \
              patch.object(qos,'owned'), \
-             patch.object(qos,'qroots',return_value=[{'handle':'5ca1:'}]), \
+             patch.object(qos,'qroots',side_effect=lambda dev:[{'handle':'5ca1:' if dev=='eth0' else '5ca2:'}]), \
              patch.object(qos,'latency_measurement',return_value=79), \
              patch.object(qos,'adaptive_qdisc_bytes',return_value=12_000_000), \
              patch.object(qos.time,'time',return_value=4000), \
@@ -251,7 +251,7 @@ class QosLifecycleTests(unittest.TestCase):
         with patch.object(qos,'read',side_effect=reader), \
              patch.object(qos,'atom'), \
              patch.object(qos,'owned'), \
-             patch.object(qos,'qroots',return_value=[{'handle':'5ca1:'}]), \
+             patch.object(qos,'qroots',side_effect=lambda dev:[{'handle':'5ca1:' if dev=='eth0' else '5ca2:'}]), \
              patch.object(qos,'latency_measurement',return_value=20), \
              patch.object(qos,'adaptive_qdisc_bytes',return_value=12_000_000), \
              patch.object(qos.time,'time',return_value=4000), \
