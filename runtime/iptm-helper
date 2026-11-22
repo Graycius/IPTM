@@ -4338,6 +4338,12 @@ if [ -n "$SQM_IF" ]; then
             have=$(ipset list -n 2>/dev/null)
             [ -f "$DDIR/sets.list" ] && while read -r s; do [[ "$s" =~ ^[A-Za-z0-9_.-]{1,31}$ ]] && { grep -qxF -- "$s" <<< "$have" || ipset create "$s" hash:net family inet hashsize 1024 maxelem 262144 -exist 2>/dev/null; }; done < "$DDIR/sets.list"
             exit 0 ;;
+  rollback-prepare)
+             fam="${2:-}"
+             [[ "$fam" =~ ^[46]$ ]] || exit 2
+             recovery="/usr/local/lib/iptables-manager/web/releases/$(iptm_print_version)/extensions/firewall_recovery.py"
+             [ -f "$recovery" ] && [ ! -L "$recovery" ] || { echo 'preparatore rollback non installato' >&2; exit 70; }
+             exec /usr/bin/python3 -B "$recovery" "$fam" ;;
   rollback-arm)   # watchdog univoco per transazione: un job vecchio non può agire sulla nuova
             s="${2:-}"; f="${3:-4}"; tx="${4:-}"
             [[ "$s" =~ ^[0-9]{2,3}$ ]] && [[ "$f" =~ ^[46]$ ]] || exit 2
@@ -4404,16 +4410,24 @@ except (OSError,ValueError,AssertionError,AttributeError,TypeError):
     sys.exit(1)
 PY_PENDING_CHECK
             [ "$?" -eq 0 ] || exit 0  # watchdog precedente o transazione differente
-            # CrowdSec IPSet are dynamic, externally owned objects. Never create,
-            # flush or overwrite them from IPTM rollback. Validate the complete
-            # candidate with xt_set before touching live iptables. The bouncer
-            # may recreate them later; keep pending when they are unavailable.
+            # Never restore an untested historical snapshot: a CrowdSec
+            # decision set may disappear between Apply and the watchdog firing.
+            # Only obsolete direct DROP references are reconcilable; all
+            # non-CrowdSec/malformed rules remain hard blockers.
+            rollback_source="$D/rollback$([ "$f" = 6 ] && printf 6).rules"
+            [ -s "$rollback_source" ] || { echo 'Rollback: snapshot mancante' >&2; exit 70; }
+            rollback_tmp=$(mktemp /tmp/.iptm-recovery.XXXXXXXX) || exit 70
+            trap 'rm -f -- "$rollback_tmp"' EXIT
+            if ! "$BASH" "$0" rollback-prepare "$f" < "$rollback_source" > "$rollback_tmp"; then
+              echo 'Rollback: preflight IPSet non sicuro; pending conservato' >&2; exit 70
+            fi
+            [ -s "$rollback_tmp" ] || { echo 'Rollback: snapshot vuoto' >&2; exit 70; }
             if [ "$f" = 6 ]; then
-              [ -s "$D/rollback6.rules" ] && ip6tables-restore --test < "$D/rollback6.rules" || { echo 'Rollback IPv6: dipendenze non verificabili; pending preservato' >&2; exit 1; }
-              ip6tables-restore < "$D/rollback6.rules" || { echo "Rollback IPv6 non riuscito; stato preservato" >&2; exit 1; }
+              ip6tables-restore --test < "$rollback_tmp" || { echo 'Rollback IPv6: test non superato; pending preservato' >&2; exit 70; }
+              ip6tables-restore < "$rollback_tmp" || { echo "Rollback IPv6 non riuscito; pending preservato" >&2; exit 70; }
             else
-              [ -s "$D/rollback.rules" ] && iptables-restore --test < "$D/rollback.rules" || { echo 'Rollback IPv4: set/catene non verificabili; pending preservato' >&2; exit 1; }
-              iptables-restore < "$D/rollback.rules" || { echo "Rollback IPv4 non riuscito; stato preservato" >&2; exit 1; }
+              iptables-restore --test < "$rollback_tmp" || { echo 'Rollback IPv4: test non superato; pending preservato' >&2; exit 70; }
+              iptables-restore < "$rollback_tmp" || { echo "Rollback IPv4 non riuscito; pending preservato" >&2; exit 70; }
             fi
             rm -f "$D/pending.json" || exit 1
             "$BASH" "$0" post || true
