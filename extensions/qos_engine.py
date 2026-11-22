@@ -920,11 +920,15 @@ def adapt_tick():
     trial=cfg.get('trial')
     if isinstance(trial,dict):
         direction=trial.get('direction')
-        if direction not in ('up','down') or trial.get('kind') not in ('reduce','recover'):
+        if direction not in ('up','down'):
             raise QosError('journal prova RTT non valido; ripristino manuale richiesto')
+        # Pre-upgrade controllers only performed recovery: accept their journal.
+        kind=trial.get('kind','recover')
+        if kind not in ('reduce','recover'):
+            raise QosError('tipo prova RTT non riconosciuto')
         sufficient=(elapsed>=20 and traffic[direction]>=1_000_000)
         target=float(trial['initial_rtt'])
-        improved=(sufficient and (rtt<=target-5 if trial['kind']=='reduce' else rtt<=target+2))
+        improved=(sufficient and (rtt<=target-5 if kind=='reduce' else rtt<=target+2))
         if not improved:
             try:adapt_change_one(state,direction,int(trial['old_rate']))
             except QosError:
