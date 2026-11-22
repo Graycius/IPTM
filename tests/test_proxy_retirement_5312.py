@@ -1,11 +1,30 @@
 #!/usr/bin/env python3
 """Offline-only tests for decommissioning of legacy IPTM-managed proxy."""
-import importlib.util, json, pathlib, tempfile, unittest
+import importlib.util, json, os, pathlib, tempfile, unittest
+from contextlib import contextmanager
 from unittest.mock import patch
 from types import SimpleNamespace
 R=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('iptm_retire',R/'extensions/retire_legacy_proxy.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+
+@contextmanager
+def test_temp_paths_owned_by_root(root):
+    """Simulate root-owned files under a non-root CI runner, without sudo.
+
+    Production ownership validation is unchanged. This fixture changes only
+    st_uid reported for files created within our isolated TemporaryDirectory.
+    """
+    original_stat=pathlib.Path.stat
+    def stat_with_test_owner(path, *args, **kwargs):
+        value=original_stat(path, *args, **kwargs)
+        if path == root or root in path.parents:
+            fields=list(value)
+            fields[4]=0  # stat_result.st_uid
+            return os.stat_result(fields)
+        return value
+    with patch.object(pathlib.Path,'stat',stat_with_test_owner):
+        yield
 
 class Tests(unittest.TestCase):
     def test_01_empty_install_fails_if_nat_hooks_remain(self):
@@ -26,7 +45,7 @@ class Tests(unittest.TestCase):
     def test_03_foreign_unit_rejected_before_helper(self):
         with tempfile.TemporaryDirectory() as td:
             p=pathlib.Path(td);unit=p/'iptm-cache-proxy.service';unit.write_text('[Unit]\nDescription=UNRELATED\n')
-            with patch.object(m,'LEGACY_LOG',p/'no-tool-log'),patch.object(m,'DIRECTORIES',(p/'state',)),patch.object(m,'UNITS',{unit:'IPTM owned marker'}),\
+            with test_temp_paths_owned_by_root(p), patch.object(m,'LEGACY_LOG',p/'no-tool-log'),patch.object(m,'DIRECTORIES',(p/'state',)),patch.object(m,'UNITS',{unit:'IPTM owned marker'}),\
                  patch.object(m,'execute',return_value=SimpleNamespace(stdout='inactive\n',returncode=3)),\
                  patch.object(m.os,'geteuid',return_value=0):
                 with self.assertRaises(m.RetireError):m.retire('5.30.11')
@@ -49,7 +68,7 @@ class Tests(unittest.TestCase):
                 if args[:3]==('/usr/bin/python3','-B',str(worker)):
                     return SimpleNamespace(stdout=json.dumps({'ok':True,'redirect':False}),returncode=0)
                 return SimpleNamespace(stdout='inactive\n',returncode=3)
-            with patch.object(m,'LEGACY_LOG',p/'no-tool-log'),patch.object(m,'DIRECTORIES',(data,)),patch.object(m,'UNITS',{unit:'Description=OWNER'}),\
+            with test_temp_paths_owned_by_root(p), patch.object(m,'LEGACY_LOG',p/'no-tool-log'),patch.object(m,'DIRECTORIES',(data,)),patch.object(m,'UNITS',{unit:'Description=OWNER'}),\
                  patch.object(m,'CONFIG',p/'not-present'),patch.object(m,'REDIRECT',data/'redirect.json'),\
                  patch.object(m,'ROOT',root),patch.object(m,'execute',side_effect=command),\
                  patch.object(m,'nat_residue',return_value=['nft:PREROUTING']),\
@@ -68,7 +87,7 @@ class Tests(unittest.TestCase):
                 if args[:3]==('/usr/bin/python3','-B',str(worker)):
                     return SimpleNamespace(stdout=json.dumps({'ok':True,'redirect':False}),returncode=0)
                 return SimpleNamespace(stdout='inactive\n',returncode=3)
-            with patch.object(m,'LEGACY_LOG',p/'no-tool-log'),patch.object(m,'DIRECTORIES',(data,)),patch.object(m,'UNITS',{unit:'Description=OWNER'}),\
+            with test_temp_paths_owned_by_root(p), patch.object(m,'LEGACY_LOG',p/'no-tool-log'),patch.object(m,'DIRECTORIES',(data,)),patch.object(m,'UNITS',{unit:'Description=OWNER'}),\
                  patch.object(m,'CONFIG',p/'not-present'),patch.object(m,'REDIRECT',data/'redirect.json'),\
                  patch.object(m,'ROOT',root),patch.object(m,'execute',side_effect=command),\
                  patch.object(m,'nat_residue',return_value=[]),patch.object(m.os,'geteuid',return_value=0):
