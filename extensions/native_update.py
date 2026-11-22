@@ -147,6 +147,7 @@ def preflight_network_transactions(target_version):
     the watchdog while its kernel topology is live would orphan its rollback.
     """
     candidates = (
+        '/var/lib/iptm-qos-engine/unshaped-calibration.json',
         '/var/lib/iptm-qos-engine/active.json',
         '/var/lib/iptm-sqm-uplink/state.json',
         '/var/lib/iptm-sqm-reconcile/state.json',
@@ -161,6 +162,8 @@ def preflight_network_transactions(target_version):
         try:doc=json.loads(p.read_text())
         except (ValueError,UnicodeError):raise UpdateError('Journal rete non valido: '+raw)
         if not isinstance(doc,dict):raise UpdateError('Journal rete non valido: '+raw)
+        if raw.endswith('/unshaped-calibration.json') and doc.get('state')=='pending':
+            raise UpdateError('Calibrazione senza shaping in corso: attendere il ripristino CAKE')
         if doc.get('state') in ('pending','applying','rollback-failed','confirmed','reconciling') or doc.get('status') in ('pending','applying','rollback-failed','confirmed','reconciling'):
             if doc.get('version')!=target_version:
                 if raw.endswith('/iptm-qos-engine/active.json') and doc.get('state')=='confirmed' and verified_confirmed_qos(doc):
@@ -331,6 +334,7 @@ def prune_old_releases(current, previous, *, base=RELEASE_BASE, days=7):
         # Refuse pruning during an unresolved update or active QoS/NM trial.
         if (STATE/'pending.json').exists():return dict(report,reason='pending-update')
         for candidate in ('/var/lib/iptm-qos-engine/active.json',
+                          '/var/lib/iptm-qos-engine/unshaped-calibration.json',
                           '/var/lib/iptm-nm-editor/trial.json'):
             f=pathlib.Path(candidate)
             if f.is_file():

@@ -13,7 +13,7 @@ PLAN=BASE/'plan.json'; ACTIVE=BASE/'active.json'
 IFACE=re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$')
 TOKEN=re.compile(r'^[a-f0-9]{64}$')
 CHAIN=re.compile(r'^IPTM_QP_[A-F0-9]{8}$')
-VERSION='5.30.1'
+VERSION='5.30.4'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-policy-restore.service')
 SCRIPT=f'/usr/local/lib/iptables-manager/web/releases/{VERSION}/extensions/qos_policy.py'
 DSCP={'realtime':46,'interactive':34,'normal':0,'background':8}

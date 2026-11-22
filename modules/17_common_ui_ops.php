@@ -389,7 +389,7 @@ function ops_notify_watch(): void {
 // Operational summaries integrated from the useful concepts of CrowdSec Manager,
 // EveBox, Scirius and Cockpit. All data is local, bounded and escaped.
 function iptm_operator_insights(string $mode): void {
-    if (!in_array($mode, ['crowdsec','suricata','network','qos'], true)) return;
+    if (!in_array($mode, ['crowdsec','suricata','network'], true)) return;
     [$code, $output] = priv('operator-insights', null, [$mode]);
     $data = $code === 0 ? json_decode($output, true) : null;
     echo '<section class="card iptm-insights"><h3>Centro operativo · '.h(ucfirst($mode)).'</h3>';
@@ -425,13 +425,6 @@ function iptm_operator_insights(string $mode): void {
             echo '<tr><td>'.h((string)($dev['device']??'')).'</td><td>'.h((string)($dev['type']??'')).'</td><td>'.h((string)($dev['state']??'')).'</td></tr>';
         }
         echo '</table></div>';
-    } elseif ($mode === 'qos') {
-        echo '<p class="msg warn">Equivalenza cFosSpeed non certificata: servono benchmark reali e confrontabili.</p>';
-        echo '<table><tr><th>Funzionalità</th><th>Stato verificabile</th></tr>';
-        foreach ((array)($data['features']??[]) as $key=>$value) {
-            echo '<tr><td>'.h(str_replace('_',' ',$key)).'</td><td>'.h((string)$value).'</td></tr>';
-        }
-        echo '</table>';
     }
     echo '</section>';
 }

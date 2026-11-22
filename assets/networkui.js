@@ -1,4 +1,4 @@
-/* IPTM 5.30.1 - Progressive accessibility for all 59 existing page handlers.
+/* IPTM 5.30.4 - Progressive accessibility for all 59 existing page handlers.
  * Does not submit forms, bypass server checks, or write to firewall/network. */
 (()=>{
   'use strict';

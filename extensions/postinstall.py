@@ -9,7 +9,7 @@ No tc, iptables, NetworkManager or DNS configuration writes are performed here.
 """
 from __future__ import annotations
 import base64, fcntl, importlib.util, json, os, pathlib, re, subprocess, sys, tempfile, time
-VERSION='5.30.1'
+VERSION='5.30.4'
 ROOT=pathlib.Path('/usr/local/lib/iptables-manager')
 ENGINE=ROOT/f'web/releases/{VERSION}/extensions/qos_engine.py'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-watchdog.service')
@@ -62,6 +62,12 @@ def preflight():
         content=UNIT.read_text()
         if 'Description=IPTM QoS independent rollback watchdog' not in content or 'qos_engine.py watchdog' not in content:
             raise PostinstallError('Watchdog non riconosciuto')
+    pending_unshape=STATE.parent/'unshaped-calibration.json'
+    if pending_unshape.exists() or pending_unshape.is_symlink():
+        protected(pending_unshape)
+        doc=json.loads(pending_unshape.read_text())
+        if not isinstance(doc,dict) or doc.get('state')=='pending':
+            raise PostinstallError('Prova CAKE unlimited pendente: handoff rinviato')
     data=owner()
     if data and data.get('state') in ('pending','applying','rollback-failed','reconciling'):
         raise PostinstallError('Transazione QoS pendente o rollback fallito: handoff sospeso')
@@ -233,6 +239,19 @@ def cleanup_postcommit():
     except (OSError,ValueError,subprocess.TimeoutExpired) as exc:
         return {'ok':False,'error':str(exc)[:240]}
 
+def ensure_retention():
+    """Install conservative daily retention after verified update, no deletion."""
+    worker=ENGINE.with_name('retention_manager.py')
+    if not worker.is_file() or worker.is_symlink():return {'ok':False,'error':'retention non disponibile'}
+    try:
+        r=call('/usr/bin/python3','-B',str(worker),'install',timeout=45,check=False)
+        if r.returncode:return {'ok':False,'error':(r.stderr or r.stdout)[-250:]}
+        result=json.loads(r.stdout)
+        return result if isinstance(result,dict) else {'ok':False,'error':'risposta retention invalida'}
+    except (OSError,ValueError,subprocess.TimeoutExpired) as exc:
+        return {'ok':False,'error':str(exc)[:220]}
+
+
 def ensure():
     if PENDING.exists() or PENDING.is_symlink():
         raise PostinstallError('Aggiornamento ancora in transazione: handoff rimandato')
@@ -248,6 +267,7 @@ def ensure():
         cleanup=cleanup_postcommit()
         result=_ensure_locked()
         result['cleanup']=cleanup
+        result['retention']=ensure_retention()
         return result
 
 def schedule():

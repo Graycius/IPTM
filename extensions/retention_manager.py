@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IPTM 5.30.1: conservative retention of IPTM-owned completed artifacts.
+"""IPTM 5.30.4: conservative retention of IPTM-owned completed artifacts.
 
 CLI is root-only. Preview and run share the SAME selection function. No deletion of
 live files, user-named backups, journals, locks, pending transactions or external logs.
@@ -130,6 +130,21 @@ def active_recovery(data,rec):
             data/'backups/dns-guard/pending.json',data/'update-pending.json']
     for f in guards:
         if f.is_symlink() or f.exists():return True
+    # Never retire backups while a QoS or network transaction may need them.
+    for path in (Path('/var/lib/iptm-qos-engine/active.json'),
+                 Path('/var/lib/iptm-qos-engine/unshaped-calibration.json'),
+                 Path('/var/lib/iptm-nm-editor/trial.json'),
+                 Path('/var/lib/iptm-network-runtime/transaction.json'),
+                 Path('/var/lib/iptm-fabric-runtime/fabric-trial.json'),
+                 Path('/var/lib/iptm-alias-trial/state.json'),
+                 Path('/var/lib/iptm-update-recovery/pending.json')):
+        if path.is_symlink():return True
+        if not path.exists():continue
+        journal=safe_json(path)
+        if not isinstance(journal,dict) or not journal:return True
+        active={'pending','applying','reconciling','rollback-failed',
+                'rollback-incomplete','starting','trial','recovery-needed'}
+        if journal.get('state') in active or journal.get('status') in active:return True
     if rec.exists():
         if rec.is_symlink():return True
         for p in rec.glob('*.json'):
@@ -331,7 +346,7 @@ def install(release=None,data=DATA):
     unit=Path('/etc/systemd/system/iptm-retention.service')
     timer=Path('/etc/systemd/system/iptm-retention.timer')
     for p in (unit,timer):
-        if p.exists() and (p.is_symlink() or 'IPTM managed retention' not in p.read_text(errors='replace')[:500]):
+        if (p.exists() or p.is_symlink()) and (p.is_symlink() or 'IPTM managed retention' not in p.read_text(errors='replace')[:500]):
             raise ValueError('unità systemd esistente non riconosciuta: '+str(p))
     atomic_system_file(unit,('[Unit]\nDescription=IPTM managed retention - backups and logs\n'
        'After=local-fs.target\n[Service]\nType=oneshot\nUser=root\n'
