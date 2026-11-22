@@ -1,3 +1,4 @@
+# IPTM 5.30.2: all network regression tests run without changing host firewall or qdiscs.
 name: Syntax and regression checks
 on:
   push:
