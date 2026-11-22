@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 590" role="img" aria-labelledby="title desc">
+<title id="title">IPTM: pannello di gestione della rete</title>
+<desc id="desc">Anteprima schematica: menu laterale e sei accessi Interfacce, Zone, DNS, Accessi, Firewall e Applica.</desc>
+<rect width="1200" height="590" rx="20" fill="#f2f6f9"/>
+<rect width="1200" height="70" rx="20" fill="#ffffff"/>
+<path d="M0 50H1200V70H0Z" fill="#ffffff"/>
+<path d="M0 70H1200" stroke="#dbe4eb" stroke-width="1"/>
+<rect x="26" y="16" width="37" height="37" rx="11" fill="#087b68"/>
+<path d="M44.5 24l11 4.3v8.4c0 7-4.8 11-11 14-6.2-3-11-7-11-14v-8.4Z" fill="none" stroke="white" stroke-width="2"/>
+<text x="77" y="39" font-family="Arial, sans-serif" font-size="23" font-weight="700" fill="#17334e">IPTM</text>
+<text x="77" y="54" font-family="Arial, sans-serif" font-size="10" letter-spacing="1.5" fill="#667e90">NETWORK CONTROL</text>
+<rect x="445" y="16" width="358" height="38" rx="10" fill="#f5f8fa" stroke="#d9e4eb"/>
+<circle cx="469" cy="35" r="6" fill="none" stroke="#73899a" stroke-width="2"/>
+<path d="M474 40l6 6" stroke="#73899a" stroke-width="2"/>
+<text x="492" y="40" font-family="Arial, sans-serif" font-size="14" fill="#718699">Cerca funzioni e strumenti</text>
+<rect x="1066" y="19" width="104" height="33" rx="9" fill="#f2f7fa" stroke="#d9e4eb"/>
+<circle cx="1084" cy="35" r="5" fill="#087b68"/>
+<text x="1096" y="40" font-family="Arial, sans-serif" font-size="12" fill="#29495d">Console</text>
+<rect x="0" y="71" width="225" height="519" fill="#ffffff"/>
+<path d="M225 71V590" stroke="#dbe4eb"/>
+<text x="25" y="111" font-family="Arial, sans-serif" font-size="11" font-weight="700" letter-spacing="1.6" fill="#657e91">RETE E SICUREZZA</text>
+<rect x="15" y="133" width="195" height="45" rx="9" fill="#e8f4f2"/>
+<rect x="15" y="133" width="4" height="45" rx="2" fill="#087b68"/>
+<circle cx="36" cy="156" r="7" fill="none" stroke="#087b68" stroke-width="2"/>
+<text x="54" y="161" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#125d57">Panoramica</text>
+<g font-family="Arial, sans-serif" font-size="14" fill="#334d60">
+<text x="31" y="219">Connessione e rete</text>
+<text x="31" y="267">Rete locale</text>
+<text x="31" y="315">DNS e privacy</text>
+<text x="31" y="363">Protezione</text>
+<text x="31" y="411">Sistema e strumenti</text>
+</g>
+<text x="265" y="123" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#087b68">IPTM  /  PANORAMICA</text>
+<text x="265" y="173" font-family="Arial, sans-serif" font-size="29" font-weight="700" fill="#17334e">Gestisci la rete</text>
+<text x="265" y="201" font-family="Arial, sans-serif" font-size="15" fill="#647f90">Accesso diretto alle aree principali</text>
+<g font-family="Arial, sans-serif">
+<g transform="translate(265 228)">
+<rect width="278" height="93" rx="13" fill="#ffffff" stroke="#d8e3eb"/>
+<rect x="17" y="24" width="43" height="43" rx="10" fill="#eaf3f8"/>
+<text x="38" y="51" text-anchor="middle" font-size="14" font-weight="700" fill="#176596">01</text>
+<text x="75" y="53" font-size="18" font-weight="700" fill="#17334e">Interfacce</text>
+<path d="M251 44l7 6-7 6" fill="none" stroke="#58768b" stroke-width="2"/>
+</g>
+<g transform="translate(557 228)">
+<rect width="278" height="93" rx="13" fill="#ffffff" stroke="#d8e3eb"/>
+<rect x="17" y="24" width="43" height="43" rx="10" fill="#eaf3f8"/>
+<text x="38" y="51" text-anchor="middle" font-size="14" font-weight="700" fill="#176596">02</text>
+<text x="75" y="53" font-size="18" font-weight="700" fill="#17334e">Zone</text>
+<path d="M251 44l7 6-7 6" fill="none" stroke="#58768b" stroke-width="2"/>
+</g>
+<g transform="translate(849 228)">
+<rect width="278" height="93" rx="13" fill="#ffffff" stroke="#d8e3eb"/>
+<rect x="17" y="24" width="43" height="43" rx="10" fill="#eaf3f8"/>
+<text x="38" y="51" text-anchor="middle" font-size="14" font-weight="700" fill="#176596">03</text>
+<text x="75" y="53" font-size="18" font-weight="700" fill="#17334e">DNS</text>
+<path d="M251 44l7 6-7 6" fill="none" stroke="#58768b" stroke-width="2"/>
+</g>
+<g transform="translate(265 335)">
+<rect width="278" height="93" rx="13" fill="#ffffff" stroke="#d8e3eb"/>
+<rect x="17" y="24" width="43" height="43" rx="10" fill="#eaf3f8"/>
+<text x="38" y="51" text-anchor="middle" font-size="14" font-weight="700" fill="#176596">04</text>
+<text x="75" y="53" font-size="18" font-weight="700" fill="#17334e">Accessi</text>
+<path d="M251 44l7 6-7 6" fill="none" stroke="#58768b" stroke-width="2"/>
+</g>
+<g transform="translate(557 335)">
+<rect width="278" height="93" rx="13" fill="#ffffff" stroke="#d8e3eb"/>
+<rect x="17" y="24" width="43" height="43" rx="10" fill="#eaf3f8"/>
+<text x="38" y="51" text-anchor="middle" font-size="14" font-weight="700" fill="#176596">05</text>
+<text x="75" y="53" font-size="18" font-weight="700" fill="#17334e">Firewall</text>
+<path d="M251 44l7 6-7 6" fill="none" stroke="#58768b" stroke-width="2"/>
+</g>
+<g transform="translate(849 335)">
+<rect width="278" height="93" rx="13" fill="#ffffff" stroke="#d8e3eb"/>
+<rect x="17" y="24" width="43" height="43" rx="10" fill="#eaf3f8"/>
+<text x="38" y="51" text-anchor="middle" font-size="14" font-weight="700" fill="#176596">06</text>
+<text x="75" y="53" font-size="18" font-weight="700" fill="#17334e">Applica</text>
+<path d="M251 44l7 6-7 6" fill="none" stroke="#58768b" stroke-width="2"/>
+</g>
+</g>
+<rect x="265" y="461" width="862" height="70" rx="12" fill="#ffffff" stroke="#d8e3eb"/>
+<circle cx="295" cy="496" r="11" fill="#e8f4f2"/>
+<path d="M289 496l4 4 7-9" stroke="#087b68" stroke-width="2.3" fill="none" stroke-linecap="round"/>
+<text x="317" y="493" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#17334e">Gestione e diagnostica integrate</text>
+<text x="317" y="512" font-family="Arial, sans-serif" font-size="12" fill="#647f90">Esempio illustrativo: nessun dato operativo reale</text>
+</svg>
