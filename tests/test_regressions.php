@@ -67,7 +67,7 @@ function jumpLines(array $rules):string {return implode("\n", $rules);}
  [$sections,$warnings]=gen_sections($s);
  tested('T25 normal rule generator succeeds',is_array($sections)&&count($sections)>0);
 // The original input-file incident: sshbf's recent/connlimit must NOT count
-// existing SSH data packets, and trusted management ports must precede policy.
+// existing SSH data packets; new SYN must be checked before any LAN management ACCEPT.
  $s=S_def(); $s['ssh_acc']=1; $s['ssh_nets']='192.168.1.0/24';
  $s['lockout_on']=1; $s['lan_nets']='192.168.1.0/24';
  $s['continuity_priority']=1; [$sections,$warnings]=gen_sections($s);
@@ -76,7 +76,7 @@ function jumpLines(array $rules):string {return implode("\n", $rules);}
  $sn=$ssh['rules']??[];
  tested('T28 established SSH has unconditional session protection',count(array_filter($sn,fn($x)=>str_contains($x,'--ctstate ESTABLISHED,RELATED')&&str_contains($x,'-j ACCEPT')))===1);
  tested('T29 SSH recent/connlimit only count NEW SYN',count(array_filter($sn,fn($x)=>(str_contains($x,'-m recent')||str_contains($x,'-m connlimit'))&&!str_contains($x,'--ctstate NEW --syn')))===0);
- tested('T30 verified LAN management preempts ssh rate limits',($lock['pr']??99)<($ssh['pr']??0));
+ tested('T30 SSH rate limiter precedes management exemptions and excludes port 22',($ssh['pr']??99)<($lock['pr']??0) && !str_contains(implode("\n", $lock['rules']??[]),'--dport 22') && !preg_match('/--dports [^\n]*\b22\b/', implode("\n",$lock['rules']??[])));
  $s['continuity_priority']=0; [$sections,$warnings]=gen_sections($s);
  $ssh=array_values(array_filter($sections,fn($x)=>$x['id']==='ssh-acc'))[0]??[];
  tested('T31 legacy mode still protects established SSH',count(array_filter($ssh['rules']??[],fn($x)=>str_contains($x,'--ctstate ESTABLISHED,RELATED')))===1);

@@ -10,7 +10,7 @@ import fcntl, hashlib, json, os, pathlib, re, secrets, subprocess, sys, tempfile
 
 BASE=pathlib.Path('/var/lib/iptm-nm-editor')
 STAGE=BASE/'plan.json';LOCK=BASE/'lock';TRIAL=BASE/'trial.json';LAST=BASE/'last.json'
-SCRIPT='/usr/local/lib/iptables-manager/web/releases/5.30.6/extensions/nm_control.py'
+SCRIPT='/usr/local/lib/iptables-manager/web/releases/5.30.12/extensions/nm_control.py'
 UUID=re.compile(r'^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$')
 PROP=re.compile(r'^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$')
 NAME=re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$')

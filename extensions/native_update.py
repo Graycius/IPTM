@@ -234,6 +234,15 @@ def migrate(web,archive,sha,force):
         for path in stage.rglob('*.php'):run_check(['php','-l',str(path)])
         for path in stage.rglob('*.py'):validate_python_source(path)
         run_check(['bash','-n',str(stage/'runtime/iptm-helper')])
+        # Retire the previous IPTM-owned HTTP proxy before replacing the helper.
+        # Abort the update when a redirect cannot be removed using its saved
+        # exact-match ownership journal; NEVER broaden FORWARD or flush NAT.
+        retire_worker=stage/'extensions/retire_legacy_proxy.py'
+        if retire_worker.is_file() and not retire_worker.is_symlink():
+            r=subprocess.run(['/usr/bin/python3','-B',str(retire_worker),'apply',current],
+                             capture_output=True,text=True,timeout=100)
+            if r.returncode:
+                raise UpdateError('Dismissione vecchio proxy non verificata: '+(r.stderr or r.stdout)[-450:])
         new_root=RELEASE_BASE/version
         if new_root.exists() or new_root.is_symlink():
             raise UpdateError('Versione già installata: non sovrascrivere un albero live')

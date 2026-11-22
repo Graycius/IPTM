@@ -1,40 +1,71 @@
-## 5.30.6 — Compatibilità Squid, profili salvati e disattivazione
+## 5.30.12 — dismissione cache HTTP IPTM e ottimizzazione senza proxy
 
-- Rilevamento rigoroso di Squid, squid-gnutls e squid-openssl e di collegamenti simbolici Debian protetti da root; diagnosi distinta tra pacchetto assente e binario non verificato.
-- Campi proxy precompilati con indirizzo/interfaccia/subnet rilevati o preferenze già salvate. Nuova azione di salvataggio disponibile anche se Squid e il gateway sono inattivi, senza alterare servizi o firewall.
+- Rimossi backend, dispatcher, pagina di configurazione, installazione APT e servizi gestiti per la vecchia cache HTTP.
+- Migrazione native update: disattiva i servizi IPTM e le regole di intercettazione soltanto mediante journal/proprietà verificati, prima della sostituzione dell’helper. File estranei, NAT orfani o errori bloccano la sostituzione. Nessun `iptables -F`, `FORWARD ACCEPT`, o purge automatico di pacchetti Debian.
+- Rimangono audit iptables in sola lettura, SQM/CAKE/IFB, DNS e blocchi DoT/reindirizzamento DNS, IoT e anti-spoofing.
+- I servizi di sistema esterni e le eventuali regole proxy aggiunte manualmente alla bozza non vengono cancellati automaticamente.
+
+## 5.30.11 — 22 novembre 2026
+- Ripristinati i controlli GUI per DNS redirect/DoT mancanti dal Setup; il salvataggio non li disattiva più silenziosamente.
+- Protezione di continuità delle sezioni IPTM:dot e IPTM:dns-redir nelle rigenerazioni; recupero verificato dal rules.v4 su disco senza applicazione.
+- Preflight persistenza/applicazione: impedisce la rimozione non confermata delle protezioni salvate. Rimozione esplicita dalla UI ancora possibile.
+- Ingresso LAN sconosciuto non diventa un blocco o una presunta interfaccia fidata. Policy IoT, MAC, FORWARD e anti-spoofing invariate.
+
+
+- Intercettazione HTTP/80 non sicura con FORWARD DROP, isolamento IoT/MAC o catene ACL: anteprima **esplicita** come alternativa, con indicazione della causa e secondo consenso prima dell'attivazione. Nessuna modifica automatica a FORWARD/INPUT/NAT o ai client.
+- Suite di regressione per fallback, integrità digest, anteprima/conferma, assenza di manipolazione iptables, correttezza route e versioni dell'update. Test offline: non sostituiscono prove su DietPi.
+
+## 5.30.9 — Ingress LAN verificati e anti-spoof su interfacce esterne
+
+- Nuove opzioni Setup: associazione CIDR LAN→interfaccia e ulteriori interfacce esterne non fidate, con convalida degli input e anteprima delle regole.
+- I permessi INPUT, FORWARD verso Internet/VPN e il reindirizzamento DNS LAN in nat/PREROUTING vengono vincolati all'ingresso corretto quando supportato dalla topologia.
+- Anti-spoofing RFC1918 in INPUT/FORWARD sulle interfacce esterne con un solo IPv4 pubblico verificato, senza interrompere WAN privata, doppio NAT, WireGuard, VLAN o LAN condivise.
+- I filtri bogon sulla WAN non vengono generati quando manca la prova di una WAN pubblica dedicata.
+- Nessuna riscrittura di regole manuali o blocchi IoT; le nuove impostazioni non attivano il firewall automaticamente.
+
+## 5.30.8 — Policy IoT mantenute, SSH multirete e servizi LAN
+
+- Le sezioni IPTM:iot-<mac> generate dalla UI non richiedono un salto IPTM-MAC-FWD; nessuna rimozione automatica delle 14 o altre policy IoT presenti in settings.json.
+- Audit IoT confronta le policy configurate con la bozza: segnala regole non generate, sezioni residue o regole MAC esterne senza equipararle automaticamente a errori di isolamento.
+- Import dei MAC canonico (minuscolo); flag sconosciuti e valori malformati ignorati in sicurezza; policy di blocco totale prevalente.
+- SSH: fallback protetto sulle LAN in modalità anti-lockout, limitatori recent/connlimit applicati ai nuovi SYN e porta SSH esclusa da apertura generica anche con ssh_nets non configurato.
+- Ambito INPUT per singola subnet quando l'interfaccia è verificabile: LAN fisica, VLAN o WireGuard; evita di forzare tutto su bond0 e di applicare l'anti-spoof RFC1918 alla WAN condivisa.
+- Audit Porte software segnala profili selezionati senza listener rilevato e offre un'azione di sola selezione nel modulo per disabilitarli esplicitamente, senza alterare servizi o kernel.
+- Suite di regressione IoT/SSH/servizi ed esecuzione delle verifiche native-update.
+
+## 5.30.7 — Revisione firewall, servizi LAN e profili WireGuard
+
+- Regole INPUT generate con interfaccia LAN esplicita quando identificata; distinzione WAN/LAN con fallback prudente, anti-spoof RFC1918 soltanto su WAN pubblica distinta verificata.
+- Protezione SSH `recent`/`connlimit` prima dei permessi amministrativi; esclusione della porta SSH dalle aperture generiche. Conservazione delle sessioni SSH stabilite.
+- Deduplicazione delle aperture dei profili DNS/HTTP e SSH in `apps` e `svc-in`; limiti Telnet inutilizzati non più prodotti o proposti nella UI.
+- Rimozione dell'accesso FORWARD indiscriminato verso WireGuard e del passaggio VPN duplicato, con opzione LAN→VPN esplicita; conservazione delle eccezioni stateful.
+- mDNS, CoAP e DHCP limitati all’ingresso LAN quando la topologia consente di identificarla; senza bloccare DHCP sulle reti condivise.
+- Audit della bozza con avvisi aggregati e ordinati per gravità (SSH, MAC IoT, WAN, servizi e WG), collegamenti per correggere le impostazioni e rigenerazione della sola bozza. Regole non IPTM e catene IoT Warden non alterate.
+- Preflight dell'applicazione rifiuta regole obsolete IPTM ad alto rischio in `lockout` / `svc-fwd`; attivo sempre soltanto dopo conferma e watchdog.
+- Suite di regressione per sicurezza, topologie condivise, VPN, app duplicate e input malevoli.
+
+
 - Attivazione HTTP trasparente su TCP/80 con conferma, controlli di gateway/firewall e rimozione fail-open dei redirect IPTM al disattivarsi del proxy; nessuna manipolazione del traffico HTTPS.
 - Timer di riconciliazione NAT abilitato soltanto per la modalità trasparente, per evitare carico superfluo in proxy esplicito.
 - Test di regressione per rilevamento Debian, configurazioni invalide, isolamento LAN, salvataggio offline e disattivazione.
 
-## 5.30.5 — Proxy HTTP LAN trasparente, profili persistenti e fail-open
 
-- Corretto il riconoscimento dei binari Debian `/usr/sbin/squid-gnutls` e `/usr/sbin/squid-openssl`, oltre ai collegamenti protetti da root.
-- Le preferenze di configurazione sono salvate alla creazione dell’anteprima anche se Squid non è avviato; la UI precompila IP, interfaccia, subnet e parametri già scelti.
 - Proxy opzionale con intercettazione del solo HTTP TCP/80 via iptables e verifica rigorosa della modalità gateway IPv4, senza intercettazione HTTPS o modifica DNS, routing o browser.
-- NAT IPTM proprietario e reindirizzamento fail-open su stop/crash Squid, watchdog periodico e rimozione del redirect nelle transazioni firewall.
 - Rifiuto preventivo dell’intercettazione quando il filtro FORWARD contiene ACL restrittive o catene sconosciute, evitando aggiramenti delle policy IoT e MAC.
-- Disattivazione indipendente dall’avvio/installazione Squid, preservando le preferenze.
 
-# IPTM 5.30.4 — Rafforzamento stati QoS, recupero firewall e proxy
 
 - Validazione rigorosa dello stato CAKE e delle identità delle interfacce prima della calibrazione.
 - Arresto delle regolazioni concorrenti durante la misura senza shaping e controllo dello scadere della prova.
 - Confronto dei parametri originali nel journal prima del ripristino dei limiti CAKE.
-- Controlli sui permessi e sul risultato delle operazioni di rollback del servizio Squid.
 - Verifica bilanciata dei blocchi iptables negli snapshot CrowdSec.
 - Suite di test di regressione e aggiornamento versione.
 
-# IPTM 5.30.4 — Installazione Squid da Strumenti → Programmi
 
-- Squid è presente nel catalogo dei programmi installabili tramite APT, nella selezione multipla e nei registri di installazione.
 - Rilevamento installazione e disponibilità pacchetto integrato nei controlli esistenti.
-- Per una nuova installazione, il servizio Squid predefinito è mantenuto disattivato; il proxy LAN IPTM si configura separatamente nella pagina Prestazioni con conferma esplicita.
-- La pagina Prestazioni rimanda alla voce Squid di Strumenti → Programmi quando il pacchetto manca.
 
 # IPTM 5.30.2 — Prestazioni e continuità di rete
 
 - Analisi in sola lettura delle regole IPv4: limiti DROP, QUIC, logging, IPSet, code in userspace, duplicati e controlli che possono aumentare latenza.
-- Proxy HTTP Squid isolato per subnet LAN esplicitamente autorizzate, con cache configurabile, HTTPS CONNECT senza intercettazione TLS, anteprima e attivazione a conferma.
 - Calibrazione della banda con CAKE **bandwidth unlimited** temporaneo su entrambe le direzioni; watchdog indipendente per ripristinare i limiti confermati.
 - Miglioramento del recupero firewall quando snapshot IPSet contengono riferimenti CrowdSec dinamici scaduti.
 - Riduzione carico QoS automatico, analisi Suricata EVE Layer 7, socket dei processi locali e retention backup conservativa.

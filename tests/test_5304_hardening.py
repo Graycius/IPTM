@@ -22,7 +22,6 @@ def module(filename):
 
 qos=module('qos_engine.py')
 fw=module('firewall_recovery.py')
-proxy=module('cache_proxy.py')
 ret=module('retention_manager.py')
 audit=module('rules_performance.py')
 
@@ -115,26 +114,6 @@ class Tests(unittest.TestCase):
     def test_19_firewall_spurious_commit_rejected(self):
         data=b'*filter\n:INPUT DROP [0:0]\nCOMMIT\nCOMMIT\n'
         with self.assertRaises(fw.RecoveryError):fw.normalized(data,set(),'4')
-
-    def test_20_proxy_untrusted_config_symlink(self):
-        with tempfile.TemporaryDirectory() as d:
-            bad=Path(d)/'squid.conf';bad.symlink_to('/etc/hosts')
-            with patch.object(proxy,'SQUID',Path('/bin/sh')),patch.object(proxy,'CONF',bad), \
-                 patch.object(proxy,'UNIT',Path(d)/'nosuch_unit'), \
-                 patch.object(proxy.pwd,'getpwnam',return_value=SimpleNamespace(pw_gid=1)):
-                with self.assertRaises(proxy.ProxyError):proxy.verify_ownership()
-
-    def test_21_proxy_non_lan_listen(self):
-        cfg={'interface':'bond0','listen_ip':'8.8.8.8','port':3128,
-             'allowed_nets':['192.168.1.0/24'],'disk_mib':128,'memory_mib':16}
-        with self.assertRaises(proxy.ProxyError):proxy.parse_config(cfg)
-
-    def test_22_proxy_no_open_connect_port(self):
-        cfg={'interface':'bond0','listen_ip':'192.168.1.1','port':3128,
-             'allowed_nets':['192.168.1.0/24'],'disk_mib':128,'memory_mib':16}
-        data=proxy.config_text(proxy.parse_config(cfg))
-        self.assertIn('http_access deny CONNECT !SSL_ports',data)
-        self.assertLess(data.index('http_access deny blocked_dst'),data.index('http_access allow iptm_clients'))
 
     def test_23_retention_blocks_pending_network_backup(self):
         with tempfile.TemporaryDirectory() as td:

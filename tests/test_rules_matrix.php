@@ -49,7 +49,7 @@ $M=parse_rules(str_replace('\\n',"\n",$tpl));$s=S_def();$s['lan_nets']='192.168.
 regen($M,$s);$serialized=ser($M);
 $positions=array_map(fn($x)=>strpos($serialized,'# >>> IPTM:'.$x),['dot','lan-out','ssh-acc','lockout']);
 must($positions[0]!==false&&$positions[1]!==false&&$positions[0]<$positions[1],'DoT shadowed by lan-out after regen');
-must($positions[2]!==false&&$positions[3]!==false&&$positions[3]<$positions[2],'Trusted LAN management not protected before SSH rate limits');
+must($positions[2]!==false&&$positions[3]!==false&&$positions[2]<$positions[3],'SSH rate limits bypassed by unrestricted lockout');
 must(str_contains($serialized,':IPTM-LAN-EGRESS -'),'no custom egress chain');
 $again=$M;regen($again,$s);must(ser($again)===$serialized,'regen not idempotent');
 // Exhaustive 4-state combinations for every pair in the extended option list.

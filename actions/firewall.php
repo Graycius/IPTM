@@ -462,6 +462,11 @@ case 'manual_convert': {
                 if (!hash_equals(hash('sha256',$draftTxt),hash('sha256',$onDiskDraft))) {
                     flash('Bozza modificata: salvataggio annullato. Ricarica.','err');break;
                 }
+                try {$removed=iptm_dns_guard_losses(rules_live(),$draftTxt);}
+                catch(RuntimeException $ex){flash('Verifica DoT/DNS impossibile: '.$ex->getMessage(),'err');break;}
+                if($removed && empty($_POST['confirm_dns_guard_removal'])){
+                    flash('Salvataggio negato: bozza priva dei blocchi '.implode(', ',$removed).' presenti su disco. Conferma la rimozione in Applica o ripristina dalla pagina Setup.','err');break;
+                }
                 ipsets_prepare(); [$c,$o,$e]=priv('test',$draftTxt);
                 if ($c) {flash('Non salvo: bozza non valida. '.herr($o.$e),'err');break;}
                 // draft.lock serializes all ordinary draft writes through commit.
@@ -478,7 +483,7 @@ case 'manual_convert': {
             }
             break;
         case 'apply':
-            if (apply_result(do_apply((int)($_POST['secs'] ?? ROLLBACK_SECS), '4', !empty($_POST['force'])))) flash('Regole applicate. Premi «Conferma» entro il tempo indicato: altrimenti torna tutto com\'era.');
+            if (apply_result(do_apply((int)($_POST['secs'] ?? ROLLBACK_SECS), '4', !empty($_POST['force']), !empty($_POST['confirm_dns_guard_removal'])))) flash('Regole applicate. Premi «Conferma» entro il tempo indicato: altrimenti torna tutto com\'era.');
             $back = 'p=apply'; break;
     
 }

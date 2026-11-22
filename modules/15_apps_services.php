@@ -218,34 +218,68 @@ function apps_detect(?array $S = null): array {
     return $out;
 }
 
-/** Genera righe -A INPUT da apps abilitate (scope lan → -s LAN). */
+/** LAN application ports: fold identical IP/proto/port opens while retaining a
+ * traceable first owner. Does not merge across scopes, interfaces or protocols.
+ * Explicit router services and lockout openings take precedence. */
 function apps_rules(array $S): array {
-    $en = array_fill_keys(array_map('strval', (array)($S['apps'] ?? [])), 1);
-    if (!$en) return [];
-    $lan = trim((string)($S['lan_nets'] ?? ''));
-    $nets = $lan !== '' ? preg_split('/[\s,;]+/', $lan, -1, PREG_SPLIT_NO_EMPTY) : [];
-    $cat = app_catalog();
-    $rules = [];
-    foreach (array_keys($en) as $id) {
-        if ($id === 'docker') continue; // Docker API is never opened by an app preset.
-        if (!isset($cat[$id])) continue;
-        $a = $cat[$id];
-        // A LAN-only service with no configured LAN must fail closed: never
-        // silently turn an internal API, database or printer into a WAN port.
-        if ($a['scope'] !== 'any' && !$nets) continue;
-        $srcList = $a['scope'] === 'any' ? [''] : $nets;
-        foreach (apps_parse_ports($a['ports']) as [$proto, $plist]) {
-            $plist = array_map('strval', $plist);
-            $portArg = count($plist) > 1
-                ? '-m multiport --dports ' . implode(',', $plist)
-                : '--dport ' . $plist[0];
-            foreach ($srcList as $src) {
-                $s = $src !== '' ? "-s $src " : '';
-                $rules[] = "-A INPUT {$s}-p $proto $portArg -m conntrack --ctstate NEW -j ACCEPT -m comment --comment \"IPTM-app:$id\"";
+    $en=array_fill_keys(array_map('strval',(array)($S['apps']??[])),1);
+    if(!$en)return [];
+    $lan=iptm_trusted_lan_nets((string)($S['lan_nets']??''));
+    $nets=$lan!==''?explode(',',$lan):[];
+    $cat=app_catalog();$seen=[];$groups=[];
+    // Only count assured same-semantics managed accepts. Do not infer a port
+    // allowed by a source/target/conntrack-filtered user service.
+    foreach((array)($S['svc_in']??[]) as $row){
+        if(!is_array($row)||empty($row['on']) || ($row['act']??'ACCEPT')!=='ACCEPT' ||
+           !empty($row['iif']) || !empty($row['dst']) || !empty($row['ct']) || !empty($row['after']))continue;
+        $proto=(string)($row['proto']??'');$src=(string)($row['src']??'');
+        if(!in_array($proto,['tcp','udp'],true) || !in_array($src,$nets,true))continue;
+        foreach(explode(',',(string)($row['ports']??'')) as $part){
+            if(ctype_digit($part) && (int)$part>0 && (int)$part<65536)
+                $seen[$proto.'|'.$src][(string)(int)$part]=true;
+        }
+    }
+    if(!empty($S['lockout_on'])){
+        foreach($nets as $src)foreach(explode(',',(string)($S['mgmt_ports']??'')) as $part){
+            if(!ctype_digit($part))continue;
+            $p=(int)$part;
+            if($p>=1&&$p<=65535 && !(empty($S['ssh_acc'])===false && $p===(int)($S['ssh_acc_port']??22)))
+                $seen['tcp|'.$src][(string)$p]=true;
+        }
+    }
+    foreach(array_keys($en) as $id){
+        if($id==='docker'||!isset($cat[$id]))continue;
+        $app=$cat[$id];
+        if($app['scope']!=='any'&&!$nets)continue;
+        $srcList=$app['scope']==='any'?['']:$nets;
+        foreach(apps_parse_ports($app['ports']) as [$proto,$ports]){
+            foreach($srcList as $src){
+                $key=$proto.'|'.$src;
+                foreach($ports as $port){
+                    $port=(int)$port;
+                    if(($proto==='tcp') && $port===(int)($S['ssh_acc_port']??22) &&
+                        !empty($S['ssh_acc']) && ($src!=='' || !empty($S['ssh_nets'])))continue;
+                    if(isset($seen[$key][(string)$port]))continue;
+                    $seen[$key][(string)$port]=true;
+                    $groups[$key.'|'.$id]['proto']=$proto;
+                    $groups[$key.'|'.$id]['src']=$src;
+                    $groups[$key.'|'.$id]['id']=$id;
+                    $groups[$key.'|'.$id]['ports'][]=$port;
+                }
             }
         }
     }
-    return $rules;
+    $out=[];
+    foreach($groups as $group){
+        $proto=$group['proto'];$src=$group['src'];$id=$group['id'];
+        $ports=array_values(array_unique($group['ports']));sort($ports,SORT_NUMERIC);
+        foreach(array_chunk($ports,15) as $chunk){
+            $arg=count($chunk)>1?'-m multiport --dports '.implode(',',$chunk):'--dport '.$chunk[0];
+            $s=$src!==''?'-s '.$src.' ':'';
+            $out[]='-A INPUT '.$s.'-p '.$proto.' '.$arg.' -m conntrack --ctstate NEW -j ACCEPT -m comment --comment "IPTM-app:'.$id.'"';
+        }
+    }
+    return $out;
 }
 
 function pg_apps() {
@@ -262,12 +296,18 @@ function pg_apps() {
 
     echo '<div class=card><h2>Porte software</h2>';
     echo '<p class=mut>Rileva programmi installati o in ascolto (UrBackup, ipp-usb, CUPS, MQTT, Plex, Samba…) e ti fa scegliere <b>quali porte aprire</b> sul firewall. '
-        . 'Di solito dalla <b>LAN</b> (anti-lockout e policy DROP restano valide). Dopo «Salva» usa <b>Applica</b>.</p>';
+        . 'Di solito dalla <b>LAN</b>: le porte comuni (DNS 53, web 80/443) vengono compattate senza riaprirle più volte. Il provider DNS in esecuzione si sceglie nel resolver, non tramite queste aperture. Dopo «Salva» usa <b>Applica</b>.</p>';
     $nInst = count(array_filter($det, fn($x) => $x['installed']));
     $nEn = count(array_filter($det, fn($x) => $x['enabled']));
-    echo '<p>Rilevati: <b>' . $nInst . '</b> · Abilitati: <b>' . $nEn . '</b> · LAN: <code>' . h(trim((string)($S['lan_nets'] ?? '')) ?: 'non impostata — le porte saranno aperte da ovunque') . '</code></p>';
+    $nIdle = count(array_filter($det, fn($x) => $x['enabled'] && !$x['listening']));
+    echo '<p>Rilevati: <b>' . $nInst . '</b> · Abilitati: <b>' . $nEn . '</b> · Senza listener verificato: <b>'.$nIdle.'</b> · LAN: <code>' . h(trim((string)($S['lan_nets'] ?? '')) ?: 'non impostata — nessuna apertura LAN generata') . '</code></p>';
+    if($nIdle){
+        $candidates=array_values(array_filter($det,fn($x)=>$x['enabled']&&!$x['listening']));
+        $labels=array_map(fn($x)=>$x['name'],array_slice($candidates,0,8));
+        echo '<p class="msg warn">Profili abilitati senza listener rilevato: <b>'.h(implode(', ',$labels)).'</b>'.($nIdle>8?' e altri '.($nIdle-8):'').'. Il rilevamento non copre tutte le installazioni/container: verifica prima di disabilitare.</p>';
+    }
     if (trim((string)($S['lan_nets'] ?? '')) === '') {
-        echo '<div class="msg err">⚠ Nessuna rete LAN in Setup: le aperture «solo LAN» diventeranno pubbliche. Imposta la LAN in <a href="?p=setup">Setup</a>.</div>';
+        echo '<div class="msg err">⚠ Nessuna rete LAN in Setup: le aperture «solo LAN» non vengono generate. Imposta la LAN in <a href="?p=setup">Setup</a>.</div>';
     }
     echo '</div>';
 
@@ -280,7 +320,7 @@ function pg_apps() {
         $id = $x['id'];
         $badge = $x['listening'] ? '<span class="b b-ACCEPT">in ascolto</span>' : ($x['installed'] ? '<span class="b b-jump">installato</span>' : '<span class=mut>catalogo</span>');
         $scope = $x['scope'] === 'any' ? 'WAN+LAN' : 'solo LAN';
-        echo '<tr><td><label><input type=checkbox class=acb name="apps[]" value="' . h($id) . '"'
+        echo '<tr><td><label><input type=checkbox class=acb name="apps[]" data-iptm-no-listener="' . (!empty($x['enabled'])&&!$x['listening']?'1':'0') . '" value="' . h($id) . '"'
             . (!empty($x['enabled']) ? ' checked' : '')
             . '> <b>' . h($x['name']) . '</b></label></td>'
             . '<td>' . h($x['cat']) . '</td>'
@@ -297,6 +337,8 @@ function pg_apps() {
     } else {
         echo '<p><button type=button class=s onclick="document.querySelectorAll(\'.acb\').forEach(c=>c.checked=true)">Seleziona tutto</button> '
             . '<button type=button class=s onclick="document.querySelectorAll(\'.acb\').forEach(c=>c.checked=false)">Nessuna</button></p>';
+        echo '<p><button type=button class=s onclick="document.querySelectorAll(\'.acb[data-iptm-no-listener=1]\').forEach(c=>c.checked=false)">Deseleziona servizi senza listener (solo modulo)</button></p>';
+        echo '<p class=mut>Verifica le voci prima di salvare: container e porte personalizzate potrebbero non essere rilevati.</p>';
         echo '<table><tr><th>Software</th><th>Categoria</th><th>Porte</th><th>Ambito</th><th>Stato</th></tr>';
         foreach ($found as $x) $row($x, true);
         echo '</table>';

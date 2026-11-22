@@ -48,6 +48,20 @@ case 'sec_preset': {
             foreach ($warn as $w) flash('⚠ ' . $w, 'err');
             $back = 'p=security'; break;
         }
+        case 'dns_guard_restore_disk': {
+            $back='p=setup';
+            // Strict validation ensures that we restore only the original
+            // expected LAN DNS rules, never broad or foreign NAT/ACCEPT rules.
+            try {
+                [$s2,$recovered]=iptm_dns_guard_restore_plan(S_get(),rules_live());
+                $m2=$M;$warnings=regen($m2,$s2);
+                S_put($s2);$M=$m2;save_model();
+                audit('dns_guard_restore_disk '.implode(',',$recovered));
+                flash('Protezione '.implode(', ',$recovered).' ripristinata nelle impostazioni e nella bozza. Nessuna regola live modificata. Verifica il diff e applica soltanto con rollback.','ok');
+                foreach($warnings as $warning)flash('⚠ '.$warning,'err');
+            }catch(RuntimeException $ex){flash('Recupero DNS/DoT bloccato: '.$ex->getMessage(),'err');}
+            break;
+        }
         case 'settings_save': {
             $sec = (string)($_POST['sec'] ?? ''); if (!isset(SEC_FIELDS[$sec])) { flash('Sezione sconosciuta.', 'err'); break; }
             $S = S_get(); $err = []; $partial = !empty($_POST['_partial']);
@@ -63,6 +77,25 @@ case 'sec_preset': {
                 if ($t === 'macs') $v = strtolower(preg_replace('/[\s;]+/', ',', $v));
                 if (str_starts_with($t, 'n:')) { [, $lo, $hi] = explode(':', $t); if ($v === '' || !ctype_digit($v) || (int)$v < (int)$lo || (int)$v > (int)$hi) $err[] = $k; else $S[$k] = (int)$v; continue; }
                 if (!v_ok($t, $v) || ($t === 'port' && $v === '')) $err[] = $k; else $S[$k] = $v;
+            }
+            if ($sec === 'setup') {
+                // Never persist a claimed trusted ingress that points at the
+                // upstream/untrusted NIC; a wrong -i could lock out SSH/DNS.
+                $maps=iptm_lan_ingress_pairs((string)($S['lan_ingress_map']??''));
+                $external=array_filter(explode(',',(string)($S['external_ifs']??'')));
+                foreach($maps as $cidr=>$iface) {
+                    if(!iptm_scope_within_lan($cidr,(string)($S['lan_nets']??'')))
+                        $err[]='lan_ingress_map (subnet non presente nelle LAN: '.$cidr.')';
+                    if($iface===(string)($S['wan_if']??'') || in_array($iface,$external,true))
+                        $err[]='lan_ingress_map (interfaccia WAN/esterna non attendibile: '.$iface.')';
+                    if(!array_key_exists($iface,(array)sys_ifaces()))
+                        $err[]='lan_ingress_map (interfaccia non rilevata: '.$iface.')';
+                }
+                $trusted=iptm_trusted_ingress_interfaces($S);
+                foreach($external as $iface) if(isset($trusted[$iface]))
+                    $err[]='external_ifs (interfaccia LAN/VPN fidata: '.$iface.')';
+                if(!empty($S['single_nic']) && ($maps || $external))
+                    $err[]='single_nic (configura ingressi separati solo quando WAN e LAN non sono condivise)';
             }
             if (!empty($S['mac_only']) && trim((string)$S['lan_nets']) === '') { $err[] = 'LAN solo per dispositivi autorizzati: indica prima le reti LAN in Base · NAT · DNS (la regola si applica a quelle reti).'; }
             if (!empty($S['mac_only']) && trim((string)$S['mac_allow']) === '') $err[] = 'mac_allow (vuoto: tutta la LAN verrebbe bloccata)';
@@ -116,7 +149,7 @@ case 'sec_preset': {
                 $S['harden']['tcp_fastopen_off'] = !empty($S['tcp_fastopen_off']) ? 1 : 0;
             }
             $S = iptm_safe_settings($S);
-            $old = S_get(); $before = ser($M); $M2 = $M; $warn = regen($M2, $S);
+            $old = S_get(); $before = ser($M); $M2 = $M; $warn = regen($M2, $S, $sec === 'setup' && !empty($_POST['confirm_dns_guard_removal']));
             // Blocca solo se la rigenerazione TOGLIE/cambia regole senza modifiche tue; le sole aggiunte (nuove regole generate da un aggiornamento) passano e sono mostrate nel riepilogo.
             if ($S == $old && !rules_equiv(ser($M2), $before) && model_delta($before, ser($M2))[1] > 0) { flash('Annullato per proteggere le tue regole: le impostazioni salvate non corrispondono alla bozza (rigenerandola cambierebbero regole pur senza modifiche tue). Nulla è stato toccato. Riallinea da «Importa regole» (dopo «Azzera impostazioni») oppure da un backup in Storico.', 'err'); break; }
             S_put($S); $M = $M2; save_model(); flash(delta_msg($before, ser($M)));

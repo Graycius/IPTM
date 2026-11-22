@@ -57,11 +57,10 @@ function tool_defs(): array {
         'unattended' => ['Aggiornamenti automatici', 'unattended-upgrades: applica automaticamente le patch di sicurezza Debian/Ubuntu.', ''],
         'auditd' => ['Auditd · audit configurazioni', 'Registra modifiche a rules.v4/v6, configurazioni WireGuard e SSH. Gli eventi recenti sono consultabili qui; non modifica le regole firewall.', ''],
         'lynis' => ['Lynis · audit hardening', 'Esegue un controllo di sicurezza in sola lettura su sistema, servizi, kernel e configurazioni; non applica correzioni automatiche. Il report resta nel registro del programma.', ''],
-        'squid' => ['Squid · cache e proxy LAN', 'Installa il pacchetto Squid tramite APT. Il proxy IPTM viene configurato e attivato separatamente in Prestazioni: nessuna esposizione WAN o intercettazione HTTPS automatica.', ''],
         'unbound' => ['Unbound · resolver DNS locale', 'Resolver ricorsivo DNSSEC su loopback porta 5335, con configurazione isolata e validata prima del riavvio. Si integra con Pi-hole FTL tramite upstream locale.', ''],
         'ipset' => ['ipset · insiemi firewall', 'Utilità per gli insiemi iptables, utilizzata anche dai bouncer CrowdSec.', ''],
         'clamav' => ['ClamAV · scanner leggero', 'Installa clamscan e freshclam senza avviare clamd, particolarmente pesante su macchine con poca RAM. Nessuna scansione automatica.', ''],
-        'clamavd' => ['ClamAV · demone opzionale', 'Solo se serve il socket clamd per proxy e scansioni continue. Richiede molta RAM; verifica prima la memoria libera.', ''],
+        'clamavd' => ['ClamAV · demone opzionale', 'Demone opzionale per scansioni locali. Richiede molta RAM; verifica prima la memoria libera.', ''],
         'debsums' => ['Debsums · integrità pacchetti', 'Verifica i checksum locali dei file installati da APT. Dopo l’installazione usa debsums -s da SSH; nessuna scansione avviata.', ''],
         'aide' => ['AIDE · integrità file', 'Rileva modifiche ai file rispetto a un database iniziale. Prima scansione e baseline richiedono scelta esplicita e possono durare molto.', ''],
         'needrestart' => ['Needrestart · processi obsoleti', 'Individua servizi che usano ancora vecchie librerie dopo aggiornamenti; non riavvia automaticamente IPTM o il firewall.', ''],
@@ -192,8 +191,6 @@ function pg_progs() {
         if (!$ro && !$t['run'] && (!empty($t['inst']) || !empty($t['cand']) || empty($t['cand_known']))) {
             if ($k === 'wireguard' && $t['inst']) {
                 echo '<a class="btn s sm" href="?p=vpn">Apri gestione VPN</a>';
-            } elseif ($k === 'squid' && !empty($t['inst'])) {
-                echo '<a class="btn s sm" href="?p=performance">Configura proxy LAN</a>';
             } else {
                 echo '<form method=post class=ops style="display:inline">' . fh('p=progs') . '<input type=hidden name=action value=tool_install><input type=hidden name=tool value="' . h($k) . '">';
                 if ($arg === 'iface') echo sel('arg', array_combine($if, $if), $S['wan_if'] ?? '') . ' ';
@@ -314,7 +311,7 @@ function pg_vpn() {
     if (!empty($w['dietpi_tool']) && $w['dietpi_list']) echo '<details class=card><summary><b>Client rilevati da DietPi</b> <span class=mut>dietpi-wireguard list</span></summary><pre>' . h(implode("\n", $w['dietpi_list'])) . '</pre><p class=mut>Per creare, disabilitare, abilitare o rimuovere client usa il gestore nativo <code>dietpi-wireguard</code>; IPTM lascia intatti file e chiavi esterni.</p></details>';
     echo '<form method=post class=acc data-iptm-layout="mt12">' . fh('p=vpn') . '<input type=hidden name=action value=settings_save><input type=hidden name=sec value=vpn><h3>Regole firewall della VPN</h3>'
         . dd('Interfaccia WireGuard', sel('wg_if', $wgOpts, $wgSelected), 'Scegli wg0, wg1 o l’interfaccia rilevata da DietPi. Le regole generate useranno questa interfaccia.')
-        . opt_rows($S, [['wg_on', 'r', 'Apri la porta UDP WireGuard', 'Genera le regole nella bozza (poi applica).'], ['wg_port', 't', 'Porta UDP', 'Deve coincidere con quella del server.', '110px'], ['wg_lan', 'r', 'I client raggiungono LAN e Internet'], ['wg_input', 'r', 'I client raggiungono anche il router (SSH, interfaccia web)']]) . '<p class=sticky><button>Salva nella bozza</button></p></form>';
+        . opt_rows($S, [['wg_on', 'r', 'Apri la porta UDP WireGuard', 'Genera le regole nella bozza (poi applica).'], ['wg_port', 't', 'Porta UDP', 'Deve coincidere con quella del server.', '110px'], ['wg_lan', 'r', 'I client raggiungono LAN e Internet'], ['wg_input', 'r', 'I client raggiungono anche il router (SSH, interfaccia web)'], ['wg_lan_to_vpn', 'r', 'Consenti LAN → peer WireGuard', 'Disattivo in sicurezza: senza questo consenso, nuove connessioni verso wg0 non sono aperte. Se attivo le sorgenti restano limitate alle subnet LAN.']]) . '<p class=sticky><button>Salva nella bozza</button></p></form>';
     echo '<h3>Client</h3><div data-iptm-layout="scroll"><table><tr><th>Nome</th><th>IP VPN</th><th>Ultimo contatto</th><th>Traffico</th><th></th></tr>';
     foreach ($w['peers'] as $p) { $lv = $w['live'][$p['pub']] ?? null; $hs = $lv && $lv['hs'] > 0 ? date('Y-m-d H:i:s', $lv['hs']) : '—';
         echo '<tr><td><b>' . h($p['name']) . '</b></td><td>' . h($p['ip']) . '</td><td>' . h($hs) . '</td><td>' . ($lv ? '↓ ' . hb($lv['rx']) . ' ↑ ' . hb($lv['tx']) : '—') . '</td><td class=ops>';

@@ -28,6 +28,7 @@ function pg_rules() {
     foreach ($items as $it) if ($it['t'] === 'rule') $chs[rchain($it['r'])] ??= '-';
     $ch = $_GET['c'] ?? array_key_first($chs); if (!isset($chs[$ch])) $ch = array_key_first($chs);
     $draftCount = count(chain_rules($items, $ch));
+    echo iptm_policy_review_ui(ser($M), S_get());
     echo '<section class="iptm-rules-workbench" aria-label="Gestione delle regole firewall">';
     echo '<header class="iptm-workbench-heading"><div><span class="iptm-eyebrow">Firewall / editor regole</span><h2>Regole ' . h($tn) . ' · ' . h($ch) . '</h2><p class="mut">' . $draftCount . ' regole nella bozza · policy ' . h($chs[$ch]) . ' · ordine di valutazione dall’alto verso il basso</p></div>';
     echo '<div class="iptm-workbench-actions"><a class="btn s" href="?p=rulesaudit">Analizza rules.v4</a><a class="btn s" href="?p=wizard">Creazione guidata</a><a class="btn" href="?p=rule&amp;t=' . rawurlencode((string)$tn) . '&amp;c=' . rawurlencode((string)$ch) . '">Nuova regola</a></div></header>';
@@ -172,16 +173,19 @@ function pg_apply() {
         if (!empty($vr['raw'])) echo '<details><summary>Dettaglio rules-check</summary><pre data-iptm-layout="ui-1934322bc0">' . h($vr['raw']) . '</pre></details>';
     }
     
+    try {$dnsGuardRemoved=iptm_dns_guard_losses($fileTxt,$draftTxt);}
+    catch(RuntimeException $ex){$dnsGuardRemoved=[];echo '<p class="msg err">Controllo DNS/DoT non riuscito: '.h($ex->getMessage()).'</p>';}
+    if($dnsGuardRemoved)echo '<div class="msg err" role="alert"><strong>La bozza rimuoverebbe protezioni DNS presenti su disco:</strong> '.h(implode(', ',$dnsGuardRemoved)).'. <a href="?p=setup">Ripristina i blocchi nella pagina Setup</a>, oppure conferma espressamente la cancellazione sotto.</div>';
     echo '<section class="card iptm-apply-primary"><h2>Applica la bozza</h2><p class=mut>Un clic per applicare: IPTM esegue i controlli prima della modifica e attiva il rollback automatico. L’applicazione definitiva delle regole richiede che il canale di gestione rimanga raggiungibile.</p>';
 
     echo '<div class=ops data-iptm-layout="ui-08ace85272">';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=rules_verify><button class=s>Test facoltativo</button></form>';
-    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=apply><label class=fl>Ripristino se non confermo entro (secondi)<input type=number name=secs value='.ROLLBACK_SECS.' min=15 max=600 data-iptm-layout="ui-f6b5c7f77c"></label><button class=g>Applica con rollback</button></form>';
+    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=apply><label class=fl>Ripristino se non confermo entro (secondi)<input type=number name=secs value='.ROLLBACK_SECS.' min=15 max=600 data-iptm-layout="ui-f6b5c7f77c"></label>' . ($dnsGuardRemoved?'<label><input type=checkbox name=confirm_dns_guard_removal value=1 required> Confermo la rimozione delle protezioni DoT/DNS indicate</label>':'') . '<button class=g>Applica con rollback</button></form>';
     echo '</div><p class=mut>Conferma e ripristino saranno visibili nel riquadro di stato durante una prova attiva. Il caricamento può ricreare le catene runtime di Docker, CrowdSec e fail2ban; verifica la checklist dei servizi.</p></section>';
     echo '<details class="card iptm-apply-advanced"><summary><b>Strumenti avanzati</b> · sintassi, pulizia, regole manuali e operazioni sul file</summary><div class=ops data-iptm-layout="ui-0e001e227c">';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=test><button class=s>Test solo sintassi</button></form>';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=policy_export><button class=s>Esporta policy YAML</button></form>';
-    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=save_file><button class=s>Salva soltanto su disco</button></form>';
+    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=save_file>' . ($dnsGuardRemoved?'<label><input type=checkbox name=confirm_dns_guard_removal value=1 required> Confermo la rimozione delle protezioni DNS/DoT salvate su disco</label>':'') . '<button class=s>Salva soltanto su disco</button></form>';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=draft_reset><button class=d>Scarta bozza</button></form></div>';
 
         // --- Pulizia regole obsolete / inutili ---
@@ -373,7 +377,7 @@ HTML;
 }
 
 
-/** IPTM 5.30.6: one-click offline rules.v4 audit and in-memory hardening. */
+/** IPTM 5.30.9: one-click offline rules.v4 audit and in-memory hardening. */
 function pg_rulesaudit() {
     $admin = (($_SESSION['role'] ?? 'viewer') === 'admin');
     echo '<div class="iptm-task-intro"><div><h2>Analizza e correggi rules.v4</h2>'

@@ -1,6 +1,6 @@
 <?php
 const CS_CHAIN='CROWDSEC_CHAIN';
-const SETTINGS_SCHEMA=44;
+const SETTINGS_SCHEMA=46;
 const BUILTIN=['raw'=>['PREROUTING','OUTPUT'],'mangle'=>['PREROUTING','INPUT','FORWARD','OUTPUT','POSTROUTING'],'filter'=>['INPUT','FORWARD','OUTPUT'],'nat'=>['PREROUTING','INPUT','OUTPUT','POSTROUTING']];
 function alias_map($s){return ['ports'=>[]];}
 function list_sets($s){return [];}
