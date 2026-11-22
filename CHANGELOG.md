@@ -1,3 +1,11 @@
+## 5.30.6 — Compatibilità Squid, profili salvati e disattivazione
+
+- Rilevamento rigoroso di Squid, squid-gnutls e squid-openssl e di collegamenti simbolici Debian protetti da root; diagnosi distinta tra pacchetto assente e binario non verificato.
+- Campi proxy precompilati con indirizzo/interfaccia/subnet rilevati o preferenze già salvate. Nuova azione di salvataggio disponibile anche se Squid e il gateway sono inattivi, senza alterare servizi o firewall.
+- Attivazione HTTP trasparente su TCP/80 con conferma, controlli di gateway/firewall e rimozione fail-open dei redirect IPTM al disattivarsi del proxy; nessuna manipolazione del traffico HTTPS.
+- Timer di riconciliazione NAT abilitato soltanto per la modalità trasparente, per evitare carico superfluo in proxy esplicito.
+- Test di regressione per rilevamento Debian, configurazioni invalide, isolamento LAN, salvataggio offline e disattivazione.
+
 ## 5.30.5 — Proxy HTTP LAN trasparente, profili persistenti e fail-open
 
 - Corretto il riconoscimento dei binari Debian `/usr/sbin/squid-gnutls` e `/usr/sbin/squid-openssl`, oltre ai collegamenti protetti da root.

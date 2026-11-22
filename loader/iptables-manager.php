@@ -1,7 +1,7 @@
 <?php
-// APP_VERSION = '5.30.5';
+// APP_VERSION = '5.30.6';
 // Physical modules: no executable code in a web-writable directory.
-define('IPTM_RELEASE_DIR', '/usr/local/lib/iptables-manager/web/releases/5.30.5');
+define('IPTM_RELEASE_DIR', '/usr/local/lib/iptables-manager/web/releases/5.30.6');
 // Small, public, version-pinned static resource endpoint. It reads ONLY known
 // CSS/JS files shipped in the root-owned, immutable native release directory.
 // No session, helper, network probe or config is needed to serve UI resources.
@@ -25,7 +25,7 @@ if (isset($_GET['iptm_asset'])) {
   if (!is_int($size) || $size < 1 || $size > 1048576) {
     http_response_code(503); header('Cache-Control: no-store'); exit;
   }
-  $etag = '"iptm-5.30.5-' . $name . '-' . $size . '"';
+  $etag = '"iptm-5.30.6-' . $name . '-' . $size . '"';
   header('Content-Type: ' . $mime . '; charset=utf-8');
   header('X-Content-Type-Options: nosniff');
   header('Cross-Origin-Resource-Policy: same-origin');

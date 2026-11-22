@@ -199,34 +199,43 @@ def trusted_binary():
     # generic /usr/sbin/squid symlink is not listed in their package file list.
     # Use only known executable basenames, no wildcard or arbitrary path.
     valid_names={'squid','squid-gnutls','squid-openssl'}
-    for package in ('squid','squid-openssl'):
+    package_paths=set()
+    for package in ('squid','squid-openssl','squid-gnutls'):
         try:
             listing=command(['dpkg-query','-L',package],check=False,timeout=5)
             if listing.returncode==0:
-                candidates.extend(pathlib.Path(filename) for filename in listing.stdout.splitlines()
-                                  if pathlib.Path(filename).name in valid_names and
-                                  filename.startswith(('/usr/sbin/','/usr/bin/')))
+                for filename in listing.stdout.splitlines():
+                    if pathlib.Path(filename).name in valid_names and filename.startswith(('/usr/sbin/','/usr/bin/','/usr/lib/squid/')):
+                        package_paths.add(filename)
+                        candidates.append(pathlib.Path(filename))
         except ProxyError:pass
-    for entry in candidates:
+    for entry in dict.fromkeys(candidates):
         try:
             if not entry.is_file():continue
             target=entry.resolve(strict=True)
             if target.name not in valid_names or not target.is_file() or not os.access(entry,os.X_OK):continue
-            if not str(target).startswith(('/usr/sbin/','/usr/bin/','/usr/lib/squid/')):continue
-            # Inspect every component: an attacker must not substitute the binary.
+            allowed=('/usr/sbin/','/usr/bin/','/usr/lib/squid/')
+            if not str(target).startswith(allowed):continue
+            # A binary in /usr/lib/squid may only be discovered via dpkg.
+            if str(target).startswith('/usr/lib/squid/') and str(entry) not in package_paths:
+                continue
+            # Check both the original symlink path and the resolved target;
+            # their parent directories must be owned by root and non-writable.
             unsafe=False
-            for ancestor in (target,*target.parents):
-                stat=ancestor.stat()
-                if stat.st_uid!=0 or stat.st_mode&0o022:
-                    unsafe=True;break
-                if str(ancestor)=='/':break
+            for start in (entry.parent,target):
+                for ancestor in (start,*start.parents):
+                    stat=ancestor.stat()
+                    if stat.st_uid!=0 or stat.st_mode&0o022:
+                        unsafe=True;break
+                    if str(ancestor)=='/':break
+                if unsafe:break
             if not unsafe:return target
         except (OSError,RuntimeError):continue
     return None
 
 
 def package_installed():
-    for package in ('squid','squid-openssl'):
+    for package in ('squid','squid-openssl','squid-gnutls'):
         try:
             r=command(['dpkg-query','-W','-f=${Status}',package],timeout=5,check=False)
             if r.returncode==0 and r.stdout.strip()=='install ok installed':return True
@@ -253,7 +262,9 @@ def verify_owned_files():
 def verify_ownership():
     binary=trusted_binary()
     if binary is None:
-        raise ProxyError('Squid installato ma binario non trovato o non protetto: verifica dpkg -L squid e percorso /usr/sbin/squid')
+        if package_installed():
+            raise ProxyError('Squid installato tramite APT, ma nessun binario eseguibile e protetto trovato. Controlla dpkg -L squid, dpkg -L squid-openssl e ls -l /usr/sbin/squid; non reinstallare alla cieca.')
+        raise ProxyError('Nessuna installazione Squid verificata: usa Strumenti → Programmi oppure controlla dpkg -l squid squid-openssl.')
     try:identity=pwd.getpwnam('proxy')
     except KeyError as exc:raise ProxyError('Utente Linux proxy mancante: verificare pacchetto Debian squid') from exc
     verify_owned_files()
@@ -373,13 +384,27 @@ def reconcile():
     return {'ok':True,'redirect':True}
 
 
+def save_preferences(obj):
+    """Persist a syntactically safe LAN profile with no daemon/firewall mutations.
+
+    This is available even if Squid is stopped, absent or the LAN interface is
+    temporarily unavailable. Activation always repeats live checks.
+    """
+    profile=parse_config(obj)
+    atom_json(PREFS,{'profile':profile,'updated':time.time()})
+    return {'ok':True,'saved':True,'enabled':False,'profile':profile,
+            'note':'Preferenze salvate; servizio e firewall invariati'}
+
+
 def stage(obj):
     profile=parse_config(obj)
+    # Do not discard a validated user's settings when live topology or Squid
+    # checks fail: an offline gateway may later return on the same interface.
+    atom_json(PREFS,{'profile':profile,'updated':time.time()})
     verify_interface(profile)
     verify_owned_files()
     digest=hashlib.sha256(json.dumps(profile,sort_keys=True).encode()).hexdigest()
     atom_json(STAGE,{'profile':profile,'sha256':digest,'created':time.time()})
-    atom_json(PREFS,{'profile':profile,'updated':time.time()})
     return {'ok':True,'sha256':digest,'profile':profile,'preview':config_text(profile),
             'mode':'HTTP trasparente LAN (porta 80)' if profile['intercept_http'] else 'proxy esplicito HTTP + HTTPS CONNECT',
             'applied':False}
@@ -434,7 +459,10 @@ def apply(digest):
         if profile['intercept_http']:
             require_forwarding()
             redirect_on(profile)
-        command(['systemctl','enable','--now',RECONCILE_TIMER.name],timeout=20)
+        # Only the transparent mode needs an iptables reconciliation timer.
+        # Explicit mode adds no NAT rules and must not burn CPU every 30 s.
+        if profile['intercept_http']:
+            command(['systemctl','enable','--now',RECONCILE_TIMER.name],timeout=20)
         atom_json(STATE,{'profile':profile,'enabled':True,'updated':time.time()})
         STAGE.unlink(missing_ok=True)
         return {'ok':True,'enabled':True,'listen':f'{profile["listen_ip"]}:{profile["port"]}',
@@ -500,7 +528,14 @@ def status():
         if info:redirect=redir.healthy(info['backend'],info['profile'])
     except (ProxyError,redir.RedirectError) as exc:warning=str(exc)[:200]
     installed_binary=trusted_binary()
-    return {'ok':True,'installed':installed_binary is not None,'package_installed':package_installed(),
+    pkg_present=package_installed()
+    binary_warning=('Squid risulta installato via APT ma il binario non è stato verificato: '
+                    'controlla dpkg -L squid, dpkg -L squid-openssl e ls -l /usr/sbin/squid.'
+                    if pkg_present and installed_binary is None else '')
+    try:forwarding=pathlib.Path('/proc/sys/net/ipv4/ip_forward').read_text().strip()=='1'
+    except OSError:forwarding=False
+    return {'ok':True,'installed':installed_binary is not None,'package_installed':pkg_present,
+            'binary_warning':binary_warning,'ipv4_forwarding':forwarding,
             'binary':str(installed_binary) if installed_binary else '',
             'managed':UNIT.is_file() and not UNIT.is_symlink(),
             'active':running,'intercept_active':redirect,'configured':bool(profile),
@@ -519,10 +554,11 @@ def main(argv):
     fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
     with os.fdopen(fd,'r+') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        if argv==['stage']:
+        if argv in (['stage'],['save-preferences']):
             raw=sys.stdin.buffer.read(MAX_INPUT+1)
             if len(raw)>MAX_INPUT:raise ProxyError('Configurazione troppo grande')
-            return stage(json.loads(raw))
+            data=json.loads(raw)
+            return stage(data) if argv==['stage'] else save_preferences(data)
         if len(argv)==2 and argv[0]=='apply':return apply(argv[1])
         if argv==['disable']:return disable()
         if argv==['reconcile']:return reconcile()

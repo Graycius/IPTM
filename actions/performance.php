@@ -1,7 +1,9 @@
 <?php
 /* Explicit opt-in LAN proxy operations; never touches iptables/CAKE. */
 switch ($a) {
+case 'cache_proxy_save':
 case 'cache_proxy_stage': {
+    $onlySave=$a==='cache_proxy_save';
     $back='p=performance';
     if(($_SESSION['role']??'viewer')!=='admin'){flash('Accesso amministratore richiesto.','err');break;}
     $keys=['port','disk_mib','memory_mib'];$data=[];
@@ -22,8 +24,13 @@ case 'cache_proxy_stage': {
     $nets=(string)($_POST['allowed_nets']??'');
     if(strlen($nets)>500){flash('Elenco LAN troppo lungo.','err');break;}
     $data['allowed_nets']=array_values(array_filter(array_map('trim',preg_split('/[\r\n,;]+/',$nets)),fn($n)=>$n!==''));
-    [$rc,$out,$err]=priv('cache-proxy',json_encode($data,JSON_THROW_ON_ERROR),['stage']);
-    $result=json_decode($out,true);
+    [$rc,$out,$err]=priv('cache-proxy',json_encode($data,JSON_THROW_ON_ERROR),[$onlySave?'save-preferences':'stage']);
+    $result=json_decode(trim($out),true);
+    if($onlySave){
+        unset($_SESSION['iptm_cache_proxy_stage']);
+        flash($rc===0&&is_array($result)&&!empty($result['saved'])?'Preferenze proxy salvate, anche con Squid spento. Nessuna regola o servizio modificato.':'Salvataggio preferenze fallito: '.herr((string)($result['error']??$err??$out)),$rc===0&&is_array($result)&&!empty($result['saved'])?'ok':'err');
+        break;
+    }
     if($rc!==0||!is_array($result)||empty($result['ok'])||!preg_match('/^[a-f0-9]{64}$/D',(string)($result['sha256']??''))){
         unset($_SESSION['iptm_cache_proxy_stage']);flash('Anteprima proxy rifiutata: '.herr((string)($result['error']??$out.$err)),'err');break;
     }

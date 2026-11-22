@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IPTM 5.30.5: non-invasive diagnostics adapted from IPTM 6.11.3.
+"""IPTM 5.30.6: non-invasive diagnostics adapted from IPTM 6.11.3.
 
 Concepts adopted from IPTM6 acceptance, external_checks, suricata_inspect
 and legacy_audit. This is NOT the IPTM6 root worker and deliberately has no
