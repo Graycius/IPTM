@@ -258,19 +258,31 @@ def restore(state):
         state['state']='rollback-failed';atom(STATE,state);raise
     iface=state['interface'];ifb=state['ifb']
     # Only delete ingress if IPTM added it and the filter still targets our IFB.
-    if state.get('ingress_added'):
-        expected=1+int(state.get('ingress_policy_count',0))
-        # If an outside manager added actions, protect its filters. The
-        # independent watchdog records rollback-failed for manual recovery.
-        if not ingress_filters_verified(iface,ifb,expected-1,partial=state.get('state')=='applying'):
-            state['state']='rollback-failed';atom(STATE,state)
-            raise QosError('ingress modificato da altro servizio; rollback manuale necessario')
-        run(['tc','qdisc','del','dev',iface,'ingress'],check=False)
-    roots=qroots(iface)
-    if roots and roots[0].get('handle')=='5ca1:':
-        run(['tc','qdisc','del','dev',iface,'root'])
-    links=run(['ip','link','show','dev',ifb],check=False)
-    if links.returncode==0 and state.get('ifb_ifindex'):run(['ip','link','del','dev',ifb])
+    try:
+        if state.get('ingress_added'):
+            expected=int(state.get('ingress_policy_count',0))
+            if not ingress_filters_verified(iface,ifb,expected,partial=state.get('state')=='applying'):
+                raise QosError('ingress modificato da altro servizio')
+            removed=run(['tc','qdisc','del','dev',iface,'ingress'],check=False)
+            if removed.returncode:
+                raise QosError('rimozione ingress fallita: '+(removed.stderr or '')[-160:])
+            if any(q.get('kind') in ('ingress','clsact')
+                   for q in jcmd(['tc','-j','qdisc','show','dev',iface])):
+                raise QosError('ingress ancora presente: IFB conservata')
+        roots=qroots(iface)
+        if roots and roots[0].get('handle')=='5ca1:':
+            if roots[0].get('kind')!='cake':
+                raise QosError('handle WAN acquisito da qdisc non CAKE')
+            run(['tc','qdisc','del','dev',iface,'root'])
+        links=run(['ip','link','show','dev',ifb],check=False)
+        if links.returncode==0 and state.get('ifb_ifindex'):
+            run(['ip','link','del','dev',ifb])
+            if run(['ip','link','show','dev',ifb],check=False).returncode==0:
+                raise QosError('IFB ancora presente dopo rimozione')
+    except (QosError,OSError) as exc:
+        state['state']='rollback-failed';state['rollback_error']=str(exc)[:240]
+        atom(STATE,state)
+        raise
     state['state']='rolled-back';state['restored_at']=time.time();atom(STATE,state)
     # QoS teardown never depends on systemd availability, but disable the
     # adaptive timer best-effort to prevent a stale job after rollback.
@@ -736,7 +748,7 @@ def auto_enable():
         raise QosError('disabilitare prima il timer SQM storico')
     auto_units_install()
     atom(AUTO_STATE,{'enabled':True,'activated_at':time.time(),'version':VERSION})
-    return {'ok':True,'enabled':True,'interval':'1h','mode':'independent-unshaped-only'}
+    return {'ok':True,'enabled':True,'interval':'1h','mode':'rtt-when-shaped-no-background-speedtest'}
 
 def auto_disable():
     if AUTO_TIMER.exists():
@@ -769,16 +781,12 @@ def auto_tick():
                     'reason':'RTT verificato; i limiti CAKE non cambiano','changed':False}
         atom(AUTO_STATE,dict(read(AUTO_STATE) or {},last_check=time.time(),last_result=result))
         return result
-    routes=jcmd(['ip','-j','-4','route','show','default'])
-    if not routes:raise QosError('nessuna WAN IPv4 di default')
-    routes=sorted(routes,key=lambda r:r.get('metric',0))
-    interface=routes[0].get('dev','')
-    if not NIC.fullmatch(interface):raise QosError('interfaccia default non verificata')
-    audit=topology_report(interface)
-    if not audit['free']:return {'ok':True,'started':False,'reason':'qdisc non libera'}
-    if not interface_idle(interface):
-        return {'ok':True,'started':False,'reason':'Rete occupata: speedtest automatico saltato'}
-    return calibration_start(interface)
+    # Network traffic can start immediately after an idle probe. Do not
+    # schedule a heavy speedtest in the background on a shared LAN/WAN.
+    result={'ok':True,'started':False,'mode':'passive-only','changed':False,
+            'reason':'Nessuno speedtest automatico senza CAKE: misurazione manuale necessaria'}
+    atom(AUTO_STATE,dict(read(AUTO_STATE) or {},last_check=time.time(),last_result=result))
+    return result
 
 def latency_measurement(iface):
     """WAN-bound ICMP probe. Failure or ambiguity means NO rate change."""
@@ -911,11 +919,12 @@ def adapt_tick():
              for key in ('up','down')}
     trial=cfg.get('trial')
     if isinstance(trial,dict):
-        direction=trial['direction']
-        # An interrupted change can be only a partial trial. Restoring prior
-        # rate is safe and idempotent even if the process died before tc change.
+        direction=trial.get('direction')
+        if direction not in ('up','down') or trial.get('kind') not in ('reduce','recover'):
+            raise QosError('journal prova RTT non valido; ripristino manuale richiesto')
         sufficient=(elapsed>=20 and traffic[direction]>=1_000_000)
-        improved=(sufficient and rtt<=float(trial['initial_rtt'])+2.0)
+        target=float(trial['initial_rtt'])
+        improved=(sufficient and (rtt<=target-5 if trial['kind']=='reduce' else rtt<=target+2))
         if not improved:
             try:adapt_change_one(state,direction,int(trial['old_rate']))
             except QosError:
@@ -933,11 +942,25 @@ def adapt_tick():
     cfg['next_direction']='up' if direction=='down' else 'down'
     base=cfg['base_'+direction]
     current=cfg[direction]
-    if elapsed>=20 and traffic[direction]>=1_000_000 and current<base and rtt<=cfg['baseline']+8:
+    capacity=(base*1_000_000/8)*elapsed
+    measured_load=(elapsed>=20 and type(counter[direction]) is int
+                   and type(earlier.get(direction)) is int and traffic[direction]>=1_000_000)
+    congested=(measured_load and capacity>0 and traffic[direction]>=capacity*.75
+               and rtt>cfg['baseline']+30)
+    high_key='high_'+direction
+    cfg[high_key]=(min(10,int(cfg.get(high_key,0))+1) if congested else 0)
+    cooldown=now-float(cfg.get('last_change') or 0)>=3600
+    candidate=None;kind=None
+    if cooldown and cfg[high_key]>=3 and current>max(1,int(base*.90)):
+        candidate=max(max(1,int(base*.90)),int(current*.98))
+        if candidate<current:kind='reduce'
+        cfg[high_key]=0
+    elif cooldown and measured_load and current<base and rtt<=cfg['baseline']+8:
         candidate=min(base,max(current+1,int(current*1.01)))
-        cfg['trial']={'direction':direction,'old_rate':current,'new_rate':candidate,
-                      'initial_rtt':rtt,'started_at':now}
-        # Persist journal before touching kernel. A crash is resolved next tick.
+        if candidate>current:kind='recover'
+    if kind:
+        cfg['trial']={'kind':kind,'direction':direction,'old_rate':current,
+                      'new_rate':candidate,'initial_rtt':rtt,'started_at':now}
         atom(ADAPT,cfg)
         try:adapt_change_one(state,direction,candidate)
         except QosError:
@@ -945,12 +968,14 @@ def adapt_tick():
         cfg[direction]=candidate
         cfg.update(last_change=now,last_rtt=round(rtt,2),last_tick=now,counters=counter)
         atom(ADAPT,cfg)
-        return {'ok':True,'changed':True,'trial':'pending','direction':direction,
-                'old_mbit':current,'candidate_mbit':candidate,'rtt_ms':rtt}
+        return {'ok':True,'changed':True,'trial':'pending','kind':kind,
+                'direction':direction,'old_mbit':current,
+                'candidate_mbit':candidate,'rtt_ms':rtt}
     cfg.update(last_rtt=round(rtt,2),last_tick=now,counters=counter)
     atom(ADAPT,cfg)
-    return {'ok':True,'changed':False,'reason':'nessun recupero verificabile',
-            'rtt_ms':rtt,'direction':direction,'traffic_bytes':traffic[direction]}
+    return {'ok':True,'changed':False,'reason':'nessuna regolazione sicura',
+            'rtt_ms':rtt,'direction':direction,'congested':bool(congested),
+            'traffic_bytes':traffic[direction]}
 
 def adapt_disable():
     cfg=read(ADAPT)
