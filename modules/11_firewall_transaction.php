@@ -90,6 +90,22 @@ function iptm_iot_rules_diagnose(string $txt): array {
     }
     return $problems;
 }
+/**
+ * Prepare a rollback using the same privileged normalizer as the independent
+ * watchdog. Missing non-CrowdSec sets or unsafe rules remain hard errors.
+ * The original snapshot is retained unchanged for forensics.
+ */
+function iptm_recovery_prepare(string $snapshot, string $fam): array {
+    if (!in_array($fam, ['4','6'], true) || trim($snapshot) === '' || strlen($snapshot) > 2097152)
+        return [1, '', 'Snapshot di rollback non valido'];
+    [$rc, $candidate, $err] = priv('rollback-prepare', $snapshot, [$fam]);
+    if ($rc !== 0 || trim($candidate) === '')
+        return [1, '', 'Dipendenze rollback non verificabili: '.herr($err)];
+    [$testRc, $testOut, $testErr] = priv($fam === '6' ? 'test6' : 'test', $candidate);
+    if ($testRc !== 0)
+        return [1, '', 'Test del rollback non superato: '.herr($testOut.$testErr)];
+    return [0, $candidate, $err];
+}
 function do_apply(int $secs, string $fam = '4', bool $force = false): string {
     $GLOBALS['apply_notes'] = [];
     $GLOBALS['_iptm_post_stage']='firewall:locking';
@@ -193,6 +209,13 @@ function do_apply(int $secs, string $fam = '4', bool $force = false): string {
             ', dati ' . (trim($live) === '' ? 'vuoti' : 'presenti') . '). Regole NON applicate. '
             . herr(trim($e . "\n" . ($c !== 0 ? $live : ''))) .
             ' Controlla da SSH: ip6tables-save, ip6tables -t filter -S, ip6tables -V e /proc/sys/net/ipv6/conf/all/disable_ipv6.';
+    // A snapshot which cannot be restored is not a valid safety net. Fail
+    // BEFORE arming the watchdog and BEFORE changing any kernel table.
+    [$recoveryRc, $candidate, $recoveryNote] = iptm_recovery_prepare($live, $fam);
+    if ($recoveryRc !== 0)
+        return 'Preflight di sicurezza del rollback non superato: ' . $recoveryNote . '. Nessuna regola applicata.';
+    if (!hash_equals(hash('sha256',$live), hash('sha256',$candidate)))
+        $GLOBALS['apply_notes'][] = ['err', 'Lo snapshot contiene riferimenti DROP a set CrowdSec dinamici già assenti; la riconciliazione di emergenza sarà tracciata dal watchdog.'];
     $rb = DATA_DIR . "/rollback$sx.rules"; $pf = DATA_DIR . '/pending.json'; $ap = DATA_DIR . "/applied$sx.rules";
     $secs = max(30, min(600, $secs));
     $csch = ($fam === '4' && !empty(S_get()['crowdsec'])) ? cs_chains_for(S_get(), $txt) : [];
@@ -219,7 +242,11 @@ function do_apply(int $secs, string $fam = '4', bool $force = false): string {
     $GLOBALS['_iptm_post_stage']='firewall:restore_live';
     [$c, $o, $e] = priv('restore' . $sx, $txt);
     if ($c) {
-        [$backCode] = priv('restore' . $sx, $live);
+        // A disappearing dynamic set can invalidate a once-valid snapshot.
+        [$candidateRc, $restorable] = iptm_recovery_prepare($live, $fam);
+        $backCode = 1;
+        if ($candidateRc === 0)
+            [$backCode] = priv('restore' . $sx, $restorable);
         $cancelled = false;
         if ($backCode === 0) {
             [$cancelCode] = priv('rollback-cancel', null, [$txid]);
@@ -280,8 +307,13 @@ function confirm_pending(): string {
         $old = @file_get_contents(DATA_DIR . "/rollback$sx.rules");
         $recovery = 'snapshot precedente non disponibile';
         if (is_string($old) && trim($old) !== '') {
-            [$rr] = priv('restore' . $sx, $old);
-            [$wr] = priv('write' . $sx, $old);
+            [$preparedRc, $safeOld] = iptm_recovery_prepare($old, $fam);
+            $rr = $wr = 1;
+            if ($preparedRc === 0) {
+                [$rr] = priv('restore' . $sx, $safeOld);
+                // Restore persistent rules only after the live kernel succeeds.
+                if ($rr === 0) [$wr] = priv('write' . $sx, $safeOld);
+            }
             $recovery = ($rr === 0 && $wr === 0) ? 'ripristino immediato tentato e comandi riusciti' :
                 'ATTENZIONE: ripristino immediato del kernel o del file non riuscito';
         }
@@ -309,14 +341,12 @@ function revert_pending(): string {
     if (!is_string($old) || trim($old) === '') {
         return 'Snapshot precedente mancante: watchdog lasciato attivo.';
     }
-    // Fail closed before touching the kernel. This detects missing dynamic
-    // CrowdSec sets and malformed snapshots without bypassing dependencies.
-    [$checkCode, $checkOut, $checkErr] = priv('test' . $sx, $old);
-    if ($checkCode !== 0) {
-        return 'Preflight ripristino fallito; regole non modificate e watchdog conservato. '
-            . herr($checkOut . $checkErr);
-    }
-    [$rc, $out, $err] = priv('restore' . $sx, $old);
+    // Same preflight as the timed watchdog; only absent, direct CrowdSec DROP
+    // references may be skipped. Never weaken unmatched policy rules.
+    [$checkCode, $prepared, $checkErr] = iptm_recovery_prepare($old, $sx === '6' ? '6' : '4');
+    if ($checkCode !== 0)
+        return 'Preflight ripristino fallito; regole non modificate e watchdog conservato. ' . $checkErr;
+    [$rc, $out, $err] = priv('restore' . $sx, $prepared);
     if ($rc !== 0) {
         return 'Ripristino manuale fallito: watchdog lasciato attivo. ' . herr($out . $err);
     }

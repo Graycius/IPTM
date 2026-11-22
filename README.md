@@ -1,3 +1,17 @@
+## Recupero firewall e classificazione del traffico (revisione 22/11/2026)
+
+Quando un set dinamico CrowdSec scompare dopo il salvataggio del firewall, la copia di rollback può contenere un riferimento `--match-set` non più valido. IPTM prepara adesso un candidato verificato, elimina **soltanto i DROP diretti a set CrowdSec mancanti**, e blocca ogni ripristino non testabile prima di toccare il kernel. La stessa validazione protegge Apply, rollback manuale e watchdog indipendente. Le policy di accesso e le regole non pertinenti rimangono invariate.
+
+Nella pagina **Qualità del traffico** le vecchie dichiarazioni tabellari ridondanti sono sostituite da osservazioni reali: riconoscimento `app_proto` da **Suricata EVE**, classi suggerite per i protocolli, e associazione dei socket ai processi **eseguiti sul gateway** tramite `ss`. **Queste informazioni sono diagnostiche:** non abilitano DPI inline, né classificazione per processo sui client LAN, né enforcement DSCP automatico. L'utente continua a controllare le priorità DSCP tramite anteprima e policy esplicite.
+
+Il controllo QoS orario non lancia più speedtest autonomi. Le misure pesanti devono essere avviate manualmente; durante CAKE confermato si misura solo RTT. Le prove di adattamento richiedono contatori di traffico, sono limitate e salvate in journal prima della modifica, con ritorno al rate precedente quando il risultato non è convalidato.
+
+La pulizia di backup e log IPTM è installata dopo il commit dell'aggiornamento e programmata con timer giornaliero. I backup recenti, manuali e coinvolti in transazioni pendenti sono protetti. Il criterio predefinito è di 45 giorni, mantenendo almeno 10 copie automatiche per categoria. Per l'elenco prioritizzato dei problemi e i test attesi consulta [audit firewall/QoS del 22 novembre 2026](docs/IPTM_QOS_FIREWALL_AUDIT_20261122.md).
+
+> **Installazione remota:** nessuna modifica alle qdisc o alle regole è sicura per definizione senza verifica dell'accesso SSH, DNS, navigazione client e un percorso indipendente di recupero. Non applicare una PR in bozza direttamente su un gateway in produzione.
+
+---
+
 # IPTM — Firewall, Network & QoS Control
 
 **IPTM 5.30.1** · Console web per **DietPi e Debian Linux** · Firewall basato prioritariamente su **iptables** · PHP 8+, Python 3, Bash, JavaScript.

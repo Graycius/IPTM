@@ -25,20 +25,8 @@ function pg_sqm() {
     echo '<p class="mut">I limiti sono espressi in Mbit/s effettivi della connessione. Una NIC a 1 Gbit/s non indica la banda disponibile. Questa sezione non esegue shaping finché non confermi una prova protetta dal watchdog.</p>';
     echo '<table><tr><th>Stato kernel</th><th>WAN</th><th>Download</th><th>Upload</th><th>Topologia</th></tr>';
     echo '<tr><td>'.h((string)($state['state']??'n/d')).'</td><td>'.h((string)($state['interface']??'—')).'</td><td>'.h((string)($state['down_mbit']??'—')).'</td><td>'.h((string)($state['up_mbit']??'—')).'</td><td>'.(!empty($state['verified'])?'CAKE/IFB verificati':'non verificata').'</td></tr></table>';
-    // State is real kernel/worker status, not a feature claim or marketing label.
-    $verified=!empty($state['verified']) && ($state['state']??'')==='confirmed';
-    $dscpIngress=$verified && ($state['ingress_policy_status']??'')==='verified' && (int)($state['ingress_policy_count']??0)>0;
-    $adaptiveLive=$verified && !empty($state['adaptive']['enabled']);
-    echo '<div class="card"><h3>Capacità verificate</h3><table><thead><tr><th>Funzione</th><th>Stato</th></tr></thead><tbody>';
-    foreach ([
-        ['CAKE upload e download',$verified?'Qdisc confermate':'Da verificare'],
-        ['IPv4 ingresso prima dell’IFB',$dscpIngress?'Filtri verificati':'Non verificato / non attivo'],
-        ['DSCP IPv4', 'Gestione disponibile; controllare policy attiva'],
-        ['Adattamento latenza RTT',$adaptiveLive?'Attivo (limiti confermati)':'Non attivo'],
-        ['Riconoscimento Layer 7','Non implementato'],
-        ['Classificazione per processo','Non implementata'],
-    ] as $cap)echo '<tr><td>'.h($cap[0]).'</td><td>'.h($cap[1]).'</td></tr>';
-    echo '</tbody></table></div>';
+    // One authoritative status summary, not a duplicated capability matrix.
+    echo '<p class="mut">Verifica reale: '.(!empty($state['verified'])?'qdisc WAN/IFB e filtri confermati':'topologia da verificare').'. Il riconoscimento applicativo qui sotto è diagnostico e non modifica automaticamente CAKE.</p>';
     if(($state['state']??'')==='confirmed' && ($state['version']??'')!==APP_VERSION){
         echo '<div class="msg warn">CAKE è confermato da una release precedente. La migrazione automatica post-commit dovrebbe riallineare il watchdog senza rimuovere le qdisc.';
         if($admin)echo '<form method="post">'.fh('p=sqm').'<button class="s" name="action" value="qos_postinstall_ensure">Verifica e completa migrazione QoS</button></form>';
@@ -64,14 +52,14 @@ function pg_sqm() {
     if($admin){
         echo '<form method="post" class="row">'.fh('p=sqm').'<label>WAN da misurare<select name="interface">';
         foreach($ifaces as $iface)echo '<option value="'.h($iface).'"'.($iface===$profile?' selected':'').'>'.h($iface).'</option>';
-        echo '</select></label><button class="s" name="action" value="qos_calibrate_start"'.(($measurement['state']??'')==='running'?' disabled':'').'>Esegui calibrazione in sola lettura</button></form>';
+        echo '</select></label><button class="s" name="action" value="qos_calibrate_start"'.(($measurement['state']??'')==='running'?' disabled':'').'>Misura banda manualmente (genera traffico)</button></form>';
     }
     echo '</div>';
     [$ar,$ao,$ae]=priv('qos-engine',null,['auto-status']);
     $automatic=$ar===0?json_decode($ao,true):null;
     $autoEnabled=!empty($automatic['config']['enabled']);
     echo '<div class="card iptm-qos-panel"><h3>Controllo rete · ogni ora</h3>';
-    echo '<p class="mut">Con CAKE attivo misura solo RTT: nessuno speedtest che saturi la connessione. Senza CAKE, misura la banda solo quando la WAN risulta libera.</p>';
+    echo '<p class="mut">Con CAKE attivo misura solo RTT: nessuno speedtest che saturi la connessione. Senza CAKE, il controllo automatico resta passivo: gli speedtest ad alto traffico si avviano solo su richiesta.</p>';
     echo '<p>Timer: <b>'.($autoEnabled?'abilitato':'disabilitato').'</b></p>';
     if($admin){
         $action=$autoEnabled?'qos_auto_disable':'qos_auto_enable';
@@ -120,7 +108,6 @@ function pg_sqm() {
             echo '<form method="post">'.fh('p=sqm').'<input type="hidden" name="action" value="qos_apply"><input type="hidden" name="plan_sha256" value="'.h($sha).'"><button class="g">Applica prova CAKE/IFB con rollback</button></form>';
         }
     }
-    if (function_exists('iptm_operator_insights')) iptm_operator_insights('qos');
     // IPTM-owned egress DSCP priorities. CAKE diffserv consumes these markings.
     [$pc,$pj,$pe]=priv('qos-policy',null,['status']);
     $policy=$pc===0?json_decode($pj,true):null;
@@ -185,6 +172,38 @@ tcp,22,interactive,192.168.1.0/24,upload"></textarea></label><button class="s">A
     }
     echo '</div>';
     echo '<section id="iptm-qos-diagnostics" class="iptm-qos-section"><div class="iptm-qos-section-heading"><h3>Diagnostica e migrazione</h3><p class="mut">Operazioni avanzate e componenti storici; nessun intervento automatico sulla rete</p></div><div class="iptm-qos-diagnostic-grid">';
+    // Real observations, deliberately not advertised as packet-level enforcement.
+    [$tr,$to,$te]=priv('qos-engine',null,['traffic-inspect']);
+    $traffic=$tr===0?json_decode($to,true):null;
+    if(!is_array($traffic))$traffic=[];
+    echo '<div class="card iptm-qos-panel"><h3>Classificazione Layer 7 · Suricata</h3>';
+    echo '<p class="mut">Riconoscimento applicativo reale dai campi app_proto nel log EVE. Sono osservazioni storiche, non un filtro DPI applicato automaticamente ai pacchetti. Non cambia DSCP, iptables o CAKE.</p>';
+    $l7=(array)($traffic['layer7']??[]);
+    if(!empty($l7['available'])){
+        $protocols=(array)($l7['protocols']??[]);
+        if($protocols){
+            echo '<table><tr><th>Protocollo rilevato</th><th>Osservazioni</th><th>Classe suggerita</th></tr>';
+            foreach(array_slice($protocols,0,12) as $record)if(is_array($record)){
+                echo '<tr><td>'.h((string)($record['protocol']??'')).'</td><td>'.h((string)($record['observations']??0)).'</td><td>'.h((string)($record['class']??'normal')).'</td></tr>';
+            }
+            echo '</table>';
+        }else echo '<p class="mut">Log EVE disponibile, ma nessun app_proto identificato nel campione.</p>';
+    }else echo '<p class="mut">'.h((string)($l7['reason']??'Suricata non verificabile')).'</p>';
+    echo '</div>';
+    echo '<div class="card iptm-qos-panel"><h3>Classificazione per processo · socket locali</h3>';
+    echo '<p class="mut">Riconoscimento tramite ss -tunap dei processi in esecuzione su questo gateway. Non è possibile attribuire un processo locale al traffico dei client LAN inoltrati. Le classi sono suggerimenti, senza modifica automatica delle priorità.</p>';
+    $proc=(array)($traffic['process']??[]);
+    if(!empty($proc['available'])){
+        $processes=(array)($proc['processes']??[]);
+        if($processes){
+            echo '<table><tr><th>Processo</th><th>Socket</th><th>Classe suggerita</th></tr>';
+            foreach(array_slice($processes,0,12) as $record)if(is_array($record)){
+                echo '<tr><td>'.h((string)($record['process']??'')).'</td><td>'.h((string)($record['sockets']??0)).'</td><td>'.h((string)($record['class']??'normal')).'</td></tr>';
+            }
+            echo '</table>';
+        }else echo '<p class="mut">Nessun processo attribuibile ai socket del gateway nel campione.</p>';
+    }else echo '<p class="mut">'.h((string)($proc['reason']??'Inventario processi non verificabile')).'</p>';
+    echo '</div>';
     if(is_array($audit)){
         echo '<div class="card iptm-qos-panel"><h3>Proprietà qdisc su '.h($profile).'</h3><p>Root: <b>'.h((string)$audit['root_kind']).'</b> · handle: <code>'.h((string)($audit['root_handle']??'—')).'</code> · ingress: '.h(implode(', ',(array)$audit['ingress_kinds'])).'</p>';
         echo '<p>'.h((string)$audit['reason']).'</p>';

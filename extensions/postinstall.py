@@ -233,6 +233,26 @@ def cleanup_postcommit():
     except (OSError,ValueError,subprocess.TimeoutExpired) as exc:
         return {'ok':False,'error':str(exc)[:240]}
 
+def ensure_retention():
+    """Install safe daily retention without deleting anything during an update.
+
+    The actual cleanup is deferred to a separate timer and remains bounded by
+    the retention policy; no active network state or user backups are touched.
+    """
+    worker=ENGINE.with_name('retention_manager.py')
+    if not worker.is_file() or worker.is_symlink():
+        return {'ok':False,'error':'gestore retention non disponibile'}
+    try:
+        result=call('/usr/bin/python3','-B',str(worker),'install',
+                    timeout=45,check=False)
+        if result.returncode:
+            return {'ok':False,'error':(result.stderr or result.stdout)[-280:]}
+        parsed=json.loads(result.stdout)
+        return parsed if isinstance(parsed,dict) else {'ok':False,'error':'risposta retention non valida'}
+    except (OSError,ValueError,subprocess.TimeoutExpired) as exc:
+        return {'ok':False,'error':str(exc)[:200]}
+
+
 def ensure():
     if PENDING.exists() or PENDING.is_symlink():
         raise PostinstallError('Aggiornamento ancora in transazione: handoff rimandato')
@@ -248,6 +268,7 @@ def ensure():
         cleanup=cleanup_postcommit()
         result=_ensure_locked()
         result['cleanup']=cleanup
+        result['retention']=ensure_retention()
         return result
 
 def schedule():
