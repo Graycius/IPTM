@@ -8,13 +8,14 @@ Deliberately does not estimate internet bandwidth from NIC link speed.
 from __future__ import annotations
 import fcntl, hashlib, json, os, pathlib, re, secrets, subprocess, sys, tempfile, time
 
-VERSION='5.30.1'
+VERSION='5.30.2'
 BASE=pathlib.Path('/var/lib/iptm-qos-engine')
 LOCK=BASE/'lock';STAGE=BASE/'stage.json';STATE=BASE/'active.json'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-watchdog.service')
 SCRIPT=f'/usr/local/lib/iptables-manager/web/releases/{VERSION}/extensions/qos_engine.py'
 POLICY_ACTIVE=pathlib.Path('/var/lib/iptm-qos-policy/active.json')
 CALIB=BASE/'calibration.json'
+UNSHAPED=BASE/'unshaped-calibration.json'
 CALIB_LOG=BASE/'calibration-history.json'
 ADAPT=BASE/'adaptive.json'
 ADAPT_UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-adaptive.service')
@@ -253,6 +254,8 @@ def owned(state):
 
 def restore(state):
     if state.get('version')!=VERSION:raise QosError('stato di altra release')
+    if (read(UNSHAPED) or {}).get('state')=='pending':
+        raise QosError('Prova senza shaping in corso: attendere ripristino dei limiti CAKE')
     try:owned(state)
     except QosError:
         state['state']='rollback-failed';atom(STATE,state);raise
@@ -272,7 +275,7 @@ def restore(state):
         roots=qroots(iface)
         if roots and roots[0].get('handle')=='5ca1:':
             if roots[0].get('kind')!='cake':
-                raise QosError('handle WAN acquisito da qdisc non CAKE')
+                raise QosError('handle WAN ora assegnato a qdisc esterna')
             run(['tc','qdisc','del','dev',iface,'root'])
         links=run(['ip','link','show','dev',ifb],check=False)
         if links.returncode==0 and state.get('ifb_ifindex'):
@@ -281,8 +284,7 @@ def restore(state):
                 raise QosError('IFB ancora presente dopo rimozione')
     except (QosError,OSError) as exc:
         state['state']='rollback-failed';state['rollback_error']=str(exc)[:240]
-        atom(STATE,state)
-        raise
+        atom(STATE,state);raise
     state['state']='rolled-back';state['restored_at']=time.time();atom(STATE,state)
     # QoS teardown never depends on systemd availability, but disable the
     # adaptive timer best-effort to prevent a stale job after rollback.
@@ -501,6 +503,18 @@ def watchdog():
         with os.fdopen(fd,'r+') as f:
             fcntl.flock(f,fcntl.LOCK_EX)
             obj=read(STATE)
+            unshaped=read(UNSHAPED)
+            if unshaped and unshaped.get('state')=='pending':
+                expired=(time.time()>=float(unshaped.get('deadline',0)) or
+                         unshaped.get('boot_id')!=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+                if expired:
+                    try:
+                        restore_cake_after_calibration(unshaped)
+                        calibration=read(CALIB)
+                        if calibration and calibration.get('state')=='running' and calibration.get('job_id')==unshaped.get('job_id'):
+                            atom(CALIB,dict(calibration,state='aborted',error='watchdog: ripristino dei limiti CAKE per timeout/riavvio'))
+                    except Exception as exc:
+                        print('IPTM CAKE unlimited recovery: '+str(exc),file=sys.stderr,flush=True)
             if obj and obj.get('state')=='confirmed':
                 resume_confirmed_after_boot(obj,pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip())
             if obj and obj.get('state') in ('applying','pending'):
@@ -540,37 +554,141 @@ def interface_idle(iface, *, duration=0.5, threshold_bps=131072):
     if last is None or any(n<a for n,a in zip(last,first)):return False
     return sum(b-a for a,b in zip(first,last))/duration < threshold_bps
 
+def root_cake_text(dev, handle):
+    roots=qroots(dev)
+    if len(roots)!=1 or roots[0].get('kind')!='cake' or roots[0].get('handle')!=handle:
+        raise QosError('proprietà CAKE persa su '+dev)
+    return run(['tc','-d','qdisc','show','dev',dev]).stdout
+
+
+def check_cake_bandwidth(dev,handle,rate=None):
+    """Verify CAKE rate from tc detail, never infer it from configured settings."""
+    output=root_cake_text(dev,handle)
+    if rate is None:
+        if not re.search(r'\bbandwidth\s+unlimited\b',output,re.I):
+            raise QosError('CAKE unlimited non verificabile su '+dev)
+    else:
+        rx=r'\bbandwidth\s+'+re.escape(str(rate))+r'(?:Mbit|Mbit/s|Mbits)\b'
+        if not re.search(rx,output,re.I):
+            raise QosError('limite CAKE originale non verificabile su '+dev)
+    return True
+
+
+def set_unlimited(state):
+    owned(state)
+    if not verified_ingress_for_state(state):raise QosError('filtro IFB non verificato')
+    for dev,handle in ((state['interface'],'5ca1:'),(state['ifb'],'5ca2:')):
+        opts=cake_opts(1,state)
+        opts[0:2]=['bandwidth','unlimited']
+        run(['tc','qdisc','change','dev',dev,'root','handle',handle,'cake']+opts)
+        check_cake_bandwidth(dev,handle)
+
+
+def restore_cake_after_calibration(journal):
+    """Idempotent rollback of the two bandwidth limits, including crashed workers.
+
+    The independent QoS watchdog calls this on expiry or reboot. It never
+    deletes a qdisc or creates an interface, and refuses foreign ownership.
+    """
+    if journal.get('version')!=VERSION:raise QosError('Journal di altra release: recupero non consentito')
+    if journal.get('state')!='pending':return {'ok':True,'already_restored':True}
+    state=read(STATE)
+    if not state or state.get('state')!='confirmed' or state.get('version')!=VERSION:
+        raise QosError('non è più presente il profilo CAKE confermato')
+    if state.get('interface')!=journal.get('interface') or state.get('ifb')!=journal.get('ifb'):
+        raise QosError('topologia differente: nessun cambio CAKE')
+    owned(state)
+    errors=[]
+    for dev,handle,rate in ((state['interface'],'5ca1:',state['up_mbit']),
+                            (state['ifb'],'5ca2:',state['down_mbit'])):
+        try:
+            root_cake_text(dev,handle)
+            run(['tc','qdisc','change','dev',dev,'root','handle',handle,'cake']+cake_opts(rate,state))
+            check_cake_bandwidth(dev,handle,rate)
+        except QosError as exc:errors.append(dev+': '+str(exc))
+    if errors:
+        journal['recovery_error']='; '.join(errors)[:320]
+        atom(UNSHAPED,journal)
+        raise QosError('Ripristino rate CAKE incompleto; watchdog manterrà il journal')
+    journal.update(state='restored',restored_at=time.time())
+    atom(UNSHAPED,journal)
+    return {'ok':True,'restored':True}
+
+
+def start_unshaped_calibration(iface,active,measurement):
+    """Temporarily disables *bandwidth shaping* while retaining owned CAKE qdiscs.
+
+    A standalone systemd watchdog restores both saved rates even if the
+    worker or web connection fails. Never delete ingress/IFB to measure speed.
+    """
+    guard_ready()
+    owned(active)
+    verified_ingress_for_state(active)
+    if active['interface']!=iface:raise QosError('WAN scelta differente dal profilo attivo')
+    if pathlib.Path('/var/lib/iptables-manager/pending.json').exists():
+        raise QosError('Firewall in transazione; calibrazione proibita')
+    if not interface_idle(iface):raise QosError('WAN occupata: calibrazione rinviata')
+    old=read(UNSHAPED)
+    if old and old.get('state')=='pending':raise QosError('un’altra prova senza shaping è ancora pendente')
+    journal={'state':'pending','job_id':measurement['job_id'],'interface':iface,
+             'ifb':active['ifb'],'original_up':active['up_mbit'],
+             'original_down':active['down_mbit'],'boot_id':active.get('boot_id'),
+             'started':time.time(),'deadline':time.time()+780,'version':VERSION}
+    atom(UNSHAPED,journal)  # independent safety net BEFORE the first tc change
+    atom(CALIB,measurement)
+    try:
+        set_unlimited(active)
+        # Systemd supervised worker has its own timeout; restoration is
+        # independent and never depends on the browser remaining connected.
+        run(['systemd-run','--unit='+CALIB_UNIT,'--collect',
+             '--property=Type=exec','--property=RuntimeMaxSec=700',
+             '/usr/bin/python3','-B',SCRIPT,'calibrate-worker'],timeout=25)
+    except Exception:
+        try:restore_cake_after_calibration(journal)
+        except QosError:pass  # watchdog retries; keep the journal
+        atom(CALIB,dict(measurement,state='failed',error='Avvio prova senza shaping fallito; verifica recupero CAKE'))
+        raise
+    return {'ok':True,'state':'running','mode':'cake-bandwidth-unlimited',
+            'note':'Limiti CAKE sospesi temporaneamente, watchdog indipendente armato'}
+
+
 def calibration_start(iface):
-    # A shaped link cannot be used to estimate line rate, and repeated Ookla
-    # tests are disruptive.  On an active CAKE profile prefer passive RTT.
     active=read(STATE)
-    if active and active.get('state') in ('confirmed','pending','applying','rollback-failed'):
-        raise QosError('CAKE attivo: la velocità non è ricalibrabile sotto shaping; usa il controllo RTT o disabilita CAKE con il suo rollback')
-    audit=topology_report(iface)
-    if not audit['free']:
-        raise QosError('WAN già gestita da un altro QoS: calibrazione velocità non disponibile')
-    if not interface_idle(iface):
-        raise QosError('La rete è in uso: misurazione rinviata per non rallentare i client')
-    cur=read(CALIB)
-    if cur and cur.get('state')=='running' and time.time()-cur.get('started',0)<1000:
+    if active and active.get('state') in ('pending','applying','rollback-failed'):
+        raise QosError('Prova CAKE/rollback in corso: misura vietata')
+    running=read(CALIB)
+    if running and running.get('state')=='running' and time.time()-running.get('started',0)<1000:
         raise QosError('calibrazione già in esecuzione')
-    active=read(STATE)
-    if active and active.get('state') in ('applying','pending','rollback-failed'):
-        raise QosError('calibrazione vietata durante prova o rollback QoS')
-    run(['systemctl','is-active','network-online.target'],check=False)
-    measurement={'state':'running','job_id':secrets.token_hex(12),'started':time.time(),'attempts':0,
-                 'interface':iface,'ifindex':audit['ifindex'],'root_kind':audit['root_kind'],
-                 'can_propose':audit['free'],'root_handle':audit['root_handle'],
-                 'note':'Solo misura; nessuna modifica a tc, IFB o limiti attivi'}
+    if not isinstance(iface,str) or not NIC.fullmatch(iface) or iface=='lo':
+        raise QosError('WAN non valida')
+    if run(['systemctl','is-active','iptm-sqm-calibrate.timer'],check=False).stdout.strip()=='active':
+        raise QosError('Timer SQM concorrente da disattivare prima della calibrazione')
+    if active and active.get('state')=='confirmed':
+        # Bandwidth unlimited is explicitly verified on both CAKE roots. The
+        # qdiscs remain present to preserve connectivity; *shaping is off*.
+        measurement={'state':'running','mode':'cake-bandwidth-unlimited',
+                     'job_id':secrets.token_hex(12),'started':time.time(),
+                     'attempts':0,'interface':iface,'ifindex':active['ifindex'],
+                     'can_propose':True,
+                     'note':'Banda misurata soltanto mentre i due CAKE sono unlimited'}
+        return start_unshaped_calibration(iface,active,measurement)
+    audit=topology_report(iface)
+    if not audit['free']:raise QosError('WAN di proprietà di altro QoS: nessuna modifica')
+    if not interface_idle(iface):raise QosError('WAN occupata: calibrazione rinviata')
+    measurement={'state':'running','mode':'unshaped','job_id':secrets.token_hex(12),
+                 'started':time.time(),'attempts':0,'interface':iface,
+                 'ifindex':audit['ifindex'],'root_kind':audit['root_kind'],
+                 'can_propose':True,'root_handle':audit['root_handle'],
+                 'note':'Calibrazione con shaping non attivo; nessuna modifica a tc'}
     atom(CALIB,measurement)
     try:
         run(['systemd-run','--unit='+CALIB_UNIT,'--collect','--property=Type=exec',
-             '--property=RuntimeMaxSec=900',
-             '/usr/bin/python3','-B',SCRIPT,'calibrate-worker'])
+             '--property=RuntimeMaxSec=700',
+             '/usr/bin/python3','-B',SCRIPT,'calibrate-worker'],timeout=25)
     except Exception:
         atom(CALIB,dict(measurement,state='failed',error='avvio servizio calibrazione non riuscito'))
         raise
-    return {'ok':True,'state':'running','note':measurement['note']}
+    return {'ok':True,'state':'running','mode':'unshaped','note':measurement['note']}
 
 def speedtest_measurement():
     """Independent Ookla runner; reject Python wrappers using the same command name."""
@@ -646,8 +764,14 @@ def calibration_proposal(samples,old):
             elif candidate>old_value:
                 proposal[key]=min(candidate,old_value+max(1,int(old_value*.10)),10000)
                 decisions[direction]='approved-improvement'
+            elif candidate<old_value and candidate>=int(old_value*.75):
+                # Credible reductions are suggestions, NOT automatically
+                # deployed. Significant drops may indicate an ISP bottleneck.
+                proposal[key]=candidate;decisions[direction]='review-decrease'
+            elif candidate<old_value:
+                proposal[key]=old_value;decisions[direction]='kept-large-decrease-requires-manual-check'
             else:
-                proposal[key]=old_value;decisions[direction]='kept-not-improved'
+                proposal[key]=old_value;decisions[direction]='kept-unchanged'
         elif old_value is not None:
             proposal[key]=old_value;decisions[direction]='kept-insufficient-data'
         else:
@@ -674,8 +798,25 @@ def calibration_worker():
             if not interface_idle(doc['interface']):
                 errors.append('Rete occupata: misurazione sospesa per tutelare il traffico')
                 break
-            if (read(STATE) or {}).get('state') in ('confirmed','pending','applying','rollback-failed'):
-                errors.append('CAKE avviato durante la prova: misurazione interrotta')
+            current=read(STATE)
+            if doc.get('mode')=='cake-bandwidth-unlimited':
+                journal=read(UNSHAPED)
+                if (not journal or journal.get('state')!='pending' or
+                    journal.get('job_id')!=doc['job_id'] or
+                    time.time()>=journal.get('deadline',0)):
+                    errors.append('Protezione unshaping scaduta; misura interrotta')
+                    break
+                try:
+                    if not current or current.get('state')!='confirmed':
+                        raise QosError('profilo CAKE non confermato')
+                    owned(current)
+                    check_cake_bandwidth(current['interface'],'5ca1:')
+                    check_cake_bandwidth(current['ifb'],'5ca2:')
+                except QosError:
+                    errors.append('Banda CAKE unlimited non verificata; misura interrotta')
+                    break
+            elif current and current.get('state') in ('confirmed','pending','applying','rollback-failed'):
+                errors.append('Shaping attivo durante la misura: misurazione interrotta')
                 break
             try:samples.append(speedtest_measurement())
             except QosError as exc:errors.append(str(exc))
@@ -687,11 +828,29 @@ def calibration_worker():
                 raise QosError('job sostituito: risultati ignorati')
             old=read(CALIB_LOG)
             if old and old.get('interface')!=doc['interface']:old=None
-            result=calibration_proposal(samples,old)
             active=read(STATE)
             reason=None
+            if doc.get('mode')=='cake-bandwidth-unlimited':
+                journal=read(UNSHAPED)
+                if not journal or journal.get('job_id')!=doc['job_id']:
+                    raise QosError('journal dei limiti CAKE mancante')
+                if journal.get('state')!='pending':
+                    # The watchdog may have restored limits before a late
+                    # speedtest finished. Do not accept potentially shaped data.
+                    reason='Watchdog già intervenuto: misurazione non più non-shaped'
+                else:
+                    restore_cake_after_calibration(journal)
+                # The underlying ifindex and confirmed ownership must still match.
+                if not active or active.get('state')!='confirmed' or active.get('ifindex')!=doc['ifindex']:
+                    reason='Topologia cambiata durante la misura'
+            result=calibration_proposal(samples,old)
             if not doc.get('can_propose'):
                 reason='QoS già attivo: Speedtest sotto shaping non prova maggiore capacità della linea'
+            elif doc.get('mode')=='cake-bandwidth-unlimited':
+                # Confirmed CAKE has already been restored; measurements were
+                # captured only with unlimited bandwidth on both directions.
+                if not samples or len(samples)<2:
+                    reason='Campioni insufficienti nella finestra senza shaping'
             elif active and active.get('state') in ('confirmed','applying','pending','rollback-failed'):
                 reason='Transazione o profilo CAKE intervenuto durante la misura'
             else:
@@ -718,6 +877,11 @@ def calibration_worker():
         with os.fdopen(fd,'r+') as f:
             fcntl.flock(f,fcntl.LOCK_EX)
             latest=read(CALIB)
+            if doc.get('mode')=='cake-bandwidth-unlimited':
+                journal=read(UNSHAPED)
+                if journal and journal.get('job_id')==doc['job_id'] and journal.get('state')=='pending':
+                    try:restore_cake_after_calibration(journal)
+                    except QosError:pass  # independent watchdog will retry
             if latest and latest.get('job_id')==doc['job_id'] and latest.get('state')=='running':
                 atom(CALIB,dict(latest,state='failed',finished=time.time(),error=str(exc)[:350]))
         raise
@@ -748,7 +912,7 @@ def auto_enable():
         raise QosError('disabilitare prima il timer SQM storico')
     auto_units_install()
     atom(AUTO_STATE,{'enabled':True,'activated_at':time.time(),'version':VERSION})
-    return {'ok':True,'enabled':True,'interval':'1h','mode':'rtt-when-shaped-no-background-speedtest'}
+    return {'ok':True,'enabled':True,'interval':'1h','mode':'rtt-shaped-manual-unshaped-speedtest'}
 
 def auto_disable():
     if AUTO_TIMER.exists():
@@ -763,7 +927,9 @@ def auto_status():
             'calibration':calibration_status()}
 
 def auto_tick():
-    """Do not run shaped speedtests. RTT controller handles online adjustments."""
+    """Hourly passive RTT monitor; never start an unattended speedtest."""
+    if (read(UNSHAPED) or {}).get('state')=='pending':
+        return {'ok':True,'started':False,'reason':'calibrazione senza shaping in corso'}
     if not (read(AUTO_STATE) or {}).get('enabled'):
         return {'ok':True,'started':False,'reason':'disabilitato'}
     if run(['systemctl','is-active','iptm-sqm-calibrate.timer'],check=False).stdout.strip()=='active':
@@ -781,10 +947,10 @@ def auto_tick():
                     'reason':'RTT verificato; i limiti CAKE non cambiano','changed':False}
         atom(AUTO_STATE,dict(read(AUTO_STATE) or {},last_check=time.time(),last_result=result))
         return result
-    # Network traffic can start immediately after an idle probe. Do not
-    # schedule a heavy speedtest in the background on a shared LAN/WAN.
-    result={'ok':True,'started':False,'mode':'passive-only','changed':False,
-            'reason':'Nessuno speedtest automatico senza CAKE: misurazione manuale necessaria'}
+    # Do not saturate a shared link on an automatic timer. Only an operator
+    # can initiate two high-bandwidth Ookla measurements.
+    result={'ok':True,'started':False,'changed':False,'mode':'passive-only',
+            'reason':'Non viene eseguito alcuno speedtest automatico senza shaping'}
     atom(AUTO_STATE,dict(read(AUTO_STATE) or {},last_check=time.time(),last_result=result))
     return result
 
@@ -845,6 +1011,8 @@ def adaptive_units_install():
         raise QosError('timer RTT non attivo')
 
 def adapt_enable():
+    if (read(UNSHAPED) or {}).get('state')=='pending':
+        raise QosError('Regolatore RTT bloccato durante la calibrazione senza shaping')
     state=read(STATE)
     if not state or state.get('state')!='confirmed':raise QosError('CAKE deve essere confermato')
     owned(state);guard_ready()
@@ -897,6 +1065,8 @@ def adapt_tick():
     """
     cfg=read(ADAPT)
     if not cfg or not cfg.get('enabled'):return {'ok':True,'changed':False,'reason':'disabilitato'}
+    if (read(UNSHAPED) or {}).get('state')=='pending':
+        return {'ok':True,'changed':False,'reason':'Calibrazione senza shaping in corso'}
     state=read(STATE)
     if not state or state.get('state')!='confirmed' or state['interface']!=cfg['interface'] or state['ifb']!=cfg['ifb']:
         return {'ok':True,'changed':False,'reason':'profilo CAKE non confermato'}
@@ -919,16 +1089,11 @@ def adapt_tick():
              for key in ('up','down')}
     trial=cfg.get('trial')
     if isinstance(trial,dict):
-        direction=trial.get('direction')
-        if direction not in ('up','down'):
-            raise QosError('journal prova RTT non valido; ripristino manuale richiesto')
-        # Pre-upgrade controllers only performed recovery: accept their journal.
-        kind=trial.get('kind','recover')
-        if kind not in ('reduce','recover'):
-            raise QosError('tipo prova RTT non riconosciuto')
+        direction=trial['direction']
+        # An interrupted change can be only a partial trial. Restoring prior
+        # rate is safe and idempotent even if the process died before tc change.
         sufficient=(elapsed>=20 and traffic[direction]>=1_000_000)
-        target=float(trial['initial_rtt'])
-        improved=(sufficient and (rtt<=target-5 if kind=='reduce' else rtt<=target+2))
+        improved=(sufficient and rtt<=float(trial['initial_rtt'])+2.0)
         if not improved:
             try:adapt_change_one(state,direction,int(trial['old_rate']))
             except QosError:
@@ -946,25 +1111,11 @@ def adapt_tick():
     cfg['next_direction']='up' if direction=='down' else 'down'
     base=cfg['base_'+direction]
     current=cfg[direction]
-    capacity=(base*1_000_000/8)*elapsed
-    measured_load=(elapsed>=20 and type(counter[direction]) is int
-                   and type(earlier.get(direction)) is int and traffic[direction]>=1_000_000)
-    congested=(measured_load and capacity>0 and traffic[direction]>=capacity*.75
-               and rtt>cfg['baseline']+30)
-    high_key='high_'+direction
-    cfg[high_key]=(min(10,int(cfg.get(high_key,0))+1) if congested else 0)
-    cooldown=now-float(cfg.get('last_change') or 0)>=3600
-    candidate=None;kind=None
-    if cooldown and cfg[high_key]>=3 and current>max(1,int(base*.90)):
-        candidate=max(max(1,int(base*.90)),int(current*.98))
-        if candidate<current:kind='reduce'
-        cfg[high_key]=0
-    elif cooldown and measured_load and current<base and rtt<=cfg['baseline']+8:
+    if elapsed>=20 and traffic[direction]>=1_000_000 and current<base and rtt<=cfg['baseline']+8:
         candidate=min(base,max(current+1,int(current*1.01)))
-        if candidate>current:kind='recover'
-    if kind:
-        cfg['trial']={'kind':kind,'direction':direction,'old_rate':current,
-                      'new_rate':candidate,'initial_rtt':rtt,'started_at':now}
+        cfg['trial']={'direction':direction,'old_rate':current,'new_rate':candidate,
+                      'initial_rtt':rtt,'started_at':now}
+        # Persist journal before touching kernel. A crash is resolved next tick.
         atom(ADAPT,cfg)
         try:adapt_change_one(state,direction,candidate)
         except QosError:
@@ -972,14 +1123,12 @@ def adapt_tick():
         cfg[direction]=candidate
         cfg.update(last_change=now,last_rtt=round(rtt,2),last_tick=now,counters=counter)
         atom(ADAPT,cfg)
-        return {'ok':True,'changed':True,'trial':'pending','kind':kind,
-                'direction':direction,'old_mbit':current,
-                'candidate_mbit':candidate,'rtt_ms':rtt}
+        return {'ok':True,'changed':True,'trial':'pending','direction':direction,
+                'old_mbit':current,'candidate_mbit':candidate,'rtt_ms':rtt}
     cfg.update(last_rtt=round(rtt,2),last_tick=now,counters=counter)
     atom(ADAPT,cfg)
-    return {'ok':True,'changed':False,'reason':'nessuna regolazione sicura',
-            'rtt_ms':rtt,'direction':direction,'congested':bool(congested),
-            'traffic_bytes':traffic[direction]}
+    return {'ok':True,'changed':False,'reason':'nessun recupero verificabile',
+            'rtt_ms':rtt,'direction':direction,'traffic_bytes':traffic[direction]}
 
 def adapt_disable():
     cfg=read(ADAPT)
@@ -1013,6 +1162,7 @@ def main(args):
         fcntl.flock(f,fcntl.LOCK_EX)
         if args==['status']:
             result=status();cfg=read(ADAPT)
+            result['unshaped_calibration']=(read(UNSHAPED) or {}).get('state')=='pending'
             result['adaptive']={k:v for k,v in (cfg or {}).items() if k in
                 ('enabled','up','down','last_rtt','last_tick','base_up','base_down','samples')}
             return result
@@ -1027,10 +1177,9 @@ def main(args):
         if len(args)==2 and args[0]=='calibrate-start':return calibration_start(args[1])
         if args==['traffic-inspect']:
             import importlib.util
-            module_file=pathlib.Path(__file__).with_name('traffic_observer.py')
-            if module_file.is_symlink() or not module_file.is_file():
-                raise QosError('osservatore traffico non installato')
-            spec=importlib.util.spec_from_file_location('iptm_traffic_observer',module_file)
+            path=pathlib.Path(__file__).with_name('traffic_observer.py')
+            if path.is_symlink() or not path.is_file():raise QosError('Osservatore non installato')
+            spec=importlib.util.spec_from_file_location('iptm_traffic_observer',path)
             observer=importlib.util.module_from_spec(spec)
             spec.loader.exec_module(observer)
             return observer.status()
@@ -1047,6 +1196,8 @@ def main(args):
             if not obj or obj.get('token')!=args[1]:raise QosError('token differente')
             return restore(obj)
         if args==['disable']:
+            if (read(UNSHAPED) or {}).get('state')=='pending':
+                raise QosError('Disabilitazione proibita durante calibrazione senza shaping')
             obj=read(STATE)
             if not obj or obj.get('state')!='confirmed':raise QosError('nessun profilo confermato')
             return restore(obj)

@@ -373,7 +373,7 @@ HTML;
 }
 
 
-/** IPTM 5.30.1: one-click offline rules.v4 audit and in-memory hardening. */
+/** IPTM 5.30.2: one-click offline rules.v4 audit and in-memory hardening. */
 function pg_rulesaudit() {
     $admin = (($_SESSION['role'] ?? 'viewer') === 'admin');
     echo '<div class="iptm-task-intro"><div><h2>Analizza e correggi rules.v4</h2>'

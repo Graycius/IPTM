@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IPTM 5.30.1: conservative retention of IPTM-owned completed artifacts.
+"""IPTM 5.30.2: conservative retention of IPTM-owned completed artifacts.
 
 CLI is root-only. Preview and run share the SAME selection function. No deletion of
 live files, user-named backups, journals, locks, pending transactions or external logs.
@@ -130,25 +130,21 @@ def active_recovery(data,rec):
             data/'backups/dns-guard/pending.json',data/'update-pending.json']
     for f in guards:
         if f.is_symlink() or f.exists():return True
-    # A QoS or network trial can still need its pre-change artifacts.
-    # Fail closed for unreadable journals; do not age out recovery evidence.
-    network_states = (
-        Path('/var/lib/iptm-qos-engine/active.json'),
-        Path('/var/lib/iptm-nm-editor/trial.json'),
-        Path('/var/lib/iptm-network-runtime/transaction.json'),
-        Path('/var/lib/iptm-fabric-runtime/fabric-trial.json'),
-        Path('/var/lib/iptm-alias-trial/state.json'),
-        Path('/var/lib/iptm-update-recovery/pending.json'),
-    )
-    active={'pending','applying','reconciling','rollback-failed',
-            'rollback-incomplete','starting','trial','recovery-needed'}
-    for path in network_states:
+    # Never retire backups while a QoS or network transaction may need them.
+    for path in (Path('/var/lib/iptm-qos-engine/active.json'),
+                 Path('/var/lib/iptm-qos-engine/unshaped-calibration.json'),
+                 Path('/var/lib/iptm-nm-editor/trial.json'),
+                 Path('/var/lib/iptm-network-runtime/transaction.json'),
+                 Path('/var/lib/iptm-fabric-runtime/fabric-trial.json'),
+                 Path('/var/lib/iptm-alias-trial/state.json'),
+                 Path('/var/lib/iptm-update-recovery/pending.json')):
         if path.is_symlink():return True
         if not path.exists():continue
         journal=safe_json(path)
         if not isinstance(journal,dict) or not journal:return True
-        if journal.get('state') in active or journal.get('status') in active:
-            return True
+        active={'pending','applying','reconciling','rollback-failed',
+                'rollback-incomplete','starting','trial','recovery-needed'}
+        if journal.get('state') in active or journal.get('status') in active:return True
     if rec.exists():
         if rec.is_symlink():return True
         for p in rec.glob('*.json'):

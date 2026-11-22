@@ -1,4 +1,12 @@
-# IPTM 5.30.1 — Continuità SSH, HTTP Update, QoS non invasivo (22 novembre 2026)
+# IPTM 5.30.2 — Prestazioni e continuità di rete
+
+- Analisi in sola lettura delle regole IPv4: limiti DROP, QUIC, logging, IPSet, code in userspace, duplicati e controlli che possono aumentare latenza.
+- Proxy HTTP Squid isolato per subnet LAN esplicitamente autorizzate, con cache configurabile, HTTPS CONNECT senza intercettazione TLS, anteprima e attivazione a conferma.
+- Calibrazione della banda con CAKE **bandwidth unlimited** temporaneo su entrambe le direzioni; watchdog indipendente per ripristinare i limiti confermati.
+- Miglioramento del recupero firewall quando snapshot IPSet contengono riferimenti CrowdSec dinamici scaduti.
+- Riduzione carico QoS automatico, analisi Suricata EVE Layer 7, socket dei processi locali e retention backup conservativa.
+
+# IPTM 5.30.2 — Continuità SSH, HTTP Update, QoS non invasivo (22 novembre 2026)
 
 **Priorità:** continuità SSH e traffico lecito, nessuna modifica automatica al kernel durante l'aggiornamento.
 

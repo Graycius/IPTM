@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fabric_manager import FabricError, validate_fabric, plan_fabric
 from traffic_fabric import propose as propose_traffic
 
-VERSION = '5.30.1'
+VERSION = '5.30.2'
 CONFIG_DIR = Path('/etc/iptables-manager')
 PROFILE_PATH = CONFIG_DIR / 'multinic-draft.json'
 IF_RX = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,14}$')
