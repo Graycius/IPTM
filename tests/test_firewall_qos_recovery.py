@@ -261,5 +261,39 @@ class QosLifecycleTests(unittest.TestCase):
         self.assertEqual(result['trial'],'approved')
 
 
+
+class UiAndBackupTests(unittest.TestCase):
+    def test_exact_duplicate_qos_table_is_absent(self):
+        page = (ROOT/'modules/17_common_ui_ops.php').read_text()
+        sqm = (ROOT/'modules/34_qos_pages.php').read_text()
+        self.assertNotIn('Equivalenza cFosSpeed non certificata',page)
+        self.assertNotIn("iptm_operator_insights('qos')",sqm)
+        self.assertIn('Classificazione Layer 7',sqm)
+        self.assertIn('Classificazione per processo',sqm)
+
+    def test_retention_policy_rejects_bad_inputs(self):
+        retention=module('iptm_retention_test','retention_manager.py')
+        valid=dict(retention.DEFAULTS)
+        self.assertEqual(retention.validate_policy(valid),valid)
+        for bad in (dict(valid,backup_days=-1),
+                    dict(valid,backup_keep=True),
+                    dict(valid,backup_days=2**60),
+                    dict(valid,unknown='path/../escape')):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    retention.validate_policy(bad)
+
+    def test_retention_blocks_pending_recovery(self):
+        import tempfile
+        retention=module('iptm_retention_pending','retention_manager.py')
+        with tempfile.TemporaryDirectory() as directory:
+            data=Path(directory)
+            recovery=data/'update-recovery'
+            (data/'pending.json').write_text('{}')
+            self.assertTrue(retention.active_recovery(data,recovery))
+            (data/'pending.json').unlink()
+            self.assertFalse(retention.active_recovery(data,recovery))
+
+
 if __name__=='__main__':
     unittest.main(verbosity=2)
