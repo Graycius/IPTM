@@ -1021,6 +1021,15 @@ def main(args):
         if args==['adaptive-disable']:return adapt_disable()
         if len(args)==2 and args[0]=='inspect':return topology_report(args[1])
         if len(args)==2 and args[0]=='calibrate-start':return calibration_start(args[1])
+        if args==['traffic-inspect']:
+            import importlib.util
+            module_file=pathlib.Path(__file__).with_name('traffic_observer.py')
+            if module_file.is_symlink() or not module_file.is_file():
+                raise QosError('osservatore traffico non installato')
+            spec=importlib.util.spec_from_file_location('iptm_traffic_observer',module_file)
+            observer=importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(observer)
+            return observer.status()
         if args==['calibrate-status']:return calibration_status()
         if args==['install-guard']:return guard_install()
         if args==['stage']:
