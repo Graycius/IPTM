@@ -300,7 +300,7 @@ case 'rule_op': {
         }
         case 'v6_raw': if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Salvataggio IPv6 fallito.', 'err'); break; } flash('Testo IPv6 salvato nella bozza.'); break;
         case 'v6_test': { if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } [$c, $o, $e] = priv('test6', v6_get()); flash($c === 0 ? '✔ Sintassi IPv6 valida.' : '✖ Errore: ' . trim($o . $e), $c === 0 ? 'ok' : 'err'); break; }
-        case 'v6_apply': { if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } if (apply_result(do_apply(ROLLBACK_SECS, '6', true, true))) flash('Regole IPv6 applicate e confermate.'); break; }
+        case 'v6_apply': { if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } if (apply_result(do_apply(ROLLBACK_SECS, '6'))) flash('Regole IPv6 in prova: verifica e conferma prima della scadenza.'); break; }
         case 'v6_write': {
             // Salvare per il boot SENZA il test rollback può tagliare fuori
             // l'IPv6 al prossimo riavvio. Usare Applica IPv6 + conferma.
@@ -464,9 +464,11 @@ case 'manual_convert': {
                 }
                 try {$removed=iptm_dns_guard_losses(rules_live(),$draftTxt);}
                 catch(RuntimeException $ex){flash('Verifica DoT/DNS impossibile: '.$ex->getMessage(),'err');break;}
-                // Simplified flow: allow saving drafts that drop DNS/DoT guards.
+                // A plain save cannot silently remove DNS protections: unlike
+                // apply+confirm it has no connectivity watchdog.
                 if ($removed) {
-                    $GLOBALS['apply_notes'] = $GLOBALS['apply_notes'] ?? [];
+                    flash('Salvataggio bloccato: rimozione DoT/DNS non confermata (' . implode(', ', $removed) . '). Ripristina i blocchi in Setup o usa Applica con conferma esplicita e watchdog.', 'err');
+                    break;
                 }
                 ipsets_prepare(); [$c,$o,$e]=priv('test',$draftTxt);
                 if ($c) {flash('Non salvo: bozza non valida. '.herr($o.$e),'err');break;}
@@ -484,7 +486,7 @@ case 'manual_convert': {
             }
             break;
         case 'apply':
-            if (apply_result(do_apply((int)($_POST['secs'] ?? ROLLBACK_SECS), '4', true, true))) flash('Regole applicate e confermate.');
+            if (apply_result(do_apply((int)($_POST['secs'] ?? ROLLBACK_SECS), '4', false, !empty($_POST['confirm_dns_guard_removal'])))) flash('Regole in prova: conferma manualmente prima della scadenza.');
             $back = 'p=apply'; break;
     
 }

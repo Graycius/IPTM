@@ -38,11 +38,11 @@ if (isset($__wc['ALLOWED_NETS6']) && is_array($__wc['ALLOWED_NETS6'])) {
 }
 define('ALLOWED_NETS6', $__v6);
 unset($__v6, $__provided, $__valid, $__net, $__match);
-define('ROLLBACK_SECS', $__wi('ROLLBACK_SECS', 60, 10, 3600));      // secondi per confermare dopo "Applica"
+define('ROLLBACK_SECS', $__wi('ROLLBACK_SECS', 180, 30, 3600));      // secondi per confermare dopo "Applica"
 define('MIN_PW', $__wi('MIN_PW', 10, 8, 128));
 define('IDLE_SECS', $__wi('IDLE_SECS', 1800, 60, 86400));           // scadenza della sessione per inattivita'
-const APP_VERSION = '5.30.22';
-const APP_BUILD = '20261122.31.iptm-5.30.22';
+const APP_VERSION = '5.30.23';
+const APP_BUILD = '20261123.1.iptm-5.30.23';
 const SETTINGS_SCHEMA = 46;   // versione schema settings.json (migrazioni in S_load)
 define('HELPER', $__wp('HELPER', '/usr/local/sbin/iptm-helper'));   // creato da install-dietpi.sh (operazioni root)
 define('BIN_IP', $__wp('BIN_IP', '/usr/sbin/ip'));

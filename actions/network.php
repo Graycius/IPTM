@@ -213,7 +213,7 @@ switch ($a) {
                     flash('Validazione ok ma applicazione non confermata: ' . herr((string)($result['error'] ?? 'esito sconosciuto')), 'err');
                 } else {
                     audit('dhcp-reservations applied n=' . (int)($result['hosts_written'] ?? $result['count'] ?? 0));
-                    flash('Reservation applicate su Pi-hole: ' . (int)($result['hosts_written'] ?? $result['count'] ?? 0) . ' host (dhcp.hosts).');
+                    flash('Prenotazioni Pi-hole verificate: ' . (int)($result['hosts_written'] ?? $result['count'] ?? 0) . ' totali, ' . (int)($result['hosts_preserved'] ?? 0) . ' precedenti preservate e ' . (int)($result['hosts_added'] ?? 0) . ' aggiunte. Backup root-only creato se è stata eseguita una modifica.');
                 }
             } else {
                 $warnN = count((array)($result['warnings'] ?? []));

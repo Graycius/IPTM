@@ -263,17 +263,11 @@ function do_apply(int $secs, string $fam = '4', bool $force = false, bool $confi
         $GLOBALS['apply_notes'][] = ['err', "Test GATEWAY incompleto:\n" . implode("\n", $bad) . ' ' . herr($testErr)];
     else
         $GLOBALS['apply_notes'][] = ['ok', 'Test GATEWAY completato.'];
-    // Single-step apply: release apply lock then confirm immediately.
-    if (is_resource($applyLock)) {
-        @flock($applyLock, LOCK_UN);
-        @fclose($applyLock);
-        $applyLock = null;
-    }
-    $confirmErr = confirm_pending();
-    if ($confirmErr !== '') {
-        $GLOBALS['apply_notes'][] = ['err', 'Conferma automatica non completata: ' . $confirmErr];
-        return $confirmErr;
-    }
+    // Applied only to the kernel. Keep the independent watchdog and pending
+    // transaction intact until an administrator verifies SSH/LAN and explicitly
+    // confirms through the dedicated, CSRF-protected UI action. Never silently
+    // write experimental rules to rules.v4 here.
+    $GLOBALS['apply_notes'][] = ['err', 'Regole in PROVA: verifica una nuova sessione SSH, accesso web, DNS e VPN, poi premi «Conferma e salva» entro la scadenza. Se non confermi, il watchdog ripristina le vecchie regole.'];
     return '';
 }
 function confirm_pending(): string {

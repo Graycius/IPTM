@@ -9,6 +9,9 @@ No automatic gateway, DHCP, primary bond or managed-client route changes.
 from __future__ import annotations
 
 import hashlib
+import fcntl
+import time
+import tomllib
 import ipaddress
 import json
 import os
@@ -19,7 +22,7 @@ import subprocess
 import sys
 from typing import Any
 
-VERSION = '5.30.22'
+VERSION = '5.30.23'
 MAX_FILES = 384
 MAX_FILE_BYTES = 256 * 1024
 IFACE_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,14}$')
@@ -498,6 +501,103 @@ def validate_dhcp_reservations(
 
 
 
+# Pi-hole v6 prints dhcp.hosts in a human-readable, unquoted format when read
+# from the CLI (nested commas are ambiguous). Read the authoritative TOML array
+# instead, fail closed if absent/unparseable, and use the FTL CLI only for writes.
+PIHOLE_DHCP_CONFIG = Path('/etc/pihole/pihole.toml')
+IPTM_DHCP_STATE = Path('/var/lib/iptables-manager')
+DHCP_MAC_RE = re.compile(r'^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$', re.I)
+
+
+def _dhcp_existing_hosts() -> list[str]:
+    path = PIHOLE_DHCP_CONFIG
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('Pi-hole: pihole.toml non disponibile o link simbolico; nessuna scrittura')
+    try:
+        with path.open('rb') as fh:
+            data = tomllib.load(fh)
+        entries = data['dhcp']['hosts']
+    except (OSError, ValueError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError('Pi-hole: impossibile leggere dhcp.hosts da pihole.toml in sicurezza') from exc
+    if not isinstance(entries, list) or len(entries) > 2048 or not all(isinstance(x, str) and '\n' not in x and '\r' not in x and len(x) <= 256 for x in entries):
+        raise ValueError('Pi-hole: formato dhcp.hosts non supportato; non sovrascrivo')
+    return entries
+
+
+def _dhcp_host_identity(text: str) -> tuple[str, str | None]:
+    parts = [x.strip() for x in text.split(',')]
+    mac = parts[0].lower()
+    if not DHCP_MAC_RE.fullmatch(mac):
+        raise ValueError('Pi-hole: reservation esistente con MAC non riconosciuto; modifica dalla UI Pi-hole')
+    ip = None
+    for part in parts[1:]:
+        try:
+            value = str(ipaddress.IPv4Address(part))
+        except ipaddress.AddressValueError:
+            continue
+        if ip is not None:
+            raise ValueError('Pi-hole: reservation esistente con più IP; merge non sicuro')
+        ip = value
+    return mac, ip
+
+
+def _dhcp_merge_hosts(previous: list[str], requested: list[dict]) -> tuple[list[str], int]:
+    by_mac: dict[str, tuple[str | None, str]] = {}
+    by_ip: dict[str, str] = {}
+    for raw in previous:
+        mac, ip = _dhcp_host_identity(raw)
+        if mac in by_mac:
+            raise ValueError('Pi-hole: MAC duplicato già presente; correzione necessaria in Pi-hole')
+        if ip is not None and ip in by_ip:
+            raise ValueError('Pi-hole: IP duplicato già presente; correzione necessaria in Pi-hole')
+        by_mac[mac] = (ip, raw)
+        if ip is not None:
+            by_ip[ip] = mac
+    merged = previous.copy()
+    additions = 0
+    for row in requested:
+        mac = row['mac'].lower()
+        ip = row['ip']
+        if mac in by_mac:
+            if by_mac[mac][0] != ip:
+                raise ValueError('Pi-hole: MAC ' + mac + ' già associato a un IP diverso; aggiornalo manualmente in Pi-hole')
+            # Existing host (including tags, lease and hostname) is preserved byte for byte.
+            continue
+        if ip in by_ip:
+            raise ValueError('Pi-hole: IP ' + ip + ' già assegnato a un altro MAC; merge annullato')
+        item = mac + ',' + ip
+        if row.get('hostname'):
+            item += ',' + row['hostname']
+        merged.append(item)
+        by_mac[mac] = (ip, item)
+        by_ip[ip] = mac
+        additions += 1
+    if len(merged) > 2048:
+        raise ValueError('Pi-hole: troppe prenotazioni DHCP; nessuna scrittura')
+    return merged, additions
+
+
+def _dhcp_write_backup(previous: list[str]) -> str:
+    base = IPTM_DHCP_STATE
+    if base.is_symlink() or not base.is_dir():
+        raise ValueError('IPTM: directory dati non verificabile; applicazione DHCP bloccata')
+    backup = base / 'backups' / 'dhcp-hosts'
+    for folder in (base / 'backups', backup):
+        if folder.is_symlink():
+            raise ValueError('IPTM: percorso backup DHCP non sicuro')
+        folder.mkdir(mode=0o700, exist_ok=True)
+        if not folder.is_dir():
+            raise ValueError('IPTM: directory backup DHCP non disponibile')
+    path = backup / ('hosts-' + str(int(time.time())) + '-' + os.urandom(6).hex() + '.json')
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as file:
+        json.dump(previous, file, separators=(',', ':'), ensure_ascii=False)
+        file.flush()
+        os.fsync(file.fileno())
+    return str(path)
+
+
 def apply_dhcp_reservations(
     entries,
     *,
@@ -508,56 +608,70 @@ def apply_dhcp_reservations(
     allow_in_pool: bool = False,
     mode: str = 'check',
 ) -> dict:
-    """Validate and optionally apply reservations to local Pi-hole FTL.
+    """Check or merge DHCP reservations without deleting existing Pi-hole hosts.
 
-    mode:
-      check — validation only
-      apply — write dhcp.hosts via pihole-FTL after successful validation
+    An IPTM-only advisory lock prevents simultaneous IPTM writes. Other Pi-hole
+    interfaces may still write concurrently; read-back rejects mismatches and
+    restores only when the resulting state can be identified safely.
     """
     if mode not in ('check', 'apply'):
         raise ValueError('DHCP reservation: mode deve essere check o apply')
     result = validate_dhcp_reservations(
-        entries,
-        address=address,
-        start=start,
-        end=end,
-        gateway=gateway,
+        entries, address=address, start=start, end=end, gateway=gateway,
         allow_in_pool=allow_in_pool,
     )
-    result['applied'] = False
-    result['mode'] = mode
+    result.update({'applied': False, 'mode': mode})
     if not result.get('ok') or mode != 'apply':
         return result
     if os.geteuid() != 0:
         raise ValueError('DHCP reservation apply: richiede root')
     if not shutil.which('pihole-FTL'):
         raise ValueError('DHCP reservation apply: pihole-FTL non trovato')
-    # Pi-hole static hosts: "mac,ip" or "mac,ip,hostname"
-    lines = []
-    for row in result['reservations']:
-        item = f"{row['mac']},{row['ip']}"
-        if row.get('hostname'):
-            item += ',' + row['hostname']
-        lines.append(item)
-    # Read current value for rollback message
-    prev_rc, prev_out = command(['pihole-FTL', '--config', 'dhcp.hosts'], timeout=5)
-    previous = prev_out.strip() if prev_rc == 0 else ''
-    # Set as JSON array of strings (FTL config CLI)
-    payload = json.dumps(lines, separators=(',', ':'))
-    rc, out = command(['pihole-FTL', '--config', 'dhcp.hosts', payload], timeout=10)
-    if rc != 0:
-        raise ValueError('DHCP reservation apply fallito: ' + (out or 'exit non zero')[:220])
-    # Verify read-back contains all MAC addresses
-    verify_rc, verify_out = command(['pihole-FTL', '--config', 'dhcp.hosts'], timeout=5)
-    if verify_rc != 0:
-        raise ValueError('DHCP reservation: lettura post-apply fallita')
-    missing = [row['mac'] for row in result['reservations'] if row['mac'] not in verify_out.lower()]
-    if missing:
-        raise ValueError('DHCP reservation: apply non verificato per MAC ' + ','.join(missing[:8]))
-    result['applied'] = True
-    result['previous_hosts'] = previous[:2000]
-    result['hosts_written'] = len(lines)
-    return result
+    base = IPTM_DHCP_STATE
+    if base.is_symlink() or not base.is_dir():
+        raise ValueError('IPTM: directory dati non disponibile, nessuna modifica DHCP')
+    lock_path = base / 'dhcp-reservations.lock'
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        previous = _dhcp_existing_hosts()
+        merged, additions = _dhcp_merge_hosts(previous, result['reservations'])
+        result['hosts_preserved'] = len(previous)
+        result['hosts_added'] = additions
+        result['hosts_written'] = len(merged)
+        if additions == 0:
+            result['applied'] = True
+            result['unchanged'] = True
+            return result
+        # Ensure local FTL is reachable; its human-facing printout is NOT a
+        # machine-readable array and cannot be used for lossless merge.
+        probe_rc, _ = command(['pihole-FTL', '--config', 'dhcp.hosts'], timeout=5)
+        if probe_rc != 0:
+            raise ValueError('Pi-hole: FTL non disponibile; nessuna scrittura')
+        backup = _dhcp_write_backup(previous)
+        result['backup'] = backup
+        if _dhcp_existing_hosts() != previous:
+            raise ValueError('Pi-hole: dhcp.hosts modificato durante il controllo; riprova')
+        rc, out = command(['pihole-FTL', '--config', 'dhcp.hosts', json.dumps(merged, separators=(',', ':'))], timeout=10)
+        # Even a failing CLI command may have changed persistent config.
+        try:
+            effective = _dhcp_existing_hosts()
+        except ValueError:
+            raise ValueError('Pi-hole: lettura dopo applicazione fallita; backup salvato in ' + backup + ', necessario controllo manuale')
+        if rc != 0 or effective != merged:
+            if effective != previous and effective != merged:
+                raise ValueError('Pi-hole: modifica concorrente o inattesa; backup ' + backup + '. NON sovrascrivo modifiche esterne: controlla manualmente')
+            if effective == merged or (effective != previous):
+                rb_rc, _ = command(['pihole-FTL', '--config', 'dhcp.hosts', json.dumps(previous, separators=(',', ':'))], timeout=10)
+                if rb_rc != 0 or _dhcp_existing_hosts() != previous:
+                    raise ValueError('Pi-hole: RIPRISTINO DHCP FALLITO; backup in ' + backup + '. Intervento da console necessario')
+            raise ValueError('Pi-hole: scrittura o verifica DHCP fallita, configurazione precedente preservata. ' + (out or '')[:140])
+        result['applied'] = True
+        return result
+    except BlockingIOError as exc:
+        raise ValueError('IPTM: altra applicazione DHCP in corso; riprova') from exc
+    finally:
+        os.close(fd)
 
 
 def pihole_dhcp_patch(plan: dict) -> dict:

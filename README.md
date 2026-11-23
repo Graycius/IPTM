@@ -31,6 +31,17 @@ La 5.30.22 introduce protezioni per la sessione e l'accesso web, controlli incro
 
 **Avvertenza per gateway remoti:** nella 5.30.22 l'applicazione firewall può confermare automaticamente la transazione senza una verifica manuale della raggiungibilità SSH/LAN. Inoltre, la sincronizzazione DHCP Pi-hole può sostituire l'intero elenco `dhcp.hosts`. Prima dell'installazione effettuare backup e collaudo in ambiente di prova. La suite CI esegue test offline, **non** convalida la continuità della rete sul DietPi reale.
 
+## Novità IPTM 5.30.23 — rollback firewall, Pi-hole DHCP e VPN→LAN
+
+Questa release corregge due rischi della 5.30.22: (1) `do_apply()` non conferma più automaticamente le regole nel kernel: il watchdog resta attivo per la finestra configurata, e una sessione amministrativa deve premere **Conferma e salva** dopo il collaudo SSH, LAN, DNS e VPN; (2) le prenotazioni `dhcp.hosts` vengono **aggiunte senza eliminare quelle esistenti**, con rifiuto dei conflitti MAC/IP, backup root-only (0600) e verifica post-scrittura su `pihole.toml`.
+
+- [Aggiornamento nativo IPTM 5.30.23](release/IPTM_5.30.23_UPDATE.zip)
+- [Guida VPN→LAN: SSH, Home Assistant, routing e policy](docs/VPN_ACCESS_53023.md)
+- Protezioni DoT/DNS e policy `FORWARD DROP` preservate; nessuna nuova apertura indiscriminata su `wg0`.
+- Finestra di rollback predefinita: **180 s**, personalizzabile in `/etc/iptables-manager.web.json` (se già definita, prevale la configurazione esistente).
+
+**Collaudo richiesto su DietPi:** la CI verifica offline sintassi e regressioni, ma non prova firewall, raggiungibilità SSH e Home Assistant reali né il demone FTL reale. Su Pi-hole che usa array DHCP di formato non interpretabile, IPTM rifiuta l'operazione senza sovrascrivere nulla. Non applicare da remoto senza una console di recupero.
+
 ## Novità 5.30.12 — sola diagnostica prestazionale, nessun proxy HTTP
 
 La cache HTTP LAN è stata eliminata dall’interfaccia, dal controller, dalla gestione dei programmi e dall’helper: non esistono più attivazione, configurazione né reindirizzamenti HTTP gestiti dall’applicazione. L’aggiornamento nativo dismette prima della sostituzione dell’helper soltanto i componenti con ownership IPTM verificabile, usando le regole di rimozione exact-match del motore già installato. Se i redirect NAT non sono verificabili o i file sono stati modificati, **l’aggiornamento viene bloccato** prima del cambio di runtime: nessun flush di `nat`, `filter` o riduzione di `FORWARD DROP`.

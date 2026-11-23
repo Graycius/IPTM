@@ -171,7 +171,7 @@ case 'sec_preset': {
                 }
             }
             // Changing a UI form does not apply kernel sysctl. Use Hardening → preview/apply explicitly.
-            if (!empty($_POST['apply'])) { if (apply_result(do_apply(ROLLBACK_SECS, '4', true, true))) flash('Impostazioni applicate e confermate.'); $back = 'p=apply'; }
+            if (!empty($_POST['apply'])) { if (apply_result(do_apply(ROLLBACK_SECS, '4'))) flash('Impostazioni applicate in prova: verifica SSH/LAN, poi conferma.'); $back = 'p=apply'; }
             break;
         }
         case 'settings_reset': {
@@ -238,7 +238,7 @@ case 'sec_preset': {
             S_put($S2); $warn = regen($M, $S2); save_model(); /* Procedura guidata: niente sysctl, ipset o liste live; applicazione separata con rollback. */ if ($v6 && !v6_put(v6_gen($v6))) throw new RuntimeException('Bozza IPv6 non salvata: verifica spazio e permessi');
             flash('Configurazione creata nella bozza (' . count(gen_sections($S2)[0]) . ' blocchi di regole).'); foreach (array_merge($w, $warn) as $x) flash('⚠ ' . $x, 'err');
             if (!empty($_POST['apply_now'])) {
-                if (apply_result(do_apply(ROLLBACK_SECS, '4', true, true))) flash('Configurazione applicata e confermata.');
+                if (apply_result(do_apply(ROLLBACK_SECS, '4'))) flash('Configurazione applicata in prova: conferma entro il tempo di rollback.');
             }
             $back = 'p=apply'; break;
         }

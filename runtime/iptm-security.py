@@ -317,7 +317,7 @@ def pihole_health():
             continue
         uri = f"{'https' if secure else 'http'}://{target}:{port}/admin/"
         try:
-            req = urllib.request.Request(uri, headers={'User-Agent':'IPTM-local-health/5.30.22'})
+            req = urllib.request.Request(uri, headers={'User-Agent':'IPTM-local-health/5.30.23'})
             handler = urllib.request.HTTPSHandler(context=ssl._create_unverified_context()) if secure else urllib.request.HTTPHandler()
             client = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(), handler)
             with client.open(req, timeout=2.0) as response:
@@ -426,7 +426,7 @@ def parse_oui(text):
 
 def update_oui():
     if os.geteuid()!=0: raise ValueError('aggiornamento vendor riservato a root')
-    req=urllib.request.Request(IEEE_OUI,headers={'User-Agent':'IPTM-security/5.30.22'})
+    req=urllib.request.Request(IEEE_OUI,headers={'User-Agent':'IPTM-security/5.30.23'})
     class SecureRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, request, fp, code, msg, headers, newurl):
             url=urllib.parse.urlsplit(newurl)
