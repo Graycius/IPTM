@@ -51,6 +51,8 @@ jobs:
           python tests/test_ssh_qos_5301.py
           python tests/test_5304_hardening.py
           python tests/test_proxy_retirement_5312.py
+          python tests/test_dhcp_53023.py
+          python tests/test_firewall_53023.py
           php tests/test_regressions.php
           php tests/test_service_combinations.php
           php tests/test_dns_guard_preservation_5311.php

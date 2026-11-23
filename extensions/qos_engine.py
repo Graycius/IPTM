@@ -8,7 +8,7 @@ Deliberately does not estimate internet bandwidth from NIC link speed.
 from __future__ import annotations
 import fcntl, hashlib, json, os, pathlib, re, secrets, subprocess, sys, tempfile, time
 
-VERSION='5.30.22'
+VERSION='5.30.23'
 BASE=pathlib.Path('/var/lib/iptm-qos-engine')
 LOCK=BASE/'lock';STAGE=BASE/'stage.json';STATE=BASE/'active.json'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-watchdog.service')

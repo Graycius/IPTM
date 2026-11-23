@@ -1,3 +1,11 @@
+## 5.30.23 — sicurezza firewall, prenotazioni Pi-hole e accesso LAN da VPN
+
+- **Firewall:** ripristinato commit esplicito dopo l'applicazione; le regole restano in prova con `pending.json` e watchdog/rollback indipendente. Nessun `confirm_pending()` automatico in `do_apply()`. La finestra predefinita aumenta a 180 secondi (configurabile in `/etc/iptables-manager.web.json`).
+- **Controlli:** eliminate le chiamate applicative con `force=true, confirmDnsGuardRemoval=true`. La rimozione DNS/DoT richiede un checkbox di conferma nella pagina Applica; il salvataggio diretto su disco non può rimuovere silenziosamente quelle protezioni.
+- **DHCP Pi-hole:** preserva le prenotazioni esistenti, blocca collisioni MAC/IP, crea uno snapshot root-only 0600 e verifica il readback tramite `pihole.toml`. Se il comando di scrittura segnala un errore, tenta rollback soltanto quando lo stato è riconoscibile; se sono presenti modifiche concorrenti si ferma senza sovrascriverle. Nessun riavvio automatico di Pi-hole.
+- **VPN:** guida in pagina VPN e documento diagnostico per SSH `INPUT`, servizi remoti `FORWARD`, rotta di risposta, `AllowedIPs` e policy IoT/guest. Nessun ACCEPT indiscriminato o cambiamento automatico delle rotte.
+- **Verifiche:** sintassi, regressioni mirate, validazione manifest e pacchetto nativo. La continuità SSH/DNS/VPN e il comportamento Pi-hole in produzione richiedono verifica sul DietPi reale.
+
 ## 5.30.22 — CrowdSec nftables / rilevamento
 
 - `cs-status` riporta mode, tabella nft e presenza catene.

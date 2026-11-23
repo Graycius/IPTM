@@ -242,7 +242,7 @@ if ($pd = pending()) {
     echo '<div class=banner style="position:sticky;top:0;z-index:50;display:flex;flex-wrap:wrap;gap:8px;align-items:center">';
     if ($recover) echo '<b>⚠ Ripristino firewall necessario.</b> Il watchdog è scaduto o lo stato è incompleto. Non applicare nuove regole finché il recupero non è verificato.';
     else echo '<b>⏳ Regole in prova (anti-lockout).</b> Ripristino tra <b id=cd data-until=' . (int)$pd['until'] . '>…</b> s.';
-    if (!$recover && iptm_health_policy_marker_read() === null) echo '<form method=post data-iptm-layout="ui-ab79ea2b85">' . fh('p=apply') . '<input type=hidden name=action value=confirm><button class=g>✔ Conferma e salva</button></form>';
+    if (!$recover && iptm_health_policy_marker_read() === null) echo '<form method=post data-iptm-layout="ui-ab79ea2b85">' . fh('p=apply') . '<input type=hidden name=action value=confirm><button class=g>✔ Ho verificato SSH, LAN e VPN: conferma e salva</button></form>';
     elseif (!$recover && iptm_health_policy_marker_read() !== null) echo '<a class="btn g" href="?p=health#health-policy">Conferma nella pagina Salute</a>';
     if (iptm_health_policy_marker_read() === null) echo '<form method=post data-iptm-layout="ui-ab79ea2b85">' . fh('p=apply') . '<input type=hidden name=action value=revert><button class=d>↩ Ripristina regole precedenti</button></form>';
     else echo '<a class="btn d" href="?p=health#health-policy">Ripristina da Salute</a>';

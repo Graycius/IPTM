@@ -205,7 +205,7 @@ function pg_multinic(): void {
             if(is_array($_SESSION['iptm_dual_dhcp_preview']??null))echo '<p class="mut">Validazione completata: il servizio DHCP <b>non è stato avviato</b>.</p>';
 
             echo '<div class="card"><h3>Reservation DHCP (static host)</h3>';
-            echo '<p class="mut">Verifica MAC/IP/hostname rispetto a subnet e pool. <b>Controlla</b> solo valida; <b>Applica su Pi-hole</b> scrive `dhcp.hosts` tramite pihole-FTL.</p>';
+            echo '<p class="mut">Verifica MAC/IP/hostname rispetto a subnet e pool. <b>Controlla</b> solo valida; <b>Applica su Pi-hole</b> aggiunge le nuove prenotazioni a `dhcp.hosts` senza cancellare quelle esistenti; conflitti MAC/IP bloccati, con backup e ripristino.</p>';
             $chk=$_SESSION['iptm_dhcp_reservations_check']??null;
             if(is_array($chk)){
                 if(!empty($chk['ok'])) echo '<p class="msg ok">Ultimo controllo: <b>'.(int)($chk['count']??0).'</b> reservation valide · subnet '.h((string)($chk['subnet']??'')).'</p>';
@@ -236,7 +236,7 @@ function pg_multinic(): void {
             echo '<label>Reservation (una per riga: <code>mac ip [hostname]</code> oppure JSON)<textarea name="dhcp_reservations" rows="6" maxlength="60000" placeholder="aa:bb:cc:dd:ee:ff 192.168.1.50 laptop-soggiorno"></textarea></label>';
             echo '<label><input type="checkbox" name="allow_in_pool" value="1"> Consentire IP dentro il pool dinamico (solo avviso)</label>';
             echo '<p class="ops"><button class="s" type="submit" name="action" value="dhcp_reservations_check">Controlla</button> ';
-            echo '<button class="g" type="submit" name="action" value="dhcp_reservations_apply" onclick="return confirm(\'Scrivere queste reservation su Pi-hole (dhcp.hosts)?\');">Applica su Pi-hole</button></p></form></div>';
+            echo '<button class="g" type="submit" name="action" value="dhcp_reservations_apply" onclick="return confirm(\'Aggiungere senza cancellare le prenotazioni Pi-hole esistenti? Conflitti MAC/IP bloccati e backup prima della scrittura.\');">Applica su Pi-hole</button></p></form></div>';
 
             echo '<details class="iptm-dhcp-activate"><summary>Attivazione DHCP da console</summary><p>Prima configura e attiva la scheda con IP statico e verifica che Pi-hole resti sul master primario. Per l&#39;attivazione usa il terminale locale e conferma la separazione fisica delle reti.</p><code>sudo iptm-helper net-runtime install-guard</code><p>Prepara il piano con <code>net-runtime dhcp-stage</code>, quindi usa <code>apply HASH</code> e <code>confirm TOKEN</code> entro 180 secondi. Nessuna attivazione automatica da questa pagina.</p></details>';
         }

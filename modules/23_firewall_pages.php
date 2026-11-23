@@ -176,13 +176,14 @@ function pg_apply() {
     try {$dnsGuardRemoved=iptm_dns_guard_losses($fileTxt,$draftTxt);}
     catch(RuntimeException $ex){$dnsGuardRemoved=[];echo '<p class="msg err">Controllo DNS/DoT non riuscito: '.h($ex->getMessage()).'</p>';}
     if($dnsGuardRemoved)echo '<div class="msg err" role="alert"><strong>La bozza rimuoverebbe protezioni DNS presenti su disco:</strong> '.h(implode(', ',$dnsGuardRemoved)).'. <a href="?p=setup">Ripristina i blocchi nella pagina Setup</a>, oppure conferma espressamente la cancellazione sotto.</div>';
-    echo '<section class="card iptm-apply-primary"><h2>Applica la bozza</h2><p class=mut>Un clic per applicare: IPTM esegue i controlli prima della modifica e attiva il rollback automatico. L’applicazione definitiva delle regole richiede che il canale di gestione rimanga raggiungibile.</p>';
+    echo '<section class="card iptm-apply-primary"><h2>Applica la bozza</h2><p class=mut>IPTM verifica le regole e le applica temporaneamente con rollback automatico. L’applicazione definitiva delle regole richiede che il canale di gestione rimanga raggiungibile.</p>';
 
     echo '<div class=ops data-iptm-layout="ui-08ace85272">';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=rules_verify><button class=s>Test facoltativo</button></form>';
-    if ($dnsGuardRemoved) echo '<p class="msg warn">La bozza non include alcune protezioni DNS/DoT presenti su disco: verranno rimosse all’applicazione.</p>';
-    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=apply><input type=hidden name=secs value="'.(int)ROLLBACK_SECS.'"><button class=g>Applica ora</button></form>';
-    echo '</div><p class=mut>Le regole vengono applicate e confermate in un solo passaggio. Il caricamento può ricreare le catene runtime di Docker, CrowdSec e fail2ban.</p></section>';
+    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=apply><input type=hidden name=secs value="'.(int)ROLLBACK_SECS.'">';
+    if ($dnsGuardRemoved) echo '<label><input type=checkbox name=confirm_dns_guard_removal value=1 required> Autorizzo esplicitamente la rimozione delle protezioni DNS/DoT indicate (operazione in prova con rollback)</label>';
+    echo '<button class=g>Applica in prova con rollback</button></form>';
+    echo '</div><p class=mut><b>Non viene confermato automaticamente.</b> Dopo il caricamento verifica da un secondo client SSH, la LAN, DNS e VPN: premi «Conferma e salva» nel pannello transazione pendente prima della scadenza. Senza conferma il watchdog ripristina le regole precedenti. Le modifiche non vengono scritte su rules.v4 finché non confermate.</p></section>';
     echo '<details class="card iptm-apply-advanced"><summary><b>Strumenti avanzati</b> · sintassi, pulizia, regole manuali e operazioni sul file</summary><div class=ops data-iptm-layout="ui-0e001e227c">';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=test><button class=s>Test solo sintassi</button></form>';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=policy_export><button class=s>Esporta policy YAML</button></form>';
