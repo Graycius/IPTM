@@ -48,18 +48,59 @@ jobs:
         run: |
           set -euo pipefail
           export PYTHONPATH="$PWD/extensions:${PYTHONPATH:-}"
-          python tests/test_optimizer.py
-          python tests/test_ssh_qos_5301.py
-          python tests/test_5304_hardening.py
-          python tests/test_proxy_retirement_5312.py
-          python tests/test_dhcp_53023.py
-          python tests/test_firewall_53023.py
-          php tests/test_regressions.php
-          php tests/test_service_combinations.php
-          php tests/test_dns_guard_preservation_5311.php
-          php tests/test_firewall_policy_5307.php
-          php tests/test_iot_ssh_scope_5308.php
-          php tests/test_lan_ingress_spoof_5309.php
+          failures=0
+          if ! python tests/test_optimizer.py; then
+            echo "::error::Regression suite failed: python tests/test_optimizer.py"
+            failures=$((failures + 1))
+          fi
+          if ! python tests/test_ssh_qos_5301.py; then
+            echo "::error::Regression suite failed: python tests/test_ssh_qos_5301.py"
+            failures=$((failures + 1))
+          fi
+          if ! python tests/test_5304_hardening.py; then
+            echo "::error::Regression suite failed: python tests/test_5304_hardening.py"
+            failures=$((failures + 1))
+          fi
+          if ! python tests/test_proxy_retirement_5312.py; then
+            echo "::error::Regression suite failed: python tests/test_proxy_retirement_5312.py"
+            failures=$((failures + 1))
+          fi
+          if ! python tests/test_dhcp_53023.py; then
+            echo "::error::Regression suite failed: python tests/test_dhcp_53023.py"
+            failures=$((failures + 1))
+          fi
+          if ! python tests/test_firewall_53023.py; then
+            echo "::error::Regression suite failed: python tests/test_firewall_53023.py"
+            failures=$((failures + 1))
+          fi
+          if ! php tests/test_regressions.php; then
+            echo "::error::Regression suite failed: php tests/test_regressions.php"
+            failures=$((failures + 1))
+          fi
+          if ! php tests/test_service_combinations.php; then
+            echo "::error::Regression suite failed: php tests/test_service_combinations.php"
+            failures=$((failures + 1))
+          fi
+          if ! php tests/test_dns_guard_preservation_5311.php; then
+            echo "::error::Regression suite failed: php tests/test_dns_guard_preservation_5311.php"
+            failures=$((failures + 1))
+          fi
+          if ! php tests/test_firewall_policy_5307.php; then
+            echo "::error::Regression suite failed: php tests/test_firewall_policy_5307.php"
+            failures=$((failures + 1))
+          fi
+          if ! php tests/test_iot_ssh_scope_5308.php; then
+            echo "::error::Regression suite failed: php tests/test_iot_ssh_scope_5308.php"
+            failures=$((failures + 1))
+          fi
+          if ! php tests/test_lan_ingress_spoof_5309.php; then
+            echo "::error::Regression suite failed: php tests/test_lan_ingress_spoof_5309.php"
+            failures=$((failures + 1))
+          fi
+          if (( failures > 0 )); then
+            echo "$failures regression suite(s) failed"
+            exit 1
+          fi
       - name: ShellCheck diagnostics (advisory)
         continue-on-error: true
         run: |
