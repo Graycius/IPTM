@@ -4,6 +4,7 @@
 The 5.30.12+ retirement no longer has a ROOT or runs the legacy cache_proxy
 worker. These tests simulate the real path and never touch systemd or iptables.
 """
+import ast
 import importlib.util
 import pathlib
 import tempfile
@@ -79,7 +80,8 @@ class Tests(unittest.TestCase):
             # Test the ownership marker independently of the test runner UID.
             def fake_stat(path):
                 st = original_stat(path)
-                return SimpleNamespace(st_uid=0, st_mode=st.st_mode, st_size=st.st_size)
+                return SimpleNamespace(st_uid=0, st_mode=st.st_mode, st_size=st.st_size,
+                                       st_nlink=st.st_nlink)
             with isolated(root, units={unit: 'IPTM isolated LAN HTTP caching proxy'}, nat=lambda: []):
                 with patch.object(m, '_safe_stat', side_effect=fake_stat):
                     with self.assertRaisesRegex(m.RetireError, 'Marcatore'):
@@ -161,10 +163,28 @@ class Tests(unittest.TestCase):
                 with self.assertRaisesRegex(m.RetireError, 'precedente ancora attiva'):
                     m.retire('5.30.11')
 
-    def test_11_native_update_retires_before_swapping_runtime(self):
-        text = (R / 'extensions/native_update.py').read_text()
-        self.assertLess(text.index('retire_worker=stage/'),
-                        text.index('        new_root=RELEASE_BASE/version'))
+    def test_11_native_update_preserves_network_during_staging(self):
+        tree = ast.parse((R / 'extensions/native_update.py').read_text())
+        migrate = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                       and n.name == '_migrate')
+        calls = [n for n in ast.walk(migrate) if isinstance(n, ast.Call)]
+        preflight = next(n for n in calls if isinstance(n.func, ast.Name)
+                         and n.func.id == 'preflight_network_transactions')
+        staging = next(n for n in calls if isinstance(n.func, ast.Attribute)
+                       and n.func.attr == 'TemporaryDirectory')
+        self.assertLess(preflight.lineno, staging.lineno)
+        for n in ast.walk(migrate):
+            if isinstance(n, ast.Name):
+                self.assertNotIn(n.id, {'retire', 'retire_worker'})
+            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                self.assertNotIn('retire_legacy_proxy.py', n.value)
+        # The staged compatibility hook must remain preflight-only.
+        with patch.object(m, 'staged_preflight', return_value={'retired': False}) as preflight_hook, \
+             patch.object(m, 'retire') as cleanup, \
+             patch.object(m, '__file__', '/tmp/.native-stage-test/extensions/retire_legacy_proxy.py'):
+            self.assertFalse(m.main(['apply', '5.30.29'])['retired'])
+            preflight_hook.assert_called_once_with('5.30.29')
+            cleanup.assert_not_called()
 
 
 if __name__ == '__main__':
