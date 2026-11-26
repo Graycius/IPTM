@@ -77,7 +77,7 @@ ck5308(!isset($normalized['iot_policies']['../../bad']),'malicious MAC key ignor
 $broken=$s;$broken['lan_nets']='';$broken['iot_policies']=[$macs[0]=>['lan']];
 [$bc,$bw]=gen_sections($broken);
 ck5308(count(array_filter($bc,fn($x)=>str_starts_with((string)$x['id'],'iot-')))==0,'no phantom LAN block without subnet');
-ck5308(str_contains(implode(' ',$bw),'manca una subnet LAN'),'missing LAN block warning');
-ck5308(str_contains((string)file_get_contents(dirname(__DIR__).'/modules/15_apps_services.php'),'Deseleziona servizi senza listener'),'optional apps cleanup UI');
+ck5308(str_contains(implode(' ',$bw),'nessuna subnet LAN specifica valida'),'missing LAN block warning');
+ck5308(str_contains((string)file_get_contents(dirname(__DIR__).'/modules/15_apps_services.php'),'Deseleziona profili senza listener rilevato'),'optional apps cleanup UI');
 ck5308(str_contains((string)file_get_contents(dirname(__DIR__).'/modules/35_iot_zones_pages.php'),'Policy IoT salvate'),'IoT status visible in UI');
 echo "PASS iot-ssh-5308: $n tests\n";
