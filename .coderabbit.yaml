@@ -1,0 +1,44 @@
+language: it-IT
+reviews:
+  profile: assertive
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+  auto_approvals:
+    enabled: false
+  finishing_touches:
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+    simplify:
+      enabled: false
+  path_instructions:
+    - path: "modules/**"
+      instructions: |
+        Controlla autenticazione, autorizzazione, CSRF, validazione degli input,
+        generazione IPv4/IPv6, isolamento IoT, ordine delle regole, accesso SSH
+        e rollback. Segnala regressioni riproducibili, non preferenze estetiche.
+    - path: "actions/**"
+      instructions: |
+        Cerca bypass dei controlli di sicurezza, errori di transazione, race,
+        dati non validati e invocazioni privilegiate. Non proporre auto-conferme.
+    - path: "extensions/**"
+      instructions: |
+        Controlla command injection, symlink, TOCTOU, perdita di dati, Pi-hole DHCP,
+        CAKE/IFB, DNS e aggiornamenti. Conserva HTTP come opzione esplicita;
+        segnala il rischio di pacchetti non firmati senza fingere autenticità.
+    - path: "runtime/**"
+      instructions: |
+        Analizza i confini dei privilegi, gli argomenti ammessi e la continuità di rete.
+    - path: "tests/**"
+      instructions: |
+        Verifica che i test coprano regressioni e casi limite senza modificare
+        la rete reale. Non suggerire di rimuovere test solo per ottenere un esito verde.
+    - path: ".github/workflows/**"
+      instructions: |
+        Controlla privilegi minimi, injection da pull request, dipendenze,
+        segreti, integrità degli artefatti e propagazione degli errori.

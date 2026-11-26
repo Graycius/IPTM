@@ -1,0 +1,63 @@
+name: Copilot AI code review
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+    branches: [main]
+permissions:
+  pull-requests: write
+concurrency:
+  group: copilot-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  request-review:
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      # Do not checkout or execute code from the pull request.
+      - name: Request advisory Copilot review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.error, urllib.request
+          repo = os.environ["REPOSITORY"]
+          number = int(os.environ["PR_NUMBER"])
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or number < 1:
+              raise SystemExit("Invalid pull request metadata")
+          url = f"https://api.github.com/repos/{repo}/pulls/{number}/copilot-code-review"
+          request = urllib.request.Request(url, data=b"{}", method="POST", headers={
+              "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+              "Accept": "application/vnd.github+json",
+              "Content-Type": "application/json",
+              "X-GitHub-Api-Version": "2026-03-10",
+              "User-Agent": "IPTM-advisory-review",
+          })
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  if response.status != 201:
+                      raise SystemExit(f"Unexpected HTTP status: {response.status}")
+              message = "Copilot review requested; results will appear on the pull request."
+          except urllib.error.HTTPError as exc:
+              if exc.code == 409:
+                  message = "A Copilot review is already pending."
+              else:
+                  reason = ""
+                  try:
+                      value = json.loads(exc.read(16384)).get("failure_reason", "")
+                      if isinstance(value, str) and re.fullmatch(r"[A-Z_]{1,80}", value):
+                          reason = " (" + value + ")"
+                  except (ValueError, AttributeError):
+                      pass
+                  message = f"Copilot review not requested: HTTP {exc.code}{reason}. Check eligibility, quota and repository permissions."
+                  print("::warning::" + message)
+                  with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                      summary.write(message + "\n")
+                  raise SystemExit(1)
+          print(message)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(message + "\n")
+          PY

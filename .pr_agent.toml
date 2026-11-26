@@ -1,0 +1,21 @@
+[github_app]
+pr_commands = ["/agentic_review"]
+
+[review_agent]
+comments_location_policy = "both"
+inline_comments_severity_threshold = 2
+issues_user_guidelines = """
+Rispondi in italiano. Concentrati su bug riproducibili, vulnerabilità, perdite
+di dati, regressioni e performance misurabili. Cita file, funzione, scenario,
+impatto, gravità e test suggerito. Controlla transazioni iptables e rollback,
+SSH/LAN/VPN/IoT, Pi-hole DHCP senza perdita di prenotazioni, DNS e CAKE/IFB,
+validazione e confini dei privilegi PHP/Python/Bash. Non proporre modifiche
+automatiche o merge automatici.
+"""
+compliance_user_guidelines = """
+Rispetta AGENTS.md e .github/copilot-instructions.md. Non rimuovere test per
+nascondere regressioni. Mantieni il supporto HTTP e la compatibilità con
+pacchetti non firmati, evidenziandone i rischi e preservando i controlli
+disponibili di integrità, formato, rollback e provenienza. Nessuna esecuzione
+di comandi privilegiati nei test offline. Non allargare accessi SSH o IoT.
+"""
