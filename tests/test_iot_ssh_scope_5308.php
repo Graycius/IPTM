@@ -12,6 +12,10 @@ $GLOBALS['_if']=['eth0'=>['8.8.8.8/24'],'bond0'=>['192.168.1.165/24'],
                'wg0'=>['10.19.165.1/24'],'bond0.10'=>['192.168.10.165/24']];
 $s=S_def();$s['wan_if']='eth0';$s['lan_if']='bond0';$s['lan_nets']=implode(',',$nets);
 $s['ssh_acc']=1;$s['lockout_on']=1;$s['ssh_nets']='';$s['mgmt_ports']='22,80,443';
+// Multiple LANs are not implicitly management networks: require an explicit scope.
+$ambiguous=$s;[$ambSections,$ambNotes]=gen_sections($ambiguous);
+ck5308(sect5308($ambSections,'ssh-acc')===[],'ambiguous LANs do not imply management SSH access');
+$s['mgmt_nets']=implode(',',$nets);
 $s['svc_in']=[['on'=>1,'proto'=>'tcp','src'=>'192.168.10.0/24','ports'=>'22,139,445','act'=>'ACCEPT']];
 $s['apps']=['dnsmasq','mysql','deconz'];
 $macs=[];
