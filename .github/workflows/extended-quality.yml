@@ -146,7 +146,7 @@ jobs:
           python3 - <<'PY'
           import hashlib, json, pathlib, subprocess
           manifest = json.loads(pathlib.Path("native-manifest.json").read_text())["sha256"]
-          names = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\\0")
+          names = subprocess.check_output(["git", "ls-files", "-z"]).decode().split(chr(0))
           prefixes = ("actions/", "assets/", "extensions/", "loader/", "modules/", "runtime/")
           tracked = {name for name in names if name == "CHANGELOG.md" or name.startswith(prefixes)}
           for name in sorted(tracked - set(manifest)):
