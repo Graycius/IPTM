@@ -301,7 +301,7 @@ case 'rule_op': {
         }
         case 'v6_raw': if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Salvataggio IPv6 fallito.', 'err'); break; } flash('Testo IPv6 salvato nella bozza.'); break;
         case 'v6_test': { if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } [$c, $o, $e] = priv('test6', v6_get()); flash($c === 0 ? '✔ Sintassi IPv6 valida.' : '✖ Errore: ' . trim($o . $e), $c === 0 ? 'ok' : 'err'); break; }
-        case 'v6_apply': { try { $secs = iptm_trial_seconds($_POST['secs'] ?? null); } catch (RuntimeException $e) { flash($e->getMessage(), 'err'); break; } if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } unset($_POST['rev6']); if (apply_result(do_apply($secs, '6', true, true))) flash('Regole IPv6 applicate in prova: verifica la rete e conferma.'); break; }
+        case 'v6_apply': { try { $secs = iptm_trial_seconds($_POST['secs'] ?? null); } catch (RuntimeException $e) { flash($e->getMessage(), 'err'); break; } if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } unset($_POST['rev6']); if (apply_result(do_apply($secs, '6'))) flash('Regole IPv6 applicate in prova: verifica la rete e conferma.'); break; }
         case 'v6_write': {
             // Salvare per il boot SENZA il test rollback può tagliare fuori
             // l'IPv6 al prossimo riavvio. Usare Applica IPv6 + conferma.
@@ -486,7 +486,7 @@ case 'manual_convert': {
             break;
         case 'apply':
             try { $secs = iptm_trial_seconds($_POST['secs'] ?? null); } catch (RuntimeException $e) { flash($e->getMessage(), 'err'); break; }
-            if (apply_result(do_apply($secs, '4', true, true))) flash('Regole applicate in prova: verifica la rete e conferma.');
+            if (apply_result(do_apply($secs, '4', false, true))) flash('Regole applicate in prova: verifica la rete e conferma.');
             $back = 'p=apply'; break;
     
 }
