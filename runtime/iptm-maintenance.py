@@ -18,7 +18,7 @@ def iptm_transport():
     if source.parent.name == 'runtime':
         module=source.parent.parent/'extensions'/'command_transport.py'
     else:
-        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/command_transport.py')
+        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.9/extensions/command_transport.py')
     if not module.is_file() or module.is_symlink():
         raise OSError('Trasporto IPTM assente o non sicuro')
     cached=getattr(iptm_capture,'_module',None)
@@ -46,7 +46,7 @@ def restore_syntax_probe(tool, path):
 
 
 DATA = pathlib.Path('/var/lib/iptables-manager')
-RETHINK_SCRIPT = pathlib.Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/rethink_catalog.py')
+RETHINK_SCRIPT = pathlib.Path('/usr/local/lib/iptables-manager/web/releases/6.0.9/extensions/rethink_catalog.py')
 DB_CANDIDATES = [pathlib.Path('/etc/pihole/gravity.db'), pathlib.Path('/var/lib/pihole/gravity.db')]
 SYSCTL_FILE = pathlib.Path('/etc/sysctl.d/98-iptm-hardening.conf')
 BACKUP_DIR = DATA / 'backups' / 'maintenance'
@@ -975,7 +975,7 @@ def pihole_api_json(_args):
     if not password:
         # Password fetched only by the root worker: never returned to the web session.
         import importlib.util
-        credential_script=pathlib.Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/pihole_credentials.py')
+        credential_script=pathlib.Path('/usr/local/lib/iptables-manager/web/releases/6.0.9/extensions/pihole_credentials.py')
         if credential_script.is_symlink() or not credential_script.is_file():
             raise PiholeApiError('Archivio credenziali IPTM non installato')
         st=credential_script.stat()

@@ -20,7 +20,7 @@ import sys
 import tempfile
 import time
 
-VERSION='6.0.8'
+VERSION='6.0.9'
 BASE=Path('/var/lib/iptm-sqm-uplink')
 STATE=BASE/'state.json'
 LOCK=BASE/'lock'

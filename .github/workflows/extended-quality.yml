@@ -1,0 +1,181 @@
+name: Extended quality and package checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      exhaustive:
+        description: 'Run the 500,000 and 2,097,152 scenario offline matrices'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: extended-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install ShellCheck if unavailable
+        run: |
+          command -v shellcheck || { sudo apt-get update -qq && sudo apt-get install -y shellcheck; }
+          shellcheck --version
+      - name: ShellCheck warnings and errors (advisory)
+        continue-on-error: true
+        run: shellcheck --severity=warning --format=gcc runtime/iptm-helper installer/install.sh
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Ruff and Bandit
+        run: python -m pip install --disable-pip-version-check 'ruff==0.17.3' 'bandit==1.9.4'
+      - name: Ruff correctness diagnostics (advisory)
+        continue-on-error: true
+        run: ruff check --target-version py311 --select E9,F extensions installer runtime tests tools
+      - name: Bandit security diagnostics (advisory)
+        continue-on-error: true
+        run: bandit -r extensions installer runtime tools -ll -ii -f screen
+  php:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install PHPStan outside the product tree
+        run: |
+          php --version
+          composer global require --no-interaction --no-plugins --no-scripts 'phpstan/phpstan:2.1.56'
+          echo "$(composer global config bin-dir --absolute)" >> "$GITHUB_PATH"
+      - name: PHPStan baseline diagnostics (advisory)
+        continue-on-error: true
+        run: phpstan analyse --level=1 --memory-limit=512M --no-progress --error-format=table modules actions loader
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Gitleaks Git history scan (redacted; blocking)
+        run: |
+          set -euo pipefail
+          report_dir="$(mktemp -d "$RUNNER_TEMP/iptm-gitleaks.XXXXXX")"
+          trap 'rm -rf "$report_dir"' EXIT
+          status=0
+          docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$report_dir:/report" ghcr.io/gitleaks/gitleaks:v8.30.0 git /repo --gitleaks-ignore-path=/repo/.gitleaksignore --ignore-gitleaks-allow --redact=100 --no-banner --log-opts=--all --report-format=json --report-path=/report/findings.json || status=$?
+          if [ -f "$report_dir/findings.json" ]; then
+            python3 - "$report_dir/findings.json" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          findings = json.loads(Path(sys.argv[1]).read_text()) or []
+          print("Gitleaks metadata only:", len(findings), "findings")
+          for finding in findings:
+              rule = str(finding.get("RuleID", "unknown"))
+              file = str(finding.get("File", "unknown"))
+              commit = str(finding.get("Commit", ""))
+              if not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,240}", file):
+                  file = "[nonstandard path]"
+              if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", rule):
+                  rule = "[unknown rule]"
+              if not re.fullmatch(r"[a-fA-F0-9]{40,64}", commit):
+                  commit = "[unknown commit]"
+              line = finding.get("StartLine")
+              print("Finding metadata:", rule, file, line if isinstance(line, int) else "?", commit)
+          PY
+          fi
+          exit "$status"
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: OSV-Scanner source dependency inventory
+        run: |
+          docker pull ghcr.io/google/osv-scanner:v2.7.1
+          docker run --rm -v "$PWD:/repo:ro" ghcr.io/google/osv-scanner:v2.7.1 scan source --recursive --allow-no-lockfiles /repo
+          echo 'OSV requires supported dependency manifests/lockfiles. Empty inventory is not a clean bill of health for DietPi packages or separately installed services.' >> "$GITHUB_STEP_SUMMARY"
+  offline-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline firewall recovery and QoS calibration
+        run: PYTHONPATH="$PWD/extensions" python tests/test_perf_cache_calibration.py
+      - name: Atomic draft concurrency
+        if: success() || failure()
+        run: php tests/test_draft_race.php
+      - name: Firewall combinations
+        if: success() || failure()
+        run: php -d memory_limit=256M tests/test_rules_matrix.php
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Diagnose manifest mismatches (read-only)
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          manifest = json.loads(pathlib.Path("native-manifest.json").read_text())["sha256"]
+          names = subprocess.check_output(["git", "ls-files", "-z"]).decode().split(chr(0))
+          prefixes = ("actions/", "assets/", "extensions/", "loader/", "modules/", "runtime/")
+          tracked = {name for name in names if name == "CHANGELOG.md" or name.startswith(prefixes)}
+          for name in sorted(tracked - set(manifest)):
+              print("Unlisted source:", name)
+          for name in sorted(set(manifest) - tracked):
+              print("Missing source:", name)
+          for name in sorted(tracked & set(manifest)):
+              if hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() != manifest[name]:
+                  print("SHA-256 mismatch:", name)
+          PY
+      - name: Build and verify native package (no release publication)
+        run: |
+          python tools/build_native_update.py
+          (cd dist && sha256sum -c ./*.zip.sha256)
+      - name: Confirm source manifest unchanged
+        run: git diff --exit-code -- native-manifest.json
+  exhaustive:
+    if: github.event_name == 'schedule' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && inputs.exhaustive == true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        script: [test_500k_matrix.php, test_2m_continuity_matrix.php]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Exhaustive offline network continuity matrix
+        env:
+          TEST_SCRIPT: ${{ matrix.script }}
+        run: php -d memory_limit=256M "tests/$TEST_SCRIPT"

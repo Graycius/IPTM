@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IPTM 6.0.8: conservative retention of IPTM-owned completed artifacts.
+"""IPTM 6.0.9: conservative retention of IPTM-owned completed artifacts.
 
 CLI is root-only. Preview and run share the SAME selection function. No deletion of
 live files, user-named backups, journals, locks, pending transactions or external logs.

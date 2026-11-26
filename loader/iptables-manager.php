@@ -1,7 +1,7 @@
 <?php
-// APP_VERSION = '6.0.8';
+// APP_VERSION = '6.0.9';
 // Physical modules: no executable code in a web-writable directory.
-define('IPTM_RELEASE_DIR', '/usr/local/lib/iptables-manager/web/releases/6.0.8');
+define('IPTM_RELEASE_DIR', '/usr/local/lib/iptables-manager/web/releases/6.0.9');
 // Small, public, version-pinned static resource endpoint. It reads ONLY known
 // CSS/JS files shipped in the root-owned, immutable native release directory.
 // No session, helper, network probe or config is needed to serve UI resources.
@@ -27,7 +27,7 @@ if (isset($_GET['iptm_asset'])) {
   }
   $digest=@hash_file('sha256',$file);
   if ($digest===false) {http_response_code(503);exit;}
-  $etag = '"iptm-6.0.8-' . $name . '-' . $digest . '"';
+  $etag = '"iptm-6.0.9-' . $name . '-' . $digest . '"';
   header('Content-Type: ' . $mime . '; charset=utf-8');
   header('X-Content-Type-Options: nosniff');
   header('Cross-Origin-Resource-Policy: same-origin');
@@ -63,7 +63,7 @@ if (isset($_GET['iptm_health'])) {
   if (!in_array($method,['GET','HEAD'],true)) {header('Allow: GET, HEAD');http_response_code(405);exit;}
   header('Content-Type: text/plain'); header('Cache-Control: no-store');header('X-Content-Type-Options: nosniff');
   if($method==='HEAD')exit;
-  exit('IPTM_HEALTH 6.0.8');
+  exit('IPTM_HEALTH 6.0.9');
 }
 foreach ($iptm_modules as $iptm_module) {
   require IPTM_RELEASE_DIR . '/' . $iptm_module;

@@ -9,7 +9,7 @@ import hashlib,json,os,pathlib,stat,sys,tempfile,time,urllib.error,urllib.parse,
 
 URL='https://raw.githubusercontent.com/serverless-dns/blocklists/main/config.json'
 CACHE=pathlib.Path('/var/cache/iptm-rethinkdns/catalog.json')
-USER_AGENT='IPTM-catalog-check/6.0.8'
+USER_AGENT='IPTM-catalog-check/6.0.9'
 MAX_AGE=24*3600
 MAX_CACHE=2*1024*1024
 
