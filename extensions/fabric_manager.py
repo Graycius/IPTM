@@ -37,7 +37,7 @@ def _zone(value: Any) -> str:
 
 
 def _uint(value: Any, label: str, low: int, high: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, (str, int)) or not str(value).isdigit():
+    if isinstance(value, bool) or not isinstance(value, (str, int)) or not re.fullmatch(r'[0-9]{1,12}',str(value)):
         raise FabricError(f'{label}: intero richiesto')
     n = int(value)
     if not low <= n <= high:
@@ -49,6 +49,7 @@ def _cidr(value: Any, label: str) -> str:
     if value in (None, ''):
         return ''
     try:
+        if not isinstance(value,str):raise ValueError()
         i = ipaddress.ip_interface(value)
         if i.version != 4 or i.ip.is_loopback or i.ip.is_unspecified or i.ip.is_multicast:
             raise ValueError()

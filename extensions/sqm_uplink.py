@@ -6,6 +6,9 @@ already shaped link, never touches IFB ingress or any other interface.
 Console root only for mutation; a systemd timer expires unconfirmed trials.
 """
 from __future__ import annotations
+
+from command_transport import durable_replace
+from command_transport import capture
 import fcntl
 import json
 import os
@@ -17,7 +20,7 @@ import sys
 import tempfile
 import time
 
-VERSION='5.30.23'
+VERSION='6.0.8'
 BASE=Path('/var/lib/iptm-sqm-uplink')
 STATE=BASE/'state.json'
 LOCK=BASE/'lock'
@@ -43,7 +46,7 @@ def tty():
 def command(args,*,check=True,runner=None):
     cmd=runner or subprocess.run
     try:
-        out=cmd(args,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+        out=capture(args, timeout=10, stdout_limit=1048576) if runner is None else cmd(args,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                 text=True,timeout=10,check=False)
     except (OSError,subprocess.TimeoutExpired) as exc:raise SQMError('Comando non disponibile') from exc
     if check and out.returncode:
@@ -63,23 +66,16 @@ def private_dir():
     if st.st_uid!=0 or st.st_mode&0o077:raise SQMError('Directory deve essere root:0700')
 
 def read_state():
-    if not STATE.exists() and not STATE.is_symlink():return None
-    if STATE.is_symlink() or not STATE.is_file() or STATE.stat().st_uid!=0 or STATE.stat().st_mode&0o077:
-        raise SQMError('Stato transazione non protetto')
-    try:return json.loads(STATE.read_text())
-    except (ValueError,UnicodeError) as exc:raise SQMError('Stato danneggiato') from exc
+    from command_transport import read_private_json
+    try:return read_private_json(STATE,limit=2097152)
+    except (OSError,ValueError,UnicodeError) as exc:raise SQMError('Stato transazione non protetto o danneggiato') from exc
+
 
 def save(state):
     private_dir()
-    fd,path=tempfile.mkstemp(dir=BASE,prefix='.state-',suffix='.tmp')
-    try:
-        with os.fdopen(fd,'w') as stream:
-            os.fchmod(stream.fileno(),0o600)
-            json.dump(state,stream,sort_keys=True)
-            stream.flush();os.fsync(stream.fileno())
-        os.replace(path,STATE)
-    finally:
-        if os.path.exists(path):os.unlink(path)
+    from command_transport import durable_json
+    durable_json(STATE,state)
+
 
 def inspect(dev,runner=None):
     if not isinstance(dev,str) or not NIC.fullmatch(dev) or dev=='lo':raise SQMError('Nome NIC non valido')
@@ -112,13 +108,7 @@ def install_guard(*,runner=None):
     content=('[Unit]\nDescription=IPTM SQM uplink boot recovery\nAfter=network-online.target\n'
              '[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -B '+SCRIPT+' boot-recover\n'
              '[Install]\nWantedBy=multi-user.target\n')
-    fd,path=tempfile.mkstemp(dir=UNIT.parent,prefix='.iptm-sqm-')
-    try:
-        with os.fdopen(fd,'w') as stream:
-            os.fchmod(stream.fileno(),0o644);stream.write(content);stream.flush();os.fsync(stream.fileno())
-        os.replace(path,UNIT)
-    finally:
-        if os.path.exists(path):os.unlink(path)
+    durable_replace(UNIT, content.encode(), mode=0o644)
     command(['systemctl','daemon-reload'],runner=runner)
     command(['systemctl','enable',UNIT.name],runner=runner)
     return {'installed':True}
@@ -364,13 +354,7 @@ def rec_read():
     return state
 
 def rec_write(state):
-    rec_file();fd,tmp=tempfile.mkstemp(dir=RECON_DIR,prefix='.state-',suffix='.json')
-    try:
-        with os.fdopen(fd,'w') as f:
-            os.fchmod(f.fileno(),0o600);json.dump(state,f,sort_keys=True);f.flush();os.fsync(f.fileno())
-        os.replace(tmp,RECON_STATE)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    rec_file();durable_replace(RECON_STATE,json.dumps(state,sort_keys=True,allow_nan=False).encode())
 
 def rec_qdisc(dev):
     return command(['tc','qdisc','show','dev',dev],check=False).stdout.strip()
@@ -450,13 +434,7 @@ def rec_guard():
     if RECON_UNIT.exists() and 'Description=IPTM SQM reconcile recovery' not in RECON_UNIT.read_text():
         raise SQMError('Unita recovery non di IPTM')
     unit='[Unit]\nDescription=IPTM SQM reconcile recovery\nAfter=local-fs.target\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -B '+SCRIPT+' reconcile boot-recover\n[Install]\nWantedBy=multi-user.target\n'
-    fd,tmp=tempfile.mkstemp(prefix='.iptm-sqm-reconcile-',dir=RECON_UNIT.parent)
-    try:
-        with os.fdopen(fd,'w') as f:
-            os.fchmod(f.fileno(),0o644);f.write(unit);f.flush();os.fsync(f.fileno())
-        os.replace(tmp,RECON_UNIT)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    durable_replace(RECON_UNIT, unit.encode(), mode=0o644)
     command(['systemctl','daemon-reload']);command(['systemctl','enable',RECON_UNIT.name])
     return {'status':'guard-installed'}
 
@@ -544,9 +522,8 @@ def rec_main(argv):
 
 def main(argv):
     as_root();private_dir()
-    fd=os.open(LOCK,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
-    with os.fdopen(fd,'r+') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX)
+    from command_transport import domain_lock
+    with domain_lock(LOCK):
         if argv and argv[0]=='reconcile':return rec_main(argv[1:])
         return _locked_main(argv)
 
@@ -584,7 +561,12 @@ def _locked_main(argv):
     if argv==['boot-recover']:return boot_recover()
     raise SQMError('Comando sconosciuto')
 
+def coordinated_main(args):
+    from command_transport import driver_admission
+    with driver_admission('sqm_uplink',args):
+        return main(args)
+
 if __name__=='__main__':
-    try:print(json.dumps(main(sys.argv[1:]),ensure_ascii=False))
+    try:print(json.dumps(coordinated_main(sys.argv[1:]),ensure_ascii=False))
     except (SQMError,ValueError,OSError,KeyError) as exc:
         print(json.dumps({'ok':False,'error':str(exc)},ensure_ascii=False));sys.exit(1)

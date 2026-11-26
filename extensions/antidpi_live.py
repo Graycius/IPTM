@@ -6,6 +6,7 @@ job rechecks profile hashes and local routing before installing rules; an
 independent timer disables persistence after boot failures.
 """
 from __future__ import annotations
+from command_transport import capture
 import fcntl, hashlib, json, os, pathlib, re, secrets, subprocess, sys, time
 
 STATE=pathlib.Path('/run/iptm-antidpi-live.json')
@@ -33,12 +34,11 @@ def _safe_error(raw):
 
 def cmd(argv,timeout=12,check=True,stage=None):
     try:
-        run=subprocess.run(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,timeout=timeout,check=False)
+        run=capture(argv,timeout=timeout,stdout_limit=1048576,stderr_limit=262144)
     except (OSError,subprocess.TimeoutExpired) as e:
         raise TrialError((stage or pathlib.Path(argv[0]).name)+': esecuzione non disponibile ('+type(e).__name__+')')
     if check and run.returncode:
-        detail=_safe_error(run.stderr or run.stdout)
+        detail=_safe_error((run.stderr or run.stdout).encode('utf-8'))
         if 'file_open_test' in detail and 'Permission denied' in detail:
             detail='file_open_test: accesso negato dopo la riduzione dei privilegi; verifica permessi su hostlist, Lua e directory parent'
         raise TrialError((stage or pathlib.Path(argv[0]).name)+': exit '+str(run.returncode) + (', dettaglio: '+detail if detail else ', nessun dettaglio restituito'))
@@ -49,25 +49,21 @@ def secure_file(p):
         raise TrialError('File non protetto o mancante: '+p.name)
 
 def current():
-    if STATE.is_symlink():raise TrialError('Stato Anti-DPI non sicuro')
-    if not STATE.exists():return None
-    st=STATE.stat()
-    if not STATE.is_file() or st.st_uid!=0 or st.st_mode&0o077 or st.st_size>4096:
-        raise TrialError('Stato Anti-DPI non protetto')
-    j=json.loads(STATE.read_text())
-    if not isinstance(j,dict) or not re.fullmatch('[a-f0-9]{24}',str(j.get('token',''))):
-        raise TrialError('Stato Anti-DPI non valido')
+    from command_transport import read_private_json
+    try:j=read_private_json(STATE,limit=4096)
+    except (OSError,ValueError,UnicodeError) as exc:raise TrialError('Stato Anti-DPI non protetto') from exc
+    if j is not None and not re.fullmatch('[a-f0-9]{24}',str(j.get('token',''))):raise TrialError('Stato Anti-DPI non valido')
     return j
 
+
 def persistent():
+    from command_transport import read_private_json
     if PERSIST_DIR.is_symlink():raise TrialError('Directory persistenza Anti-DPI non sicura')
-    if not PERSIST.exists():return None
-    if PERSIST.is_symlink() or not PERSIST.is_file() or PERSIST.stat().st_uid!=0 or PERSIST.stat().st_mode & 0o077 or PERSIST.stat().st_size>4096:
-        raise TrialError('Persistenza Anti-DPI non protetta')
-    data=json.loads(PERSIST.read_text())
-    if not isinstance(data,dict) or data.get('engine') not in ('zapret2','classic') or not re.fullmatch('[a-f0-9]{64}',str(data.get('config_sha',''))):
-        raise TrialError('Persistenza Anti-DPI non valida')
+    try:data=read_private_json(PERSIST,limit=4096)
+    except (OSError,ValueError,UnicodeError) as exc:raise TrialError('Persistenza Anti-DPI non protetta') from exc
+    if data is not None and (data.get('engine') not in ('zapret2','classic') or not re.fullmatch('[a-f0-9]{64}',str(data.get('config_sha','')))):raise TrialError('Persistenza Anti-DPI non valida')
     return data
+
 
 def config_digest(cfg):
     return hashlib.sha256(json.dumps(cfg,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()
@@ -232,7 +228,8 @@ def route_and_tools(cfg):
     if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,15}',wan):raise TrialError('WAN non valida')
     cmd(['ip','link','show','dev',wan],5,stage='Interfaccia WAN')
     # Not just an existing interface: it must be the default route on the gateway.
-    route=subprocess.run(['ip','-4','route','show','default'],capture_output=True,text=True,timeout=5)
+    try:route=capture(['ip','-4','route','show','default'],timeout=5,stdout_limit=262144)
+    except (OSError,subprocess.TimeoutExpired) as exc:raise TrialError('Route IPv4 non verificabile') from exc
     if route.returncode!=0 or not any(re.search(r'\bdev\s+'+re.escape(wan)+r'\b',line)
                                         for line in route.stdout.splitlines()):
         raise TrialError('WAN non presente sulla route IPv4 di default: Anti-DPI non applicabile qui')
@@ -314,10 +311,9 @@ def apply_start(engine,boot=False):
 def main(op,engine=None,token=None):
     if os.geteuid()!=0:raise TrialError('Richiesti privilegi root')
     LOCK.parent.mkdir(parents=True,exist_ok=True)
-    fd=os.open(LOCK,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
+    from command_transport import acquire_domain_lock
+    fd=acquire_domain_lock(LOCK)
     try:
-        if os.fstat(fd).st_uid!=0 or os.fstat(fd).st_mode&0o077:raise TrialError('Lock non protetto')
-        fcntl.flock(fd,fcntl.LOCK_EX)
         state=current()
         if op=='status':
             persisted=persistent()
@@ -345,16 +341,21 @@ def main(op,engine=None,token=None):
         raise TrialError('Operazione non supportata')
     finally:os.close(fd)
 
+def coordinated_main(op,engine=None,token=None):
+    from command_transport import driver_admission
+    with driver_admission('antidpi_live',[op]):
+        return main(op,engine=engine,token=token)
+
 if __name__=='__main__':
     try:
         a=sys.argv[1:]
         if len(a) not in (1,2,3):raise TrialError('Argomenti non validi')
         action=a[0]
         if action in ('preflight','start') and len(a)==2 and a[1] in ('zapret2','classic'):
-            result=main(action,engine=a[1])
+            result=coordinated_main(action,engine=a[1])
         elif action in ('watchdog','boot-health') and len(a)==2 and re.fullmatch('[a-f0-9]{24}',a[1]):
-            result=main(action,token=a[1])
-        elif action in ('status','stop','confirm','boot','persist-enable','persist-disable') and len(a)==1:result=main(action)
+            result=coordinated_main(action,token=a[1])
+        elif action in ('status','stop','confirm','boot','persist-enable','persist-disable') and len(a)==1:result=coordinated_main(action)
         else:raise TrialError('Argomenti non autorizzati')
         print(json.dumps(result))
     except (TrialError,OSError,ValueError,subprocess.TimeoutExpired) as e:

@@ -102,7 +102,7 @@ function start(form){
  }
  async function json(url,opts){
   let r;
-  try{r=await fetch(url,{credentials:'same-origin',cache:'no-store',redirect:'follow',...opts});}
+  try{r=await fetch(url,{credentials:'same-origin',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(90000),...opts});}
   catch(_){throw Error('Connessione al server IPTM non riuscita. Verifica rete e servizio web.');}
   let data=null,raw='';
   try{raw=await r.text();data=JSON.parse(raw);}catch(_){}

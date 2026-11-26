@@ -86,9 +86,9 @@ function manual_trial(array $M, array $S, array $drop, ?array $S2 = null): array
     foreach ($by as $ti => $ix) { rsort($ix, SORT_NUMERIC); foreach ($ix as $i) if (isset($M[$ti]['items'][$i])) array_splice($M[$ti]['items'], $i, 1); }
     $S2 ??= $S; $w = regen($M, $S2); return [$M, $S2, $w];
 }
-function copt_clean_name(string $n): string { $n = trim(preg_replace('/[\x00-\x1f#]+/u', ' ', $n)); $n = $n === '' ? 'Opzione personalizzata' : $n; return preg_match('/^.{1,60}/su', $n, $m) ? $m[0] : substr($n, 0, 60); }
+function copt_clean_name(string $n): string { $n = trim(preg_replace('/[\x00-\x1f#]+/u', ' ', $n) ?? ''); $n = $n === '' ? 'Opzione personalizzata' : $n; return preg_match('/^.{1,60}/su', $n, $m) ? $m[0] : substr($n, 0, 60); }
 function copt_add(array $S, string $name, string $an, array $rules, string $desc = '', bool $on = true): array {   // $rules: [['t' => tabella, 'r' => '-A CHAIN ...'], ...]
-    $S['custom_opts'][] = ['id' => substr(sha1($name . microtime(true) . count($S['custom_opts'] ?? [])), 0, 8), 'name' => copt_clean_name($name), 'desc' => preg_match('/^.{1,200}/su', $desc, $dm) ? $dm[0] : '', 'on' => $on ? 1 : 0, 'an' => (in_array($an, ['top', 'est', 'end'], true) || preg_match('/^rk:[0-9a-f]{12}$/', $an)) ? $an : 'end', 'pr' => 50, 'rules' => array_values($rules)];
+    $S['custom_opts'][] = ['id' => substr(sha1($name . microtime(true) . count($S['custom_opts'] ?? [])), 0, 8), 'name' => copt_clean_name($name), 'desc' => preg_match('/^.{1,200}/su', $desc, $dm) ? $dm[0] : '', 'on' => $on ? 1 : 0, 'an' => (in_array($an, ['top', 'est', 'end'], true) || preg_match('/^rk:[0-9a-f]{12}$/D', $an)) ? $an : 'end', 'pr' => 50, 'rules' => array_values($rules)];
     return $S;
 }
 function manual_group_name(array $rows): string {
@@ -125,7 +125,7 @@ function manual_prev_rk(array $M, array $r): ?string {   // chiave (abbreviata) 
     return null;
 }
 function manual_analyze(array $M, array $S, int $cap = 600, float $budget = 25.0): array {
-    $t0 = microtime(true); $over = fn() => microtime(true) - $t0 > $budget; $partial = false;   // tetto di tempo: oltre, le regole restanti non vengono verificate
+    $t0 = hrtime(true); $over = fn() => (hrtime(true) - $t0)/1e9 > $budget; $partial = false;   // tetto di tempo: oltre, le regole restanti non vengono verificate
     $rows = custom_rules_list($M); $M0 = $M; regen($M0, $S); $base = manual_sem($M0); $drift = $base != manual_sem($M);
     // fast-path: catene runtime (Docker/CrowdSec/…) → keep dedicato, escluse dai trial costosi
     $runtimeKeys = [];
@@ -263,7 +263,7 @@ function import_analyze(array $M): array {
             if (str_contains($f['extra'], 'echo-request')) { $S['icmp_echo_rate'] = $mm[1]; $S['icmp_echo_burst'] = (int)$mm[2]; } else { $S['icmp_other_rate'] = $mm[1]; $S['icmp_other_burst'] = (int)$mm[2]; }
         }
         if ($f['p'] === 'tcp' && preg_match('/--syn -m hashlimit --hashlimit-name (\S+) .*--hashlimit-above (\d+)\/sec --hashlimit-burst (\d+)/', $f['extra'], $mm)) { $dosFound = true; $S['dos_name'] = $mm[1]; $S['dos_syn'] = (int)$mm[2]; $S['dos_burst'] = (int)$mm[3]; }
-        if ($f['p'] === 'tcp' && preg_match('/^\d+:\d+$/', $f['dport']) && $f['target'] === $DT) $S['close_range'] = $f['dport'];
+        if ($f['p'] === 'tcp' && preg_match('/^\d+:\d+$/D', $f['dport']) && $f['target'] === $DT) $S['close_range'] = $f['dport'];
     }
     if ($csl) $S['cs_set'] = implode(',', array_unique($csl));
     if ($sn) $S['ssh_nets'] = implode(',', array_keys($sn));

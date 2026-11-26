@@ -3,14 +3,18 @@
 function sys_ifaces(): array { return $GLOBALS['_if'] ??= sys_ifaces_raw(); }
 function sys_ifaces_raw(): array {
     $r = [];
-    [, $o] = run([BIN_IP, '-o', 'link', 'show']);
+    [$rc, $o] = run([BIN_IP, '-o', 'link', 'show']);
+    if ($rc !== 0) return [];
     foreach (explode("\n", $o) as $l) if (preg_match('/^\d+:\s+([^:@\s]+)/', $l, $m) && $m[1] !== 'lo' && !preg_match('/^(veth|br-|docker)/', $m[1])) $r[$m[1]] = [];
-    [, $o] = run([BIN_IP, '-o', '-4', 'addr', 'show']);
-    foreach (explode("\n", $o) as $l) if (preg_match('/^\d+:\s+(\S+)\s+inet\s+(\S+)/', $l, $m) && isset($r[$m[1]])) $r[$m[1]][] = $m[2];
+    [$rc, $o] = run([BIN_IP, '-o', '-4', 'addr', 'show']);
+    if ($rc !== 0) return [];
+    foreach (explode("\n", $o) as $l) if (preg_match('/^\d+:\s+(\S+)\s+inet\s+(\S+)/', $l, $m) && isset($r[$m[1]]) && preg_match('/^([0-9.]+)\/(\d{1,2})$/D', $m[2], $cidr) && filter_var($cidr[1], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && (int)$cidr[2]<=32) $r[$m[1]][] = $m[2];
     return $r;
 }
 function net_of(string $cidr): string {
-    [$ip, $p] = array_pad(explode('/', $cidr), 2, '32'); $m = (int)$p === 0 ? 0 : (-1 << (32 - (int)$p)) & 0xFFFFFFFF;
+    [$ip, $p] = array_pad(explode('/', $cidr), 2, '32');
+    if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || !ctype_digit($p) || (int)$p > 32) throw new InvalidArgumentException('CIDR IPv4 non valido');
+    $m = (int)$p === 0 ? 0 : (-1 << (32 - (int)$p)) & 0xFFFFFFFF;
     return long2ip(ip2long($ip) & $m) . '/' . $p;
 }
 function live_state(?float $shortBudget = null): array {

@@ -3,6 +3,7 @@
 function iptm_page_description(string $page): string {
     static $descriptions = [
         'status'=>'Stato del firewall, rete e servizi.',
+        'safeplan'=>'Verifica un piano di protezione prima di applicarlo.',
         'stats'=>'Traffico, regole e andamento della rete.',
         'conns'=>'Connessioni attive e azioni disponibili.',
         'devices'=>'Dispositivi riconosciuti e relative policy.',
@@ -59,7 +60,7 @@ $MENU = [
     'clients' => ['Rete locale', ['devices'=>'Dispositivi', 'zones'=>'Zone e isolamento', 'access'=>'Permessi di accesso', 'deviceinsights'=>'Attività dispositivi', 'apps'=>'Servizi e porte']],
     'dns' => ['DNS e privacy', ['dns'=>'Resolver DNS', 'piholelists'=>'Filtri Pi-hole', 'dnsguard'=>'DNS protetto', 'piholehealth'=>'Salute Pi-hole', 'unbound'=>'Unbound', 'dnsaudit'=>'Audit DNS']],
     'firewall' => ['Protezione', ['security'=>'Firewall', 'rules'=>'Regole', 'rulesaudit'=>'Analizza rules.v4', 'rule'=>'Nuova regola', 'wizard'=>'Procedura guidata', 'chains'=>'Catene', 'crowdsec'=>'CrowdSec', 'ips'=>'Suricata', 'lists'=>'Liste e GeoIP', 'harden'=>'Hardening', 'avscan'=>'Antivirus', 'traffic'=>'Analisi HTTPS', 'attacks'=>'Attacchi', 'raw'=>'Editor regole', 'manual'=>'Conversione manuale']],
-    'system' => ['Sistema e strumenti', ['apply'=>'Applica configurazione', 'operations'=>'Operazioni', 'diag'=>'Diagnostica', 'log'=>'Log', 'health'=>'Salute sistema', 'update'=>'Aggiornamenti', 'config'=>'Backup e ripristino', 'postcheck'=>'Controllo dopo apply', 'tracer'=>'Analisi pacchetti', 'impact'=>'Impatto regole', 'advise'=>'Consigli', 'system'=>'Servizi', 'history'=>'Cronologia', 'search'=>'Ricerca avanzata', 'zero'=>'Configurazione iniziale', 'retention'=>'Pulizia', 'import'=>'Importa regole', 'progs'=>'Programmi', 'admin'=>'Utenti', 'upgrade-wizard'=>'Nuove opzioni', 'guide'=>'Guida']]
+    'system' => ['Sistema e strumenti', ['apply'=>'Applica configurazione', 'operations'=>'Operazioni', 'diag'=>'Diagnostica', 'log'=>'Log', 'health'=>'Salute sistema', 'update'=>'Aggiornamenti', 'config'=>'Backup e ripristino', 'postcheck'=>'Controllo dopo apply', 'tracer'=>'Analisi pacchetti', 'impact'=>'Impatto regole', 'advise'=>'Consigli', 'system'=>'Servizi', 'history'=>'Cronologia', 'search'=>'Ricerca avanzata', 'zero'=>'Configurazione iniziale', 'safeplan'=>'Piano di sicurezza', 'retention'=>'Pulizia', 'import'=>'Importa regole', 'progs'=>'Programmi', 'admin'=>'Utenti', 'upgrade-wizard'=>'Nuove opzioni', 'guide'=>'Guida']]
 ];
 $MENU_PRIMARY = [
     'overview'=>['status','topology','stats'],
@@ -159,12 +160,14 @@ $menu_link = static function (string $route, string $label, bool $active=false) 
            '<span class="iptm-nav-icon" aria-hidden="true">'.iptm_svg_icon($IPTM_NAV_ICONS[$route] ?? 'circle').'</span>'.
            '<span>'.h($label).'</span></a>';
 };
+$requestedPage = $_GET['p'] ?? 'status';
+if (!is_string($requestedPage)) $requestedPage = 'status';
 $pages = []; $pageLabel = 'Dashboard';
 foreach ($MENU as $g => [$gl, $sb]) foreach ($sb as $k => $l) {
     $pages[$k] = $g;
-    if ($k === ($_GET['p'] ?? 'status')) $pageLabel = $MENU_LABELS[$k] ?? $l;
+    if ($k === $requestedPage) $pageLabel = $MENU_LABELS[$k] ?? $l;
 }
-$p = $_GET['p'] ?? 'status'; if (!isset($pages[$p])) { $p = 'status'; $pageLabel = 'Dashboard'; } $grp = $pages[$p];
+$p = $requestedPage; if (!isset($pages[$p])) { $p = 'status'; $pageLabel = 'Dashboard'; } $grp = $pages[$p];
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && !is_file(DATA_DIR . '/settings.json') && !in_array($p, ['import', 'guide', 'zero'], true)) go(trim($draftTxt) !== '' ? 'p=import' : 'p=zero');
 $mod = $draftTxt !== rules_live();
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($_GET['fragment'] ?? '') === $p && in_array($p, ['status','stats','dnsaudit','health','zones','topology','piholehealth'],true)) {
@@ -177,50 +180,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($_GET['fragment'] ?? '') === $p && 
 }
 echo '<!doctype html><html lang="it" data-theme="auto"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>'.h($pageLabel).' · IPTM</title><script>document.documentElement.classList.add("js");</script><link rel="stylesheet" href="?iptm_asset=app.css&amp;v=' . APP_VERSION . '"></head><body class="iptm-console">';
 echo '<a class="skip-link" href="#main-content">Vai al contenuto</a><a class="skip-link skip-navigation" href="#primary-menu">Vai alla navigazione</a>';
-echo '<header class="top iptm-masthead" role="banner">';
-echo '<div class="iptm-masthead-left"><button id="burger" class="s sm nav-toggle iptm-icon-button" type="button" aria-controls="side" aria-expanded="false" aria-label="Apri il menu di navigazione">☰</button>';
-echo '<a href="?p=status" class="iptm-logo" aria-label="IPTM · Panoramica"><span class="iptm-logo-glyph" aria-hidden="true">'.iptm_svg_icon('shield').'</span><span class="iptm-logo-word">IPTM<small>NETWORK CONTROL</small></span></a>';
-echo '<span class="iptm-version">'.h(APP_VERSION).'</span></div>';
-echo '<div class="iptm-masthead-center"><button class="iptm-command-open" type="button" id="iptm-open-search" aria-haspopup="dialog" aria-controls="iptm-command"><span class="iptm-command-icon" aria-hidden="true">'.iptm_svg_icon('search').'</span><span>Cerca…</span><kbd>Ctrl K</kbd></button></div>';
-echo '<div class="iptm-masthead-actions">';
-echo $mod ? '<a href="?p=apply" class="iptm-config-state iptm-config-pending"><span class="iptm-status-led"></span><span>Da applicare</span></a>' : '<span class="iptm-config-state"><span class="iptm-status-led"></span><span>Salvato</span></span>';
-echo '<button id="theme" class="s sm iptm-theme-button iptm-icon-button" type="button" aria-label="Cambia tema" title="Cambia tema">🌗</button>';
-echo '<div class="iptm-account" title="Sessione attiva"><span aria-hidden="true">◉</span><span>'.h(me()).(($_SESSION['role']??'')==='viewer'?' · lettura':'').'</span></div>';
-echo '<form method="post" class="iptm-logout"><input type="hidden" name="csrf" value="'.h($_SESSION['csrf']).'"><input type="hidden" name="action" value="logout"><button class="s sm iptm-logout-button" aria-label="Esci dall’applicazione">Esci</button></form>';
-echo '</div></header>';
-echo '<div id="iptm-global-wait" role="status" aria-live="polite" aria-atomic="true" hidden class="iptm-global-wait"><span class="iptm-wait-spinner" aria-hidden="true"></span> Applicazione delle modifiche…</div>';
-echo '<div class="layout" id="app-layout"><aside id="side" aria-label="Navigazione principale">';
-echo '';
-echo '';
-echo '<div class="side-search"><label class="sr-only" for="ms">Filtra le pagine</label><span class="iptm-side-search-symbol" aria-hidden="true">⌕</span><input type="search" id="ms" placeholder="Cerca…" autocomplete="off" aria-controls="primary-menu" aria-describedby="msResults"><output id="msResults" class="iptm-nav-results" role="status" aria-live="polite"></output></div>';
+// One navigation tree, one page header and a persistent transaction entry point.
+$GROUP_ICONS = ['overview'=>'overview','uplink'=>'network','clients'=>'clients','dns'=>'dns','firewall'=>'shield','system'=>'settings'];
+$admin = ($_SESSION['role'] ?? '') === 'admin';
+echo '<header class="top iptm-masthead" role="banner"><div class="iptm-masthead-left">';
+echo '<button id="burger" class="s sm nav-toggle iptm-icon-button" type="button" aria-controls="side" aria-expanded="false" aria-label="Apri il menu di navigazione">☰</button>';
+echo '<a href="?p=status" class="iptm-logo" aria-label="IPTM · Panoramica"><span class="iptm-logo-glyph">'.iptm_svg_icon('shield').'</span><span class="iptm-logo-word">IPTM<small>Gestione rete</small></span></a><span class="iptm-version">'.h(APP_VERSION).'</span></div>';
+echo '<div class="iptm-masthead-center"><button class="iptm-command-open" type="button" id="iptm-open-search" aria-haspopup="dialog" aria-controls="iptm-command">'.iptm_svg_icon('search').'<span>Cerca una funzione</span><kbd>Ctrl K</kbd></button></div>';
+$headerPending = pending();
+$hasV6Draft = is_file(DATA_DIR.'/draft6.rules');
+$draftLabel = $headerPending ? (($headerPending['status'] ?? '') === 'recovery_required' ? 'Ripristino necessario' : 'Bozza in prova IPv'.($headerPending['fam'] ?? '?')) : ($mod ? 'Bozza IPv4 modificata' : 'Bozza IPv4 allineata');
+if (!$headerPending && $hasV6Draft) $draftLabel .= ' · bozza IPv6 presente';
+$draftShort = $headerPending ? (($headerPending['status'] ?? '') === 'recovery_required' ? 'Ripristino' : 'In prova') : (($mod || $hasV6Draft) ? 'Bozza' : 'Allineata');
+$draftClass = $headerPending ? (($headerPending['status'] ?? '') === 'recovery_required' ? 'recovery' : 'trial') : (($mod || $hasV6Draft) ? 'changed' : 'clean');
+echo '<div class="iptm-masthead-actions"><a id="iptm-draft-state" class="iptm-draft-state '.h($draftClass).'" href="?p=apply" title="'.h($draftLabel).'" aria-label="'.h($draftLabel).'"><span aria-hidden="true" class="iptm-draft-dot"></span><span class="iptm-draft-long">'.h($draftLabel).'</span><span class="iptm-draft-short" aria-hidden="true">'.h($draftShort).'</span></a><button id="theme" class="s sm iptm-icon-button" type="button" aria-label="Cambia tema">🌗</button><div class="iptm-account">'.h(me()).($admin?' · Admin':' · Lettura').'</div>';
+echo '<form method="post" class="iptm-logout"><input type="hidden" name="csrf" value="'.h($_SESSION['csrf']).'"><input type="hidden" name="action" value="logout"><button class="s sm iptm-logout-button">Esci</button></form></div></header>';
+echo '<div id="iptm-global-wait" role="status" aria-live="polite" hidden class="iptm-global-wait"><span class="iptm-wait-spinner" aria-hidden="true"></span> Elaborazione in corso…</div>';
+echo '<div class="layout" id="app-layout"><aside id="side" aria-label="Navigazione principale"><div class="iptm-nav-caption">MENU OPERATIVO</div>';
+echo '<div class="side-search"><label class="sr-only" for="ms">Filtra le funzioni</label><span class="iptm-side-search-symbol" aria-hidden="true">⌕</span><input type="search" id="ms" placeholder="Filtra menu" autocomplete="off" aria-controls="primary-menu" aria-describedby="msResults"><output id="msResults" class="iptm-nav-results" role="status"></output></div>';
 echo '<nav class="primary-nav" aria-label="Sezioni di IPTM"><div id="primary-menu" tabindex="-1">';
-$GROUP_ICONS = ['overview'=>'overview', 'uplink'=>'network', 'clients'=>'clients', 'dns'=>'dns', 'firewall'=>'shield', 'system'=>'settings'];
-foreach ($MENU as $g => [$gl, $sub]) {
-    $main = array_flip($MENU_PRIMARY[$g] ?? []);
-    echo '<details class="mg mg-'.h($g).'"'.($grp===$g?' open':'').' data-iptm-nav-group="'.h($g).'">';
-    echo '<summary class="gt"><span class="iptm-group-icon" aria-hidden="true">'.iptm_svg_icon($GROUP_ICONS[$g]??'circle').'</span><span>'.h($gl).'</span></summary>';
-    foreach ($MENU_PRIMARY[$g] ?? [] as $k) if (isset($sub[$k])) echo $menu_link($k, $MENU_LABELS[$k]??$sub[$k], $p===$k);
-    foreach (array_diff_key($sub,$main) as $k=>$label) {
-      echo '<div class="iptm-nav-extra"'.($p===$k?' data-current="1"':'').'>'.$menu_link($k,$MENU_LABELS[$k]??$label,$p===$k).'</div>';
-    }
+foreach ($MENU as $g=>[$gl,$sub]) {
+    echo '<details class="mg mg-'.h($g).'"'.($grp===$g?' open':'').' data-iptm-nav-group="'.h($g).'"><summary class="gt"><span class="iptm-group-icon">'.iptm_svg_icon($GROUP_ICONS[$g]).'</span><span>'.h($gl).'</span></summary>';
+    // All routes remain reachable even without JavaScript, including advanced tools.
+    foreach ($sub as $route=>$label) echo $menu_link($route,$MENU_LABELS[$route]??$label,$route===$p);
     echo '</details>';
 }
-echo '<button type="button" id="iptm-nav-advanced" class="iptm-nav-toggle-extra" aria-controls="primary-menu" aria-expanded="false">Altre funzioni <span aria-hidden="true">+</span></button>';
-echo '</div></nav>';
-echo '<div class="iptm-sidebar-footer"><a href="?p=guide">? Guida</a><a href="?p=health">♡ Salute sistema</a></div></aside>';
+echo '</div></nav><div class="iptm-sidebar-footer"><a href="?p=guide">Guida operativa</a></div></aside>';
 echo '<button type="button" id="navBackdrop" class="nav-backdrop" aria-label="Chiudi navigazione" hidden></button>';
 echo '<main id="main-content" class="wrap2" tabindex="-1" aria-label="Contenuto principale">';
-echo '<div class="iptm-content-topline"><div class="iptm-page-path"><a href="?p=status">IPTM</a><span aria-hidden="true">/</span><span>'.h($MENU[$grp][0]??'Rete').'</span><span aria-hidden="true">/</span><b>'.h($pageLabel).'</b></div></div>';
-// Direct area switching on small screens: one tap, no sidebar expansion required.
-$IPTM_AREA_TARGETS=['overview'=>'status','uplink'=>'multinic','clients'=>'devices','dns'=>'dns','firewall'=>'security','system'=>'operations'];
-echo '<nav class="iptm-area-nav" aria-label="Aree della rete">';
-foreach ($IPTM_AREA_TARGETS as $group=>$route) {
-    echo '<a href="?p='.rawurlencode($route).'"'.($grp===$group?' class="active" aria-current="location"':'').'>'.iptm_svg_icon($GROUP_ICONS[$group]).'<span>'.h($MENU[$group][0]).'</span></a>';
-}
-echo '</nav>';
-echo '<div class="iptm-section-heading"><div class="iptm-heading-copy"><h1>'.h($pageLabel).'</h1></div><div class="iptm-heading-actions">';
-if ($mod && $p!=='apply') echo '<a class="iptm-apply-shortcut" href="?p=apply">'.iptm_svg_icon('check').' Applica</a>';
-echo '<button class="iptm-heading-search" type="button" data-open-command="1" aria-label="Cerca">'.iptm_svg_icon('search').'<span>Cerca</span></button><a class="iptm-help-link" href="?p=guide">Guida <span aria-hidden="true">↗</span></a></div></div>';
+echo '<div class="iptm-content-topline"><div class="iptm-page-path"><a href="?p=status">IPTM</a><span aria-hidden="true">/</span><span>'.h($MENU[$grp][0]).'</span></div><span class="iptm-access-label">'.($admin?'Amministrazione':'Sola lettura').'</span></div>';
+echo '<div class="iptm-section-heading"><div class="iptm-heading-copy"><h1>'.h($pageLabel).'</h1><p class="iptm-view-description">'.h(iptm_page_description($p)).'</p></div><div class="iptm-heading-actions"><a class="iptm-help-link" href="?p=guide">Guida</a></div></div>';
+echo '<div class="iptm-changebar"><div><strong>'.($mod?'Bozza diversa dal file persistente':'Bozza allineata al file persistente').'</strong><small>Il salvataggio di una bozza non equivale alla sua applicazione.</small></div>';
+if ($p!=='apply') echo '<a class="iptm-apply-shortcut" href="?p=apply">'.($admin?'Verifica / applica':'Visualizza configurazione').'</a>';
+echo '<a class="iptm-help-link" href="?p=config">Backup</a></div>';
 echo flashes();
 // The authenticated GET has already consumed flash messages. Release its
 // session lock before expensive rendering/privileged read-only operations.
@@ -237,13 +229,14 @@ if (is_file($rf) && !reset_notice_is_dismissed()) {
         . 'Prossimo passo: <a href="?p=zero"><b>Wizard da zero</b></a> per ricostruire la configurazione.'
         . '<form method=post style="display:inline;margin-left:12px">' . fh('p=status') . '<input type=hidden name=action value=dismiss_reset_flag><button class="s sm">Nascondi</button></form></div>';
 }
-if ($pd = pending()) {
+if ($pd = $headerPending) {
     $recover = ($pd['status'] ?? '') === 'recovery_required';
     echo '<div class=banner style="position:sticky;top:0;z-index:50;display:flex;flex-wrap:wrap;gap:8px;align-items:center">';
     if ($recover) echo '<b>⚠ Ripristino firewall necessario.</b> Il watchdog è scaduto o lo stato è incompleto. Non applicare nuove regole finché il recupero non è verificato.';
     else echo '<b>⏳ Regole in prova (anti-lockout).</b> Ripristino tra <b id=cd data-until=' . (int)$pd['until'] . '>…</b> s.';
-    if (!$recover && iptm_health_policy_marker_read() === null) echo '<form method=post data-iptm-layout="ui-ab79ea2b85">' . fh('p=apply') . '<input type=hidden name=action value=confirm><button class=g>✔ Ho verificato SSH, LAN e VPN: conferma e salva</button></form>';
-    elseif (!$recover && iptm_health_policy_marker_read() !== null) echo '<a class="btn g" href="?p=health#health-policy">Conferma nella pagina Salute</a>';
+    if (!$recover && ($pd['health_ok'] ?? false) === true && iptm_health_policy_marker_read() === null) echo '<form method=post data-iptm-layout="ui-ab79ea2b85">' . fh('p=apply') . '<input type=hidden name=action value=confirm><button class=g>✔ Conferma e salva</button></form>';
+    elseif (!$recover && ($pd['health_ok'] ?? false) === true && iptm_health_policy_marker_read() !== null) echo '<a class="btn g" href="?p=health#health-policy">Conferma nella pagina Salute</a>';
+    if (!$recover && ($pd['health_ok'] ?? false) !== true) echo '<strong>Test non validati: conferma bloccata.</strong>';
     if (iptm_health_policy_marker_read() === null) echo '<form method=post data-iptm-layout="ui-ab79ea2b85">' . fh('p=apply') . '<input type=hidden name=action value=revert><button class=d>↩ Ripristina regole precedenti</button></form>';
     else echo '<a class="btn d" href="?p=health#health-policy">Ripristina da Salute</a>';
     echo '</div>';
@@ -263,14 +256,6 @@ $IPTM_GROUP_RELATED = [
 $IPTM_RELATED = $MENU_WORKFLOWS[$p] ?? $IPTM_GROUP_RELATED[$grp] ?? ['status','diag'];
 $IPTM_RELATED = array_values(array_unique(array_filter($IPTM_RELATED,
     static fn($target)=>$target!==$p && isset($pages[$target]))));
-if ($p !== 'status' && $IPTM_RELATED) {
-    echo '<nav class="iptm-workflows" aria-label="Funzioni correlate">';
-    foreach (array_slice($IPTM_RELATED,0,3) as $target) {
-        $label = $MENU_LABELS[$target] ?? ($MENU[$pages[$target]][1][$target] ?? $target);
-        echo '<a href="?p='.rawurlencode($target).'">'.h($label).'</a>';
-    }
-    echo '</nav>';
-}
 echo '<section class="iptm-page-body iptm-view-' . h($p) . '" id="iptm-page-body" aria-label="Funzioni ' . h($pageLabel) . '">';
 // Explicit registry keeps legacy ?p= routes stable while consolidating dispatch.
 // Only listed handlers are callable; request parameters never become PHP callables.
@@ -339,4 +324,13 @@ if (isset($IPTM_ASYNC_PAGES[$p])) {
     $handler = $IPTM_PAGE_HANDLERS[$p] ?? 'pg_status';
     $handler();
 }
-echo '</section></main></div><dialog id="iptm-command" class="iptm-command" aria-label="Ricerca rapida"><div class="iptm-command-top"><span aria-hidden="true">⌕</span><input id="iptm-command-input" type="search" autocomplete="off" placeholder="Cerca funzione o pagina…" aria-label="Cerca"><button type="button" id="iptm-command-close" class="iptm-icon-button" aria-label="Chiudi ricerca">✕</button></div><div class="iptm-command-caption">Seleziona una funzione per aprirla direttamente</div><div id="iptm-command-results" class="iptm-command-results" role="listbox" aria-label="Risultati ricerca"></div><div class="iptm-command-bottom"><span>↑ ↓ naviga</span><span>Invio apri</span><span>Esc chiudi</span></div></dialog><script>window.MODEL=' . (in_array($p, ['rules','rule','chains','wizard','raw','tracer','search','apply'], true) ? model_json() : '{}') . ';window.FH=' . json_encode(fh('p=rules'), JSON_HEX_TAG | JSON_HEX_AMP) . ';</script><script src="?iptm_asset=firewall.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=rules.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=wizard.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=forms.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=interface.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=diagnostics.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=domains.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=topology.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=charts.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=console.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=networkui.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=preferences.js&amp;v=' . APP_VERSION . '"></script></body></html>';
+echo '</section>';
+if ($p !== 'status' && $IPTM_RELATED) {
+    echo '<nav class="iptm-workflows" aria-label="Funzioni correlate">';
+    foreach (array_slice($IPTM_RELATED,0,3) as $target) {
+        $label = $MENU_LABELS[$target] ?? ($MENU[$pages[$target]][1][$target] ?? $target);
+        echo '<a href="?p='.rawurlencode($target).'">'.h($label).'</a>';
+    }
+    echo '</nav>';
+}
+echo '</main></div><dialog id="iptm-command" class="iptm-command" aria-label="Ricerca rapida"><div class="iptm-command-top"><span aria-hidden="true">⌕</span><input id="iptm-command-input" type="search" autocomplete="off" placeholder="Cerca funzione o pagina…" aria-label="Cerca"><button type="button" id="iptm-command-close" class="iptm-icon-button" aria-label="Chiudi ricerca">✕</button></div><div class="iptm-command-caption">Seleziona una funzione per aprirla direttamente</div><div id="iptm-command-results" class="iptm-command-results" role="listbox" aria-label="Risultati ricerca"></div><div class="iptm-command-bottom"><span>↑ ↓ naviga</span><span>Invio apri</span><span>Esc chiudi</span></div></dialog><script>window.MODEL=' . (in_array($p, ['rules','rule','chains','wizard','raw','tracer','search','apply'], true) ? model_json() : '{}') . ';window.FH=' . json_encode(fh('p=rules'), JSON_HEX_TAG | JSON_HEX_AMP) . ';</script><script src="?iptm_asset=firewall.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=rules.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=wizard.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=forms.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=interface.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=diagnostics.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=domains.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=topology.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=charts.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=console.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=networkui.js&amp;v=' . APP_VERSION . '"></script><script src="?iptm_asset=preferences.js&amp;v=' . APP_VERSION . '"></script></body></html>';

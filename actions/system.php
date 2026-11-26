@@ -63,6 +63,7 @@ case 'sec_preset': {
             break;
         }
         case 'settings_save': {
+            if(isset($_POST['_form_protocol']) && ($_POST['_form_protocol']!=='1'||($_POST['_form_complete']??null)!=='1')) {flash('Modulo incompleto: nessun dato modificato (limite campi PHP o invio interrotto).','err');break;}
             $sec = (string)($_POST['sec'] ?? ''); if (!isset(SEC_FIELDS[$sec])) { flash('Sezione sconosciuta.', 'err'); break; }
             $S = S_get(); $err = []; $partial = !empty($_POST['_partial']);
             // Form parziali (es. CrowdSec → Firewall): aggiorna solo i campi presenti nel POST.
@@ -121,7 +122,7 @@ case 'sec_preset': {
                             'proto' => in_array($r['proto'] ?? '', ['', 'tcp', 'udp', 'icmp', 'igmp'], true) ? $r['proto'] : '', 'ports' => trim((string)($r['ports'] ?? '')), 'ct' => strtoupper(trim((string)($r['ct'] ?? ''))), 'act' => 'ACCEPT'];
                         if ($fwd) $x['oif'] = trim((string)($r['oif'] ?? '')); else $x['after'] = empty($r['after']) ? 0 : 1;
                         if ($x['iif'] . $x['src'] . $x['dst'] . $x['proto'] . $x['ports'] . $x['ct'] . ($x['oif'] ?? '') === '') continue;
-                        if (!v_ok('name', $x['name']) || !v_ok('if', $x['iif']) || !v_ok('if', $x['oif'] ?? '') || !v_netal($x['src'], $S) || !v_netal($x['dst'], $S) || !(v_ok('ports', $x['ports']) || preg_match('/^@[A-Za-z][A-Za-z0-9_-]{1,24}$/', $x['ports'])) || !v_ok('ct', $x['ct']) || ($x['ports'] !== '' && !in_array($x['proto'], ['tcp', 'udp'], true))) { $err[] = 'riga «' . $x['name'] . '» (' . $pk . ')'; continue; }
+                        if (!v_ok('name', $x['name']) || !v_ok('if', $x['iif']) || !v_ok('if', $x['oif'] ?? '') || !v_netal($x['src'], $S) || !v_netal($x['dst'], $S) || !(v_ok('ports', $x['ports']) || preg_match('/^@[A-Za-z][A-Za-z0-9_-]{1,24}$/D', $x['ports'])) || !v_ok('ct', $x['ct']) || ($x['ports'] !== '' && !in_array($x['proto'], ['tcp', 'udp'], true))) { $err[] = 'riga «' . $x['name'] . '» (' . $pk . ')'; continue; }
                         $rows[] = $x;
                     }
                     $S[$key] = $rows;
@@ -154,8 +155,9 @@ case 'sec_preset': {
             $old = S_get(); $before = ser($M); $M2 = $M; $warn = regen($M2, $S, $sec === 'setup' && !empty($_POST['confirm_dns_guard_removal']));
             // Blocca solo se la rigenerazione TOGLIE/cambia regole senza modifiche tue; le sole aggiunte (nuove regole generate da un aggiornamento) passano e sono mostrate nel riepilogo.
             if ($S == $old && !rules_equiv(ser($M2), $before) && model_delta($before, ser($M2))[1] > 0) { flash('Annullato per proteggere le tue regole: le impostazioni salvate non corrispondono alla bozza (rigenerandola cambierebbero regole pur senza modifiche tue). Nulla è stato toccato. Riallinea da «Importa regole» (dopo «Azzera impostazioni») oppure da un backup in Storico.', 'err'); break; }
-            if (function_exists('settings_snapshot')) settings_snapshot('pre-save-' . $sec);
-            S_put($S); $M = $M2; save_model();
+            $newDraft=ser($M2);
+            iptm_stage_settings($S,$newDraft);
+            $M=$M2;$rev=hash('sha256',$newDraft);
             $nSec = count(gen_sections($S)[0]);
             $summary = function_exists('iptm_settings_section_summary') ? iptm_settings_section_summary($sec, $S) : $sec;
             flash(delta_msg($before, ser($M)));
@@ -171,7 +173,7 @@ case 'sec_preset': {
                 }
             }
             // Changing a UI form does not apply kernel sysctl. Use Hardening → preview/apply explicitly.
-            if (!empty($_POST['apply'])) { if (apply_result(do_apply(ROLLBACK_SECS, '4'))) flash('Impostazioni applicate in prova: verifica SSH/LAN, poi conferma.'); $back = 'p=apply'; }
+            if (!empty($_POST['apply'])) { if (apply_result(do_apply(ROLLBACK_SECS, '4', true, true))) flash('Impostazioni applicate in prova: verifica la rete e conferma.'); $back = 'p=apply'; }
             break;
         }
         case 'settings_reset': {
@@ -198,15 +200,16 @@ case 'sec_preset': {
             $S = S_get(); $err = []; $al = []; $seen = [];
             foreach ((array)($_POST['al'] ?? []) as $r) {
                 if (!is_array($r) || !empty($r['del'])) continue; $n = trim((string)($r['name'] ?? '')); $it = trim((string)($r['items'] ?? '')); if ($n === '' && $it === '') continue;
-                $tk = preg_split('/[\s,;]+/', $it, -1, PREG_SPLIT_NO_EMPTY); $isP = $tk && !array_filter($tk, fn($x) => !preg_match('/^\d{1,5}(:\d{1,5})?$/', $x));
-                if (!preg_match('/^[A-Za-z][A-Za-z0-9_-]{1,24}$/', $n) || isset($seen[$n])) { $err[] = 'alias «' . $n . '»'; continue; } $seen[$n] = 1;
+                $tk = preg_split('/[\s,;]+/', $it, -1, PREG_SPLIT_NO_EMPTY); $isP = $tk && !array_filter($tk, fn($x) => !preg_match('/^\d{1,5}(:\d{1,5})?$/D', $x));
+                if (!preg_match('/^[A-Za-z][A-Za-z0-9_-]{1,24}$/D', $n) || isset($seen[$n])) { $err[] = 'alias «' . $n . '»'; continue; } $seen[$n] = 1;
+                if ($isP && !v_ok('ports', implode(',', $tk))) $err[] = 'alias porte «' . $n . '»: porta, intervallo o numero elementi non valido';
                 if (!$isP) foreach ($tk as $x) if (!v_ok('nets', $x) || str_contains($x, ',')) $err[] = 'alias ' . $n . ': ' . $x;
                 $al[] = ['name' => $n, 'items' => implode(' ', $tk)];
             }
             $bl = []; foreach (BL_PRESETS as $id => [$nm, $url]) { $d = iptm_list_direction($_POST['bd'][$id] ?? 'in'); $bl[] = ['on' => empty($_POST['bp'][$id]) ? 0 : 1, 'id' => $id, 'name' => $nm, 'url' => $url, 'dir' => in_array($d, ['in', 'out', 'both'], true) ? $d : 'in']; }
             $k = 0; foreach ((array)($_POST['bc'] ?? []) as $r) {
                 if (!is_array($r) || !empty($r['del'])) continue; $url = trim((string)($r['url'] ?? '')); $nm = trim((string)($r['name'] ?? '')); if ($url === '' && $nm === '') continue;
-                if (!preg_match('~^https?://[A-Za-z0-9._:/?#@&()*+,;=%\~-]{4,300}$~', $url) || !v_ok('name', $nm)) { $err[] = 'lista «' . $nm . '»'; continue; }
+                if (!preg_match('~^https?://[A-Za-z0-9._:/?#@&()*+,;=%\~-]{4,300}$~D', $url) || !v_ok('name', $nm)) { $err[] = 'lista «' . $nm . '»'; continue; }
                 $d = iptm_list_direction($r['dir'] ?? 'in'); $bl[] = ['on' => empty($r['on']) ? 0 : 1, 'id' => 'c' . (++$k), 'name' => $nm ?: 'lista ' . $k, 'url' => $url, 'dir' => in_array($d, ['in', 'out', 'both'], true) ? $d : 'in'];
             }
             $man = preg_split('/[\s,;]+/', trim((string)($_POST['manual_block'] ?? '')), -1, PREG_SPLIT_NO_EMPTY); foreach ($man as $x) if (!v_ok('nets', $x) || str_contains($x, ',')) $err[] = 'blocco manuale: ' . $x;
@@ -225,21 +228,30 @@ case 'sec_preset': {
             S_put($S); ipsets_prepare(); regen($M, $S); save_model(); flash("$ip aggiunto ai blocchi manuali (bozza). Applica per attivare la regola."); break;
         }
         case 'conn_kill': {
-            $p = (string)($_POST['proto'] ?? ''); $x = array_map(fn($k) => (string)($_POST[$k] ?? ''), ['src', 'dst', 'sport', 'dport']);
-            if (!in_array($p, ['tcp', 'udp'], true) || !v_ok('ip', $x[0]) || !v_ok('ip', $x[1]) || !v_ok('port', $x[2]) || !v_ok('port', $x[3])) { flash('Connessione non valida.', 'err'); break; }
-            [$c, $o, $e] = priv('conn-kill', null, array_merge([$p], $x)); flash($c === 0 ? 'Connessione chiusa.' : herr($o . $e), $c === 0 ? 'ok' : 'err'); break;
+            try{$tuple=iptm_connection_request($_POST);}catch(InvalidArgumentException $e){flash($e->getMessage(),'err');break;}
+            [$c,$o,$e]=priv('conn-kill',null,$tuple);flash($c===0?'Connessione chiusa.':herr($o.$e),$c===0?'ok':'err');break;
         }
-        case 'wol': { $m = (string)($_POST['mac'] ?? ''); if (!preg_match('/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/', $m)) { flash('MAC non valido.', 'err'); break; } [$c, $o, $e] = priv('wol', null, [$m]); flash($c === 0 ? "Pacchetto Wake-on-LAN inviato a $m." : 'Errore (serve il pacchetto wakeonlan): ' . trim($o . $e), $c === 0 ? 'ok' : 'err'); break; }
+        case 'wol': { $m = (string)($_POST['mac'] ?? ''); if (!preg_match('/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/D', $m)) { flash('MAC non valido.', 'err'); break; } [$c, $o, $e] = priv('wol', null, [$m]); flash($c === 0 ? "Pacchetto Wake-on-LAN inviato a $m." : 'Errore (serve il pacchetto wakeonlan): ' . trim($o . $e), $c === 0 ? 'ok' : 'err'); break; }
         case 'zero_apply': {
-            $A = json_decode((string)($_POST['answers'] ?? ''), true); if (!is_array($A)) { flash('Risposte non valide.', 'err'); break; }
-            [$S2, $w, $v6] = zero_build($A); $S2 = iptm_safe_settings($S2, $w); $S2['notify'] = S_get()['notify']; if (($A['base'] ?? 'zero') === 'keep') $S2['custom_opts'] = S_get()['custom_opts'] ?? [];   // «mantieni le regole»: le opzioni personalizzate restano @mkdir(DATA_DIR . '/backups', 0700, true);
-            $o = ser($M); file_put_contents(DATA_DIR . '/pre-zero.rules', $o); file_put_contents(DATA_DIR . '/backups/rules.v4.' . date('Ymd-His'), $o);
-            if (($A['base'] ?? 'zero') !== 'keep') $M = parse_rules(zero_skeleton());
-            S_put($S2); $warn = regen($M, $S2); save_model(); /* Procedura guidata: niente sysctl, ipset o liste live; applicazione separata con rollback. */ if ($v6 && !v6_put(v6_gen($v6))) throw new RuntimeException('Bozza IPv6 non salvata: verifica spazio e permessi');
-            flash('Configurazione creata nella bozza (' . count(gen_sections($S2)[0]) . ' blocchi di regole).'); foreach (array_merge($w, $warn) as $x) flash('⚠ ' . $x, 'err');
-            if (!empty($_POST['apply_now'])) {
-                if (apply_result(do_apply(ROLLBACK_SECS, '4'))) flash('Configurazione applicata in prova: conferma entro il tempo di rollback.');
-            }
+            $A = json_decode((string)($_POST['answers'] ?? ''), true, 32); if (!is_array($A)) { flash('Risposte non valide.', 'err'); break; }
+            $wizardLock=@fopen(DATA_DIR.'/apply.lock','c');
+            if(!$wizardLock || !@flock($wizardLock,LOCK_EX|LOCK_NB)) {if(is_resource($wizardLock))fclose($wizardLock);flash('Altra transazione in corso.','err');break;}
+            try {
+                if(is_file(DATA_DIR.'/pending.json')) throw new RuntimeException('Transazione firewall pendente.');
+                [$S2,$w,$v6]=zero_build($A); $S2=iptm_safe_settings($S2,$w); $oldSettings=S_get();
+                $S2['notify']=$oldSettings['notify']; $S2['api_token']=$oldSettings['api_token']; $S2['ti']=$oldSettings['ti'];
+                if(($A['base']??'keep')==='keep') {
+                    foreach(['custom_opts','iot_strategy','iot_devices','iot_policies','aliases','sqm','v6'] as $key)
+                        if(array_key_exists($key,$oldSettings) && !($key==='v6' && $v6))$S2[$key]=$oldSettings[$key];
+                    $candidate=$M;
+                } else $candidate=parse_rules(zero_skeleton());
+                $warn=regen($candidate,$S2); $new4=ser($candidate); $new6=$v6?v6_gen($v6):null;
+                iptm_stage_configuration($S2,$new4,$new6);
+                $M=$candidate;$rev=hash('sha256',$new4);
+                flash('Configurazione validata e salvata nella bozza. Nessuna regola live modificata.');
+                foreach(array_merge($w,$warn) as $x)flash('⚠ '.$x,'err');
+            } finally {iptm_release_apply_lock($wizardLock);}
+            // Wizard only stages configuration. The normal Apply page handles all safety checks.
             $back = 'p=apply'; break;
         }
         case 'regen_now': { $before = ser($M); $S = S_get(); $warn = regen($M, $S); save_model(); flash('Bozza rigenerata dalle impostazioni salvate. ' . delta_msg($before, ser($M))); foreach ($warn as $w) flash('⚠ ' . $w, 'err'); $back = 'p=apply'; break; }
@@ -379,25 +391,20 @@ case 'sec_preset': {
             break;
         }
         case 'advise_apply': {
-            $S = S_get();
-            $sel = array_map('strval', (array)($_POST['sel'] ?? []));
-            if (!$sel) { flash('Nessuna proposta selezionata.', 'err'); $back = 'p=advise'; break; }
-            [$S2, $nKeys, $nApps] = sys_propose_apply($S, $sel);
-            S_put($S2);
-            global $M; $M = parse_rules(get_draft());
-            $w = function_exists('regen') ? regen($M, $S2) : [];
-            if (function_exists('save_model')) save_model();
-            audit('advise_apply n=' . count($sel) . ' keys~' . $nKeys . ' apps=' . $nApps);
-            $msg = 'Analisi applicata: ' . count($sel) . ' proposte, impostazioni aggiornate, bozza rigenerata.';
-            if ($w) $msg .= ' Avvisi: ' . implode('; ', $w);
-            if (!empty($_POST['apply'])) {
-                if (apply_result(do_apply(ROLLBACK_SECS))) flash($msg . ' Applicato: conferma entro ' . ROLLBACK_SECS . ' s.');
-                else flash($msg);
-                $back = 'p=apply';
-            } else {
-                flash($msg . ' Vai su Applica per attivare sul kernel.');
-                $back = 'p=advise';
-            }
+            $back='p=advise';$S=S_get();$sel=$_POST['sel']??null;
+            if(!is_array($sel)||!array_is_list($sel)||!$sel||count($sel)>256) {flash('Selezione non valida.','err');break;}
+            $available=[];foreach(sys_propose($S) as $p)if(empty($p['active'])&&($p['keys']||$p['apps']))$available[$p['id']]=true;
+            foreach($sel as $id)if(!is_string($id)||!isset($available[$id])){flash('Proposta non disponibile: aggiorna l’analisi.','err');break 2;}
+            $sel=array_values(array_unique($sel));
+            [$S2,$nKeys,$nApps]=sys_propose_apply($S,$sel);
+            $S2=iptm_safe_settings($S2);$errors=iptm_settings_cross_validate($S2);
+            if($errors){flash('Impostazioni incoerenti: '.implode('; ',$errors),'err');break;}
+            $M2=parse_rules(get_draft());$warnings=regen($M2,$S2);$draft=ser($M2);
+            iptm_stage_settings($S2,$draft);$M=$M2;$rev=hash('sha256',$draft);
+            audit('advise_apply n='.count($sel));
+            flash('Proposte salvate nella bozza. Nessuna modifica live prima della prova.');
+            foreach($warnings as $warning)flash($warning,'warn');
+            if(!empty($_POST['apply'])){apply_result(do_apply(ROLLBACK_SECS));$back='p=apply';}
             break;
         }
         case 'settings_rollback': {

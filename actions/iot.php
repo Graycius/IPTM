@@ -15,6 +15,7 @@ case 'warden_retire': {
             try { S_put($S); } catch (Throwable $setError) {
                 audit('WARNING IoT Warden retired, settings update failed: '.$setError->getMessage());
                 flash('Warden disattivato ma salvataggio preferenza fallito: controllare impostazioni e backup.','err');
+                break;
             }
             audit('iot-warden retired (backup created; live firewall unmodified)');
             flash('Automazioni precedenti archiviate con backup. Nessuna catena live rimossa. Backup: '.(string)($result['backup']??'n/d').'. Ora prepara la pulizia della bozza e applicala da Applica.');

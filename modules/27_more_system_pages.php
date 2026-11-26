@@ -16,7 +16,10 @@ function pg_apply_extra() {
         echo '<table><tr><th>Catena creata a runtime</th><th>Regole</th><th>Gestita da</th></tr>'; $sug = [];
         foreach ($R['chains'] as $c => $x) { echo '<tr><td>' . h($c) . ' <small class=mut>(' . h($x['t']) . ')</small></td><td>' . $x['n'] . '</td><td>' . ($x['owner'] ? h($x['owner']) : '<span class=mut>sconosciuto</span>') . '</td></tr>'; if ($x['owner']) $sug[$x['owner']] = 1; }
         echo '</table>' . ($R['hooks'] ? '<p>Inoltre <b>' . $R['hooks'] . '</b> regole nelle catene principali (agganci a runtime) non sono nella bozza.</p>' : '');
-        $cache = is_file(DATA_DIR . '/suggest.json') ? (json_decode((string)file_get_contents(DATA_DIR . '/suggest.json'), true) ?: []) : []; $scr = $cache['scripts'] ?? []; foreach ($cache['services'] ?? [] as $sv) $sug[$sv] = 1;
+        $p=DATA_DIR.'/suggest.json';$raw=is_file($p)&&!is_link($p)?@file_get_contents($p,false,null,0,262145):false;
+        $cache=is_string($raw)&&strlen($raw)<=262144?json_decode($raw,true):[];
+        $scr=array_values(array_filter((array)($cache['scripts']??[]),'is_string'));
+        foreach ((array)($cache['services']??[]) as $sv) if(is_string($sv)&&preg_match('/^[A-Za-z0-9_.@-]{1,128}$/D',$sv))$sug[$sv]=1;
         $miss = array_diff(array_keys($sug), preg_split('/\s+/', trim($pc['services']), -1, PREG_SPLIT_NO_EMPTY), ['crowdsec-firewall-bouncer', 'fail2ban']);   // questi due li riavvia sempre l'helper dopo «Applica»
         if ($miss || ($scr && $pc['script'] === '')) echo '<div class="msg ok">ℹ Suggerimento: altri servizi da riavviare dopo l\'applicazione (aggiungili nel campo qui sotto): <b>' . h(implode(' ', $miss) ?: '—') . '</b>' . ($scr && $pc['script'] === '' ? '<br>Script che citano queste catene: <code>' . h(implode(' · ', array_slice($scr, 0, 4))) . '</code>' : '') . '</div>';
     }
@@ -33,7 +36,7 @@ function cs_info(): array {
             if ($c !== 0) {
                 // helper vecchio senza cs-info: prova rilevamento minimale
                 $r['helper'] = 'old';
-                if (is_file('/usr/bin/cscli') || is_file('/usr/local/bin/cscli')) $r['installed'] = true;
+                if (is_executable('/usr/bin/cscli') || is_executable('/usr/local/bin/cscli')) $r['installed'] = true;
                 return $r;
             }
             foreach (explode("\n", trim($o)) as $l) {
@@ -365,7 +368,7 @@ function sysctl_maintenance_card(bool $readonly): void {
     echo '<div class=card><h2>Audit sysctl e manutenzione controllata</h2>';
     if ($ac !== 0 || !is_array($audit)) echo '<p class=mut>Audit non disponibile: ' . h(trim($ao . $ae)) . '</p>';
     else {
-        echo '<p>File effettivi esaminati: <b>' . (int)count($audit['effective_files'] ?? []) . '</b> · Chiavi rilevate: <b>' . (int)($audit['keys'] ?? 0) . '</b> · Definizioni duplicate/sovrascritte: <b>' . (int)($audit['duplicate_or_override_keys'] ?? 0) . '</b></p>';
+        echo '<p>File effettivi esaminati: <b>' . (int)count($audit['effective_files'] ?? []) . '</b> · Chiavi rilevate: <b>' . (int)($audit['keys'] ?? 0) . '</b> · IPv4: <b>' . (int)($audit['ipv4_keys']??0) . '</b> · IPv6: <b>' . (int)($audit['ipv6_keys']??0) . '</b> · Definizioni duplicate/sovrascritte: <b>' . (int)($audit['duplicate_or_override_keys'] ?? 0) . '</b></p>';
         foreach (array_slice($audit['conflicts'] ?? [], 0, 12) as $conflict) {
             $defs = [];
             foreach ($conflict['definitions'] ?? [] as $def) $defs[] = (string)($def['file'] ?? '?') . ':' . (int)($def['line'] ?? 0) . ' = ' . (string)($def['value'] ?? '');
@@ -373,6 +376,17 @@ function sysctl_maintenance_card(bool $readonly): void {
         }
         if (count($audit['conflicts'] ?? []) > 12) echo '<p class=mut>Altre definizioni duplicate non mostrate.</p>';
     }
+    [$cc,$co,$ce]=priv('maintenance',null,['sysctl-consolidate-preview']);
+    $plan=json_decode($co,true);
+    echo '<details open class="iptm-consolidation"><summary>Consolidatore persistente — anteprima</summary>';
+    if($cc!==0 || !is_array($plan))echo '<p class=mut>Anteprima non disponibile.</p>';
+    else {
+        echo '<p>Rimuove solo assegnazioni identiche già ripetute in file locali; non modifica il kernel. I conflitti di valore e i file del sistema restano intatti.</p>';
+        echo '<p><b>'.count($plan['edits']??[]).' file modificabili</b> · '.count($plan['skipped']??[]).' chiavi da esaminare manualmente.</p>';
+        foreach($plan['edits']??[] as $entry) echo '<p><code>'.h($entry['file']).'</code> · righe '.h(implode(', ',$entry['lines'])).'</p>';
+        if(!empty($plan['edits']))echo '<p>Per applicare da console root:</p><pre>'.h('python3 /usr/local/lib/iptables-manager/iptm-maintenance.py sysctl-consolidate-apply --sha256 '.$plan['sha256']).'</pre><p>Ripristino:</p><pre>python3 /usr/local/lib/iptables-manager/iptm-maintenance.py sysctl-consolidate-rollback</pre>';
+    }
+    echo '</details>';
     echo '<p class=mut>Il testo grigio nel campo è solo un esempio: non viene inviato. Inserisci valori reali e verifica le chiavi disponibili sul kernel prima di applicare.</p>';
     echo '<p class=mut>Il motore accetta solo famiglie di chiavi allowlistate, esegue prima un dry-run, salva backup e rollback runtime in caso di errore. Questo pannello è avanzato: non sostituisce ancora tutti i vecchi percorsi sysctl generati dalle opzioni di hardening.</p>';
     if (!$readonly) {
@@ -397,7 +411,8 @@ function pg_harden() {
     $rpf = dd('Verifica indirizzo di ritorno (rp_filter)', sel('rpf', ['0' => 'Disattivato', '2' => 'Loose (consigliato per router/VPN)', '1' => 'Strict (solo host non-router)'], (string)($H['rpf'] ?? '2')) . ' <small class=mut>attuale: ' . h($cur) . '</small>', 'Scarta i pacchetti con sorgente non raggiungibile da quell\'interfaccia. «Strict» può rompere routing asimmetrico e WireGuard: sui router usa Loose.');
     echo '<div class=card><h2>Hardening del kernel (rete)</h2><p class=mut>La casella indica la configurazione desiderata, non lo stato già applicato. Se il valore nel kernel è diverso, la pagina lo segnala. Evita conflitti con file sysctl gestiti da DietPi o altri strumenti.</p><p class=mut>Impostazioni <code>sysctl</code> raccomandate dalle guide CIS e da progetti di hardening noti. Vengono salvate in <code>/etc/sysctl.d/98-iptm-hardening.conf</code> e restano dopo il riavvio.</p><form method=post>' . fh('p=harden') . '<input type=hidden name=action value=harden_apply>' . $rows . $rpf . '<p><button>💾 Salva e applica</button></p></form></div>';
     sec_audit_card();
-    // Advanced duplicate sysctl editor retired from UI; core hardening controls remain.
+    // Read-only precedence audit; mutations remain in the dedicated hardening path.
+    sysctl_maintenance_card(true);
 }
 
 

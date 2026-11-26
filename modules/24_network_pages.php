@@ -9,25 +9,34 @@ function ti_cfg(): array {
     $t = S_get()['ti'] ?? [];
     return $t + ['abuseipdb' => '', 'greynoise' => '', 'otx' => '', 'virustotal' => '', 'urlscan' => '', 'ipapi' => 0, 'threatfox' => 1, 'urlhaus' => 1, 'cache_hours' => 24];
 }
+function ti_cache_read(): array {
+    $f=DATA_DIR.'/ti-cache.json';
+    if(is_link($f)||!is_file($f))return [];
+    $raw=@file_get_contents($f,false,null,0,4194305);
+    if(!is_string($raw)||strlen($raw)>4194304)return [];
+    $j=json_decode($raw,true);return is_array($j)?$j:[];
+}
 function ti_cache_get(string $ip): ?array {
-    $f = DATA_DIR . '/ti-cache.json';
-    if (!is_file($f)) return null;
-    $j = json_decode((string)file_get_contents($f), true) ?: [];
-    $e = $j[$ip] ?? null;
-    if (!$e || empty($e['exp']) || $e['exp'] < time()) return null;
-    return $e['data'] ?? null;
+    $e=ti_cache_read()[$ip]??null;
+    if(!is_array($e)||!is_int($e['exp']??null)||$e['exp']<=time()||!is_array($e['data']??null))return null;
+    return $e['data'];
 }
-function ti_cache_put(string $ip, array $data, int $hours = 24): void {
-    $f = DATA_DIR . '/ti-cache.json';
-    $j = is_file($f) ? (json_decode((string)file_get_contents($f), true) ?: []) : [];
-    // limita cache a 500 IP
-    if (count($j) > 500) {
-        uasort($j, fn($a, $b) => ($a['exp'] ?? 0) <=> ($b['exp'] ?? 0));
-        $j = array_slice($j, -400, null, true);
-    }
-    $j[$ip] = ['exp' => time() + max(1, $hours) * 3600, 'data' => $data];
-    file_put_contents($f, json_encode($j), LOCK_EX);
+function ti_cache_put_seconds(string $ip,array $data,int $seconds): void {
+    if(filter_var($ip,FILTER_VALIDATE_IP)===false)return;
+    $lockPath=DATA_DIR.'/ti-cache.lock';
+    if(is_link($lockPath)||(file_exists($lockPath)&&!is_file($lockPath)))return;
+    $lock=@fopen($lockPath,'c');if(!$lock)return;
+    try {
+        if(!flock($lock,LOCK_EX))return;
+        $j=array_filter(ti_cache_read(),fn($e)=>is_array($e)&&is_int($e['exp']??null)&&$e['exp']>time()&&is_array($e['data']??null));
+        $j[$ip]=['exp'=>time()+max(60,min(2592000,$seconds)),'data'=>$data];
+        uasort($j,fn($a,$b)=>$a['exp']<=>$b['exp']);
+        $j=array_slice($j,-500,null,true);
+        $encoded=json_encode($j,JSON_INVALID_UTF8_SUBSTITUTE);
+        if(is_string($encoded)&&strlen($encoded)<=4194304)atomic_data_write(DATA_DIR.'/ti-cache.json',$encoded,0600);
+    } finally {fclose($lock);}
 }
+function ti_cache_put(string $ip,array $data,int $hours=24): void {ti_cache_put_seconds($ip,$data,max(1,min(720,$hours))*3600);}
 /** HTTPS-only HTTP client: API keys and submission fields never appear in ps argv. */
 function iptm_https_curl(string $url, array $headers = [], int $timeout = 8,
                          array $fields = [], ?string $fileField = null, ?string $filePath = null,
@@ -67,14 +76,14 @@ function ti_curl(string $url, array $headers = [], int $timeout = 4): ?string {
 /** Enrichment via API esterne (chiavi opzionali in Impostazioni TI). */
 function ti_api_enrich(string $ip, array $cfg): array {
     $ext = ['apis' => [], 'score' => 0, 'labels' => [], 'raw' => []];
-    if (!preg_match('/^(\d{1,3}\.){3}\d{1,3}$/', $ip)) return $ext; // API free quasi tutte IPv4
+    if (filter_var($ip,FILTER_VALIDATE_IP,FILTER_FLAG_IPV4|FILTER_FLAG_NO_PRIV_RANGE|FILTER_FLAG_NO_RES_RANGE)===false) return $ext; // API free quasi tutte IPv4
     $cached = ti_cache_get($ip);
     if ($cached !== null) return $cached;
 
     // Historical ip-api.com free HTTP lookups are disabled: no plaintext client-IP disclosure.
     // 2) AbuseIPDB
     $key = trim((string)($cfg['abuseipdb'] ?? ''));
-    if ($key !== '' && preg_match('/^[A-Za-z0-9]{20,80}$/', $key)) {
+    if ($key !== '' && preg_match('/^[A-Za-z0-9]{20,80}$/D', $key)) {
         $body = ti_curl(
             'https://api.abuseipdb.com/api/v2/check?ipAddress=' . rawurlencode($ip) . '&maxAgeInDays=90&verbose',
             ['Key: ' . $key, 'Accept: application/json'],
@@ -125,7 +134,7 @@ function ti_api_enrich(string $ip, array $cfg): array {
 
     // 5) VirusTotal (free API key — report IP)
     $vt = trim((string)($cfg['virustotal'] ?? ''));
-    if ($vt !== '' && preg_match('/^[A-Za-z0-9_\-]{32,128}$/', $vt)) {
+    if ($vt !== '' && preg_match('/^[A-Za-z0-9_\-]{32,128}$/D', $vt)) {
         $body = ti_curl('https://www.virustotal.com/api/v3/ip_addresses/' . rawurlencode($ip), ['x-apikey: ' . $vt, 'Accept: application/json'], 6);
         $j = $body ? json_decode($body, true) : null;
         $stats = is_array($j) ? ($j['data']['attributes']['last_analysis_stats'] ?? null) : null;
@@ -195,10 +204,7 @@ function ti_api_enrich(string $ip, array $cfg): array {
     $hours = (int)($cfg['cache_hours'] ?? 24);
     if ($got === 0) {
         // nessuna risposta API: cache 15 minuti (evita ban su errori temporanei)
-        $f = DATA_DIR . '/ti-cache.json';
-        $j = is_file($f) ? (json_decode((string)file_get_contents($f), true) ?: []) : [];
-        $j[$ip] = ['exp' => time() + 900, 'data' => $ext];
-        file_put_contents($f, json_encode($j), LOCK_EX);
+        ti_cache_put_seconds($ip,$ext,900);
     } else {
         ti_cache_put($ip, $ext, $hours);
     }
@@ -583,21 +589,28 @@ echo '</details>';
     echo '</div>';
 }
 
-function pg_log() {
-    [$c, $o, $e] = priv('journal'); echo '<div class=card><h2>Log del firewall</h2>';
-    if ($c) { echo '<p class=mut>Impossibile leggere il journal: ' . h($e) . '</p></div>'; return; }
-    $rows = []; $src = []; $dpt = [];
-    foreach (array_reverse(explode("\n", trim($o))) as $l) {
-        if (!preg_match('/(IPT[\w-]*):/', $l, $pm)) continue; preg_match_all('/\b([A-Z]+)=(\S*)/', $l, $kv); $f = array_combine($kv[1], $kv[2]);
-        $rows[] = [strtok($l, ' '), $pm[1], $f['IN'] ?? '', $f['SRC'] ?? '', $f['DST'] ?? '', $f['PROTO'] ?? '', $f['SPT'] ?? '', $f['DPT'] ?? ''];
-        if (isset($f['SRC'])) $src[$f['SRC']] = ($src[$f['SRC']] ?? 0) + 1; if (isset($f['DPT'])) $dpt[$f['PROTO'] . '/' . $f['DPT']] = ($dpt[$f['PROTO'] . '/' . $f['DPT']] ?? 0) + 1;
+/** Interpret the bounded journal sample without assuming every packet has a protocol or port. */
+function iptm_log_snapshot(string $journal): array {
+    $rows=[];$sources=[];$ports=[];
+    foreach(array_reverse(explode("\n",trim($journal))) as $line){
+        if(!preg_match('/(IPT[\w-]*):/',$line,$prefix))continue;
+        preg_match_all('/\b([A-Z]+)=(\S*)/',$line,$pairs);$fields=array_combine($pairs[1],$pairs[2]);
+        $rows[]=[strtok($line,' '),$prefix[1],$fields['IN']??null,$fields['SRC']??null,$fields['DST']??null,$fields['PROTO']??null,$fields['SPT']??null,$fields['DPT']??null];
+        if(!empty($fields['SRC']))$sources[$fields['SRC']]=($sources[$fields['SRC']]??0)+1;
+        if(isset($fields['DPT'])&&ctype_digit($fields['DPT'])){$key=($fields['PROTO']??'?').'/'.$fields['DPT'];$ports[$key]=($ports[$key]??0)+1;}
     }
-    arsort($src); arsort($dpt);
-    echo '<p class=mut>Ultime ' . count($rows) . ' voci del kernel con prefisso «IPT…».</p><div class=row><div><h3>Sorgenti più frequenti</h3><table>';
-    foreach (array_slice($src, 0, 10, true) as $k => $v) echo '<tr><td>' . h($k) . '</td><td>' . $v . '</td></tr>'; echo '</table></div><div><h3>Porte più colpite</h3><table>';
-    foreach (array_slice($dpt, 0, 10, true) as $k => $v) echo '<tr><td>' . h($k) . '</td><td>' . $v . '</td></tr>'; echo '</table></div></div>
-<h3>Dettaglio</h3><div data-iptm-layout="scroll"><table><tr><th>Ora</th><th>Tipo</th><th>IN</th><th>Origine</th><th>Destinazione</th><th>Proto</th><th>Porta o.</th><th>Porta d.</th></tr>';
-    foreach (array_slice($rows, 0, 100) as $r) echo '<tr><td>' . implode('</td><td>', array_map('h', $r)) . '</td></tr>'; echo '</table></div></div>';
+    arsort($sources);arsort($ports);return ['rows'=>$rows,'sources'=>$sources,'ports'=>$ports];
+}
+function pg_log() {
+    [$rc,$out,$err]=priv('journal');
+    iptm_view_start('Eventi del firewall','Campione del journal kernel con prefisso IPT; non rappresenta l’intero traffico.');
+    if($rc!==0){iptm_view_error('Impossibile leggere il journal: '.$err);iptm_view_end();return;}
+    $snapshot=iptm_log_snapshot($out);echo '<p>'.count($snapshot['rows']).' eventi nel campione.</p>';
+    $top=static function(array $data):array{$rows=[];foreach(array_slice($data,0,10,true) as $k=>$v)$rows[]=[$k,$v];return $rows;};
+    iptm_view_table(['Sorgente','Eventi'],$top($snapshot['sources']),'Sorgenti più frequenti');
+    iptm_view_table(['Protocollo/porta','Eventi'],$top($snapshot['ports']),'Porte destinazione più frequenti');
+    iptm_view_end();iptm_view_start('Dettaglio','Ultimi 100 eventi riconosciuti.');
+    iptm_view_table(['Ora','Tipo','IN','Origine','Destinazione','Protocollo','Porta origine','Porta destinazione'],array_slice($snapshot['rows'],0,100),'Eventi kernel');iptm_view_end();
 }
 
 function pg_setup() {
@@ -714,7 +727,7 @@ function pg_security() {
         ['logdrop_on', 'r', 'Gestisci la catena di scarto con log', 'Crea il log con limiti per sorgente (utile a CrowdSec). Il nome della catena è in Setup.'],
         ['ld_src_rate', 't', 'Log: soglia per sorgente'], ['ld_src_burst', 't', 'Log: burst per sorgente'], ['ld_glob_rate', 't', 'Log: tetto globale'], ['ld_glob_burst', 't', 'Log: burst globale'], ['ld_prefix', 't', 'Prefisso nel log', '', '200px']]) .
         '</div></details><details class=fw-acc><summary><span>Anti-lockout e hardening avanzato</span><small>Port scan, SYNPROXY, stealth e protezioni host</small></summary><div class=fw-acc-body><p class=mut>Ispirate a pfSense/OPNsense, alle guide CIS e a iptables-essentials. Le opzioni «dal WAN» richiedono la WAN definita in Setup.</p>' . opt_rows($S, [
-        ['lockout_on', 'r', 'Anti-lockout (gestione sempre raggiungibile)', 'Mantiene aperte le porte di gestione dalla LAN; se la protezione SSH è attiva, SSH viene filtrato da connlimit/recent prima delle aperture generiche.'], ['mgmt_ports', 't', 'Porte di gestione', 'es. 22,80,443', '200px'],
+        ['lockout_on', 'r', 'Anti-lockout (gestione sempre raggiungibile)', 'Mantiene aperte le porte solo dalle reti amministrative; SSH protetto mantiene i propri limiti.'], ['mgmt_nets', 't', 'Reti amministrative', 'CIDR separati da virgola. Necessarie con più LAN o VLAN; non includere reti ospiti.', '300px'], ['mgmt_ports', 't', 'Porte di gestione', 'es. 22,80,443', '200px'],
         ['drop_frag', 'r', 'Scarta i frammenti IP', 'Raro nel traffico legittimo; usato in alcuni attacchi.'],
         ['portscan', 'r', 'Rilevamento port scan', 'Chi tocca troppe porte chiuse viene bannato. Le reti locali sono escluse. Parametri configurabili sotto.'],
         ['ps_hits', 't', 'Port scan: tentativi (hitcount)', 'Soglia di porte diverse toccate (default 14)', '120px'],
@@ -754,62 +767,67 @@ function svc_table(string $pk, array $rows, bool $fwd): string {
     foreach ($rows as $i => $r) $t .= $row($i, $r);
     return $t . '</table></div><template id=' . $pk . 'tpl>' . $row('__i__', ['on' => 1]) . '</template><p><button type=button class=s data-tpl="#' . $pk . 'tpl" data-into="#' . $pk . 'tab">＋ Aggiungi riga</button></p>';
 }
-function pg_router() {
-    $S = S_get();
-    $b = '<div class="msg warn"><b>Scope LAN e controllo regole:</b> una subnet sorgente non identifica la scheda di ingresso. Con WAN dedicata IPTM esclude la WAN dagli ACCEPT LAN; con LAN dedicata puoi impostarla in Setup. Le regole scritte manualmente richiedono verifica. <a href="?p=rulesaudit">Analizza bozza</a>.</div><h3>Servizi del router (INPUT)</h3><p class=mut>Traffico <b>verso questo host</b> da accettare. Ogni riga: interfaccia, sorgente, destinazione, protocollo, porte. Le righe «dopo SSH» vengono valutate dopo i limiti SSH.</p>' . svc_table('s_in', $S['svc_in'], false) .
-        '<h3>Regole di transito (FORWARD)</h3><p class=mut>Traffico <b>attraverso</b> il router da accettare (VPN, uscita verso Internet, tra subnet…).</p>' . svc_table('s_fw', $S['svc_fwd'], true);
-    global $M; echo iptm_policy_review_ui(ser($M),$S);
-    echo '<div class=card><h2>Accesso al router e transito</h2>' . s_form('router', $b, 'p=router') . '</div>';
+function pg_router(): void {
+    global $M; $S=S_get();
+    echo iptm_policy_review_ui(ser($M),$S);
+    iptm_view_start('Accesso al router e transito','Distingui i servizi locali dalle connessioni tra LAN, VPN e WAN. Una subnet da sola non identifica l’interfaccia di ingresso.');
+    echo '<p>'.iptm_view_link('setup','Controlla interfacce').' '.iptm_view_link('rulesaudit','Analizza bozza').'</p>';
+    $body='<h3>Servizi locali (INPUT)</h3><p>Traffico verso questo host. Le regole dopo SSH rispettano la precedenza dei limiti SSH.</p>'.svc_table('s_in',$S['svc_in'],false).'<h3>Transito (FORWARD)</h3><p>Traffico tra interfacce, VPN, LAN e WAN.</p>'.svc_table('s_fw',$S['svc_fwd'],true);
+    echo s_form('router',$body,'p=router');iptm_view_end();
 }
 function pg_import() {
-    global $M;
-    if (is_file(DATA_DIR . '/settings.json')) {
-        echo '<div class=card><h2>Importazione già eseguita</h2><p>Le impostazioni esistono già. Per ripetere l\'importazione puoi ripristinare l\'originale pre-importazione: azzera le impostazioni e ricarica il file com\'era prima.</p>
-<form method=post>' . fh('p=import') . '<input type=hidden name=action value=settings_reset><button class=d>Azzera impostazioni</button></form></div>'; return;
-    }
-    $pl = import_plan_safe($M); $S = $pl['S'];
-    $toRemove = iptm_import_without_legacy_comments(ser($M))['removed'];
-    echo '<div class=card><h2>Importa le tue regole come opzioni</h2><div class="msg ' . ($pl['level_n'] === 0 ? 'ok' : 'err') . '">Livello di importazione: <b>' . h($pl['level']) . '</b>' . ($pl['level_n'] === 0 ? ' — tutte le regole sono ricondotte a opzioni senza cambiare il comportamento.' : ' — l\'importazione completa avrebbe cambiato l\'ordine di valutazione di alcune regole: ho scelto il livello più completo che lascia il comportamento identico (verificato regola per regola). Le regole non assorbite restano in Avanzate → Regole.') . '</div><p>Ho analizzato il file: <b>' . $pl['total'] . '</b> regole attive. Quelle riconosciute diventano <b>opzioni già selezionate</b> nelle pagine Setup, Sicurezza, Accesso router; le regole scritte a mano corrispondenti vengono sostituite da blocchi generati (identici, nello stesso ordine). Prima di cambiare qualcosa salvo l\'originale nei backup.</p>
-<h3>Opzioni riconosciute (' . count($pl['on']) . ')</h3><table>';
-    foreach (OPT_LABEL as $o => $l) echo '<tr><td>' . ($S[$o] ? '✅' : '▫️') . '</td><td>' . h($l) . '</td></tr>';
-    echo '</table><p>Servizi INPUT: <b>' . $pl['svc'][0] . '</b> righe · Transito FORWARD: <b>' . $pl['svc'][1] . '</b> righe · Interfacce masquerade: <b>' . h($S['masq_ifs'] ?: '—') . '</b> · Reti LAN: <b>' . h($S['lan_nets'] ?: '—') . '</b> · DNS locale: <b>' . h($S['dns_ip'] ?: '—') . '</b> · Catena di scarto: <b>' . h($S['drop_chain'] ?: 'DROP') . '</b></p>';
-    echo '<p>🧹 Pulizia: <b>' . count($pl['removed']) . '</b> regole inutili rimosse (duplicate o irraggiungibili), <b>' . $pl['merged'] . '</b> righe unite.</p>' . ($pl['removed'] ? '<details><summary>Dettagli delle regole rimosse</summary><pre>' . h(implode("\n", $pl['removed'])) . '</pre></details>' : '');
-    echo $pl['left'] ? '<h3>Non riconosciute (' . count($pl['left']) . ') — restano com\'erano, in Avanzate → Regole</h3><pre>' . h(implode("\n", $pl['left'])) . '</pre>' : '<p>✔ Tutte le regole attive sono state ricondotte a opzioni.</p>';
-    echo '<p class=mut>Durante l’importazione saranno eliminati <b>' . $toRemove . '</b> commenti del vecchio rules.v4, comprese le regole disattivate. Restano intatte le regole attive e i marcatori dei blocchi IPTM; il file live non viene modificato.</p><form method=post>' . fh('p=import') . '<input type=hidden name=action value=import_apply><p><button class=g>✔ Importa nella bozza</button> <button class=s name=action value=import_skip>Salta (parti da zero)</button></p></form></div>';
-}
-
-function pg_forward() {
-    $S = S_get(); wan_warn($S);
-    $row = fn($i, $r) => '<tr><td><input type=checkbox name="f[' . $i . '][on]" value=1' . (!empty($r['on']) ? ' checked' : '') . '></td><td><input name="f[' . $i . '][name]" value="' . h($r['name']) . '" placeholder="Applicazione"></td>
-<td><select name="f[' . $i . '][proto]">' . opts(['both', 'tcp', 'udp'], $r['proto']) . '</select></td><td><input name="f[' . $i . '][src]" value="' . h($r['src']) . '" placeholder="qualsiasi"></td><td><input name="f[' . $i . '][eport]" value="' . h($r['eport']) . '" placeholder="8080 o 5000:5100"></td>
-<td><input name="f[' . $i . '][ip]" value="' . h($r['ip']) . '" placeholder="192.168.1.50"></td><td><input name="f[' . $i . '][tport]" value="' . h($r['tport']) . '" placeholder="uguale"></td><td><label><input type=checkbox name="f[' . $i . '][del]" value=1> elimina</label></td></tr>';
-    $blank = ['on' => 1, 'name' => '', 'proto' => 'both', 'src' => '', 'eport' => '', 'ip' => '', 'tport' => ''];
-    $t = '<h3>Port Range Forward</h3><div data-iptm-layout="scroll"><table id=ftab><tr><th>On</th><th>Applicazione</th><th>Protocollo</th><th>Sorgente (opz.)</th><th>Porta/e esterna/e</th><th>IP destinazione</th><th>Porta dest.</th><th></th></tr>';
-    foreach ($S['fwd'] as $i => $r) $t .= $row($i, $r); $t .= '</table></div><template id=ftpl>' . $row('__i__', $blank) . '</template><p><button type=button class=s id=fadd>＋ Aggiungi riga</button></p>';
-    $t .= '<h3>NAT loopback</h3>' . dd_radio($S, 'loopback', 'Permetti ai client LAN di usare l\'indirizzo pubblico', 'Hairpin NAT: i forward funzionano anche dall\'interno della LAN.');
-    $t .= '<h3>DMZ</h3>' . dd_radio($S, 'dmz_on', 'Usa DMZ', 'Inoltra TUTTO il traffico non gestito (diretto a questo host) verso un dispositivo. Attenzione: lo espone a Internet.') .
-        dd_in($S, 'dmz_ip', 'IP host DMZ', '192.168.1.50', '', '200px') . dd_in($S, 'dmz_excl', 'Porte escluse (restano a questo host)', '22,80', 'Max 15, separate da virgola. Lascia vuoto per nessuna esclusione.', '260px');
-    echo '<div class=card><h2>NAT / Forward</h2><p class=mut>Le regole sono valide per i pacchetti destinati a questo router (lato WAN). Un solo campo porta = stessa porta; intervalli con «:».</p>' . s_form('forward', $t, 'p=forward') . '</div>';
-}
-
-function pg_access() {
-    $S = S_get(); $S['acl'] = array_values($S['acl']);
-    if (!empty($_GET['add']) && preg_match('/^[0-9A-Fa-f:.\-]{7,20}$/', $_GET['add'])) $S['acl'][] = ['on' => 1, 'name' => 'Nuovo criterio', 'clients' => $_GET['add'], 'days' => [], 'from' => '00:00', 'to' => '24:00', 'svc' => [], 'custom' => '', 'urls' => ''];
-    $pol = function ($i, $p) {
-        $o = '<div class=card data-iptm-layout="ui-bc63464a45"><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center"><h3 data-iptm-layout="ui-ab79ea2b85">Criterio</h3><input name="a[' . $i . '][name]" value="' . h($p['name']) . '" placeholder="Nome (es. Ragazzi di sera)" data-iptm-layout="ui-63b0844a71">
-<label><input type=checkbox name="a[' . $i . '][on]" value=1' . (!empty($p['on']) ? ' checked' : '') . '> Attivo</label><label data-iptm-layout="ui-ca6fc035af"><input type=checkbox name="a[' . $i . '][del]" value=1> elimina questo criterio</label></div>
-<div class=row><label class=fl><span>Client (IP, rete, intervallo IP-IP, MAC)</span><textarea name="a[' . $i . '][clients]" rows=3 placeholder="192.168.1.50&#10;192.168.1.60-192.168.1.70&#10;AA:BB:CC:DD:EE:FF">' . h($p['clients']) . '</textarea><small>Uno per riga. Vuoto = tutta la LAN.</small></label>
-<div><span class=fl style="font-weight:600;display:block">Giorni</span>';
-        foreach (DAYS as $k => $l) $o .= '<label data-iptm-layout="ui-087161b990"><input type=checkbox name="a[' . $i . '][days][]" value=' . $k . (in_array($k, $p['days'] ?? [], true) || empty($p['days']) ? ' checked' : '') . '> ' . $l . '</label>';
-        $o .= '<div data-iptm-layout="mt8"><label>Dalle <input name="a[' . $i . '][from]" value="' . h($p['from'] ?: '00:00') . '" data-iptm-layout="ui-f47e3b970d"></label> <label>alle <input name="a[' . $i . '][to]" value="' . h($p['to'] ?: '24:00') . '" data-iptm-layout="ui-f47e3b970d"></label><small class=mut> formato HH:MM, ora locale (24:00 = mezzanotte)</small></div></div></div>
-<span class=fl style="font-weight:600;display:block">Blocca questi servizi</span><div>';
-        foreach (SVC as $k => [$l]) $o .= '<label style="display:inline-block;margin:2px 12px 2px 0"><input type=checkbox name="a[' . $i . '][svc][]" value=' . $k . (in_array($k, $p['svc'] ?? [], true) ? ' checked' : '') . '> ' . h($l) . '</label>';
-        return $o . '</div><div class=row><label class=fl><span>Altre porte (proto:porte)</span><input name="a[' . $i . '][custom]" value="' . h($p['custom']) . '" placeholder="tcp:8080,9000 udp:5000:5100"></label>
-<label class=fl><span>Blocca siti/parole chiave (una per riga)</span><textarea name="a[' . $i . '][urls]" rows=2 placeholder="facebook.com">' . h($p['urls']) . '</textarea><small>Cerca la parola nel traffico HTTP e nel nome (SNI) di HTTPS. Non è un filtro web completo: DoH/QUIC/VPN lo aggirano.</small></label></div></div>';
-    };
-    $blank = ['on' => 1, 'name' => '', 'clients' => '', 'days' => [], 'from' => '00:00', 'to' => '24:00', 'svc' => [], 'custom' => '', 'urls' => ''];
-    $b = '<div id=plist>'; foreach ($S['acl'] as $i => $p) $b .= $pol($i, $p); $b .= '</div><template id=ptpl>' . $pol('__i__', $blank) . '</template><p><button type=button class=s id=padd>＋ Nuovo criterio</button></p>';
-    echo '<div class=card><h2>Restrizioni di accesso</h2><p class=mut>Come le «Access Policy» di DD-WRT: blocca servizi o siti a certi dispositivi in certi orari. Agisce sul traffico che attraversa il router (FORWARD).</p></div>' . s_form('access', $b, 'p=access');
+    global $M;$admin=($_SESSION['role']??'viewer')==='admin';
+    iptm_view_start('Importazione delle regole','Analizza le regole esistenti e prepara opzioni gestite da IPTM. Il firewall attivo non cambia.');
+    if(is_file(DATA_DIR.'/settings.json')){echo '<p>Le impostazioni sono già presenti. Esporta un backup prima di ripetere l’importazione.</p>'.iptm_view_link('config','Esporta configurazione');
+        if($admin){iptm_view_form('import','settings_reset');iptm_view_submit('Azzera impostazioni','d');}iptm_view_end();return;}
+    try{$plan=import_plan_safe($M);$settings=$plan['S'];$removed=iptm_import_without_legacy_comments(ser($M))['removed'];}catch(Throwable $e){iptm_view_error($e->getMessage());iptm_view_end();return;}
+    iptm_view_table(['Indicatore','Valore'],[['Livello',$plan['level']],['Regole attive',$plan['total']],['Opzioni riconosciute',count($plan['on'])],['Servizi INPUT',$plan['svc'][0]],['Servizi FORWARD',$plan['svc'][1]],['Interfacce NAT',$settings['masq_ifs']],['Reti LAN',$settings['lan_nets']],['DNS',$settings['dns_ip']],['Catena scarto',$settings['drop_chain']??'DROP'],['Regole rimosse',count($plan['removed'])],['Regole unite',$plan['merged']],['Commenti legacy da eliminare',$removed]],'Riepilogo importazione');
+    if((int)$plan['level_n']!==0)echo '<p class="msg warn">Importazione parziale: le regole non assorbite restano manuali.</p>';iptm_view_end();
+    iptm_view_start('Opzioni riconosciute');$rows=[];foreach(OPT_LABEL as $key=>$label)$rows[]=[$label,!empty($settings[$key])?'Attiva':'Non attiva'];iptm_view_table(['Opzione','Stato'],$rows,'Riconoscimento delle opzioni');iptm_view_end();
+    iptm_view_start('Anteprima e decisione','Le equivalenze vengono valutate dal modello IPTM; controlla comunque le differenze prima di applicare.');
+    foreach(['removed'=>'Regole rimosse','left'=>'Regole non riconosciute e conservate'] as $key=>$label)if(!empty($plan[$key]))echo '<details><summary>'.iptm_view_text($label).' ('.count($plan[$key]).')</summary><pre>'.iptm_view_text(implode("\n",$plan[$key])).'</pre></details>';
+    if($admin){iptm_view_form('import','import_apply');iptm_view_submit('Importa nella bozza');iptm_view_form('import','import_skip');iptm_view_submit('Salta importazione','s');}iptm_view_end();
 }
 
 
+function iptm_forward_row($index,array $row): string {
+    $key='f['.$index.']';
+    $cells=[iptm_edit_check($key.'[on]','Attiva',!empty($row['on'])),
+        iptm_edit_text($key.'[name]','Applicazione',$row['name']??''),
+        '<select name="'.h($key.'[proto]').'" aria-label="Protocollo">'.opts(['both','tcp','udp'],$row['proto']??'both').'</select>',
+        iptm_edit_text($key.'[src]','Sorgente',$row['src']??'','Qualsiasi'),
+        iptm_edit_text($key.'[eport]','Porta esterna',$row['eport']??'','8080'),
+        iptm_edit_text($key.'[ip]','Destinazione',$row['ip']??'','192.168.1.50'),
+        iptm_edit_text($key.'[tport]','Porta interna',$row['tport']??'','Uguale'),
+        iptm_edit_check($key.'[del]','Elimina')];
+    return '<tr><td>'.implode('</td><td>',$cells).'</td></tr>';
+}
+function pg_forward(): void {
+    $S=S_get();wan_warn($S);
+    iptm_view_start('NAT e inoltro porte','Configura i servizi raggiungibili dalla WAN. Le modifiche vengono salvate nella bozza; verifica prima di applicare.');
+    $body='<h3>Inoltri configurati</h3><div class="iptm-table-scroll" role="region" aria-label="Inoltri" tabindex="0"><table id="ftab"><thead><tr>';
+    foreach(['Stato','Applicazione','Protocollo','Sorgente','Porta esterna','IP interno','Porta interna','Rimozione'] as $head)$body.='<th scope="col">'.h($head).'</th>';
+    $body.='</tr></thead><tbody>';
+    foreach(iptm_view_rows($S['fwd']??[]) as $i=>$row)$body.=iptm_forward_row($i,$row);
+    $body.='</tbody></table></div><template id="ftpl">'.iptm_forward_row('__i__',['on'=>1]).'</template><p><button type="button" class="s" id="fadd">Aggiungi inoltro</button></p>';
+    $body.='<h3>Accesso LAN al nome pubblico</h3>'.dd_radio($S,'loopback','NAT loopback','Consente l’accesso ai servizi inoltrati anche dalla LAN.');
+    $body.='<h3>DMZ</h3><p class="msg warn">La DMZ può esporre servizi interni non protetti. Preferisci inoltri selettivi.</p>'.dd_radio($S,'dmz_on','Abilita DMZ').dd_in($S,'dmz_ip','IP host DMZ','192.168.1.50').dd_in($S,'dmz_excl','Porte escluse','22,80','Massimo 15 porte separate da virgola.');
+    echo s_form('forward',$body,'p=forward');iptm_view_end();
+}
+function iptm_access_card($index,array $policy): string {
+    $key='a['.$index.']';
+    $body='<section class="card iptm-policy-editor"><h3>Criterio di accesso</h3><div class="ops">'.iptm_edit_check($key.'[on]','Attivo',!empty($policy['on'])).iptm_edit_check($key.'[del]','Elimina').'</div>';
+    $body.='<label class="fl">Nome'.iptm_edit_text($key.'[name]','Nome',$policy['name']??'').'</label><label class="fl">Client (IP, rete, intervallo, MAC)'.iptm_edit_text($key.'[clients]','Client',$policy['clients']??'','Uno per riga; vuoto = tutta la LAN',true).'</label><fieldset><legend>Giorni</legend>';
+    $days=(array)($policy['days']??[]);foreach(DAYS as $id=>$day)$body.=iptm_edit_check($key.'[days][]',(string)$day,!$days||in_array($id,$days,true),(string)$id);
+    $body.='</fieldset><div class="row"><label class="fl">Dalle'.iptm_edit_text($key.'[from]','Dalle',($policy['from']??'')?:'00:00').'</label><label class="fl">Alle'.iptm_edit_text($key.'[to]','Alle',($policy['to']??'')?:'24:00').'</label></div><fieldset><legend>Servizi da bloccare</legend>';
+    foreach(SVC as $id=>[$label])$body.=iptm_edit_check($key.'[svc][]',(string)$label,in_array($id,(array)($policy['svc']??[]),true),(string)$id);
+    return $body.'</fieldset><label class="fl">Altre porte'.iptm_edit_text($key.'[custom]','Altre porte',$policy['custom']??'','tcp:8080,9000 udp:5000:5100').'</label><label class="fl">Siti e parole chiave'.iptm_edit_text($key.'[urls]','Siti',$policy['urls']??'','Una voce per riga',true).'</label><p class="mut">Il filtro HTTP/SNI non equivale a un filtro web completo; DoH, VPN e QUIC possono limitarne l’efficacia.</p></section>';
+}
+function pg_access(): void {
+    $S=S_get();$rows=iptm_view_rows($S['acl']??[]);
+    $add=$_GET['add']??'';if(is_string($add)&&preg_match('/^[0-9A-Fa-f:.\-]{7,20}$/D',$add))$rows[]=['on'=>1,'name'=>'Nuovo criterio','clients'=>$add];
+    iptm_view_start('Restrizioni di accesso','Definisci quali client possono utilizzare determinati servizi e in quali orari. Agisce sul traffico inoltrato dal router.');
+    $body='<div id="plist">';foreach($rows as $i=>$row)$body.=iptm_access_card($i,$row);
+    $body.='</div><template id="ptpl">'.iptm_access_card('__i__',['on'=>1]).'</template><p><button type="button" class="s" id="padd">Nuovo criterio</button></p>';
+    echo s_form('access',$body,'p=access');iptm_view_end();
+}

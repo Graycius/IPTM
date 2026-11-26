@@ -36,20 +36,18 @@ function tables(scope){
 }
 function panelSearch(){
  const page=document.getElementById('iptm-page-body');if(!page||!one(page,'iptmSearchReady'))return;
- const section=(page.className.match(/iptm-view-([a-z0-9]+)/)||[])[1]||'';
- const allowed=new Set(['setup','security','router','access','forward','chains','harden','admin','system','apps','lists','zones','piholelists','dns','vpn','multinic','monitor','progs','devices','ips','safeplan','crowdsec']);
- if(!allowed.has(section))return;
- const cards=[...page.children].filter(el=>el.classList?.contains('card'));if(cards.length<3)return;
- const toolbar=document.createElement('div');toolbar.className='iptm-page-tools';toolbar.setAttribute('role','search');
- const label=document.createElement('label'),input=document.createElement('input'),counter=document.createElement('output'),clear=document.createElement('button');
- input.id='iptm-panel-search-'+section;input.type='search';input.placeholder='Cerca un pannello';input.autocomplete='off';
- label.htmlFor=input.id;label.textContent='Filtra pannelli';counter.setAttribute('aria-live','polite');
- clear.type='button';clear.className='s sm';clear.textContent='Mostra tutti';
- const normalize=str=>(str||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
- const data=cards.map(el=>({el,text:normalize((el.querySelector(':scope > h2,:scope > h3')?.textContent||'')+' '+(el.querySelector(':scope > p')?.textContent||''))}));
- function apply(){const q=normalize(input.value.trim());let count=0;data.forEach(({el,text})=>{const ok=!q||text.includes(q);el.classList.toggle('iptm-filter-hidden',!ok);if(ok)count++;});counter.textContent=count+' / '+data.length+' pannelli';}
- input.addEventListener('input',apply);clear.addEventListener('click',()=>{input.value='';apply();input.focus();});
- toolbar.append(label,input,counter,clear);cards[0].before(toolbar);apply();
+ const cards=[...page.children].filter(el=>el.classList?.contains('card')&&el.querySelector(':scope > h2,:scope > h3'));
+ if(cards.length<3)return;
+ const nav=document.createElement('nav');nav.className='iptm-section-index';nav.setAttribute('aria-label','Pannelli della pagina');
+ const title=document.createElement('strong');title.textContent='In questa pagina';
+ const links=document.createElement('div');links.className='iptm-section-links';nav.append(title,links);
+ cards.forEach((card,i)=>{
+  const heading=card.querySelector(':scope > h2,:scope > h3');
+  if(!card.id){let id='iptm-panel-'+i;while(document.getElementById(id))id+='x';card.id=id;}
+  card.classList.add('iptm-panel-anchor');
+  const a=document.createElement('a');a.href='#'+encodeURIComponent(card.id);a.textContent=heading.textContent.trim();links.append(a);
+ });
+ cards[0].before(nav);
 }
 function policy(){
  const root=document.querySelector('.fw-policy-sections'),input=document.getElementById('fw-policy-search');if(!root||!input||!one(root,'iptmPolicyReady'))return;
@@ -140,7 +138,7 @@ document.getElementById('plLoad')?.addEventListener('click',async()=>{
  status.textContent='Verifica in corso…';const b=document.getElementById('plLoad');b.disabled=true;
  try{
   const fd=new FormData(read);fd.append('read_preview','1');
-  const r=await fetch(location.pathname+location.search,{method:'POST',body:fd,credentials:'same-origin',cache:'no-store'});
+  const r=await fetch(location.pathname+location.search,{method:'POST',body:fd,credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(60000)});
   const j=await r.json();if(!r.ok||!j.ok)throw Error(j.error||'HTTP '+r.status);
   const totals=updateStatus(j.catalog_status,true);
   status.textContent='Verifica completata: '+(totals.active+totals.disabled+totals.present)+' elementi già presenti, '+totals.new+' da aggiungere (adlist, regex, RethinkDNS). Verde = attivo, ambra = disattivato. Nessuna lista modificata.';
@@ -241,7 +239,30 @@ function optionDescriptions(scope=document){
  }
 }
 
-function hydrate(scope=document){tables(scope);policy();pihole();dnsFlow();qosCountdown();panelSearch();optionDescriptions(scope);}
+function applicationSelection(){
+ const form=document.getElementById('iptm-app-selection');if(!form||!one(form,'iptmAppSelection'))return;
+ const rows=[...form.querySelectorAll('tr')].filter(r=>r.querySelector('.acb'));
+ const toolbar=document.createElement('div');toolbar.className='iptm-app-toolbar';
+ const label=document.createElement('label');label.textContent='Cerca software';label.htmlFor='iptm-app-filter';
+ const input=document.createElement('input');input.type='search';input.id=label.htmlFor;input.placeholder='Nome, categoria o porta';
+ const count=document.createElement('output');count.setAttribute('aria-live','polite');
+ const select=document.createElement('button');select.type='button';select.className='s';select.textContent='Seleziona risultati visibili';
+ const clear=document.createElement('button');clear.type='button';clear.className='s';clear.textContent='Deseleziona risultati visibili';
+ const normalize=v=>String(v).toLocaleLowerCase('it').normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+ function update(){const q=normalize(input.value.trim());let shown=0,checked=0;
+  for(const row of rows){row.hidden=!!q&&!normalize(row.textContent).includes(q);if(!row.hidden)shown++;if(row.querySelector('.acb').checked)checked++;}
+  if(q)for(const detail of form.querySelectorAll('details'))if([...detail.querySelectorAll('tr')].some(r=>!r.hidden&&r.querySelector('.acb')))detail.open=true;
+  count.textContent=shown+' risultati · '+checked+' profili selezionati (anche nascosti)';
+ }
+ function changeVisible(value){for(const row of rows){const box=row.querySelector('.acb');if(!row.hidden&&row.getClientRects().length&&!box.disabled)box.checked=value;}update();}
+ select.addEventListener('click',()=>changeVisible(true));clear.addEventListener('click',()=>changeVisible(false));input.addEventListener('input',update);
+ form.addEventListener('change',update);form.addEventListener('click',e=>{if(e.target.closest('button[type=button]'))queueMicrotask(update);});
+ toolbar.append(label,input,select,clear,count);form.prepend(toolbar);update();
+}
+function hydrate(scope=document){
+ const tasks=[['tables',()=>tables(scope)],['policy',policy],['pihole',pihole],['dns',dnsFlow],['qos',qosCountdown],['search',panelSearch],['help',()=>optionDescriptions(scope)],['apps',applicationSelection]];
+ for(const [name,task] of tasks){try{task();}catch(error){console.warn('IPTM UI '+name,error);}}
+}
 function fragments(){
  for(const root of document.querySelectorAll('[data-fragment],[data-iptm-fragment]')){
   if(!one(root,'iptmFragmentReady'))continue;
@@ -257,7 +278,8 @@ function fragments(){
    try{
     const res=await fetch(url.toString(),{credentials:'same-origin',cache:'no-store',signal:request.signal,headers:{'X-IPTM-Fragment':'1'}});
     if(!res.ok)throw Error('HTTP '+res.status);
-    const html=await res.text();if(request.signal.aborted)return;
+    const html=await res.text();if(request.signal.aborted||ctrl!==request)return;
+    if(!html.trim()||/^\s*(?:<!doctype html|<html[\s>])/i.test(html))throw Error('Sessione scaduta o risposta non valida: ricarica la pagina');
     root.innerHTML=html;
     if(card)card.hidden=true;
     hydrate(root);

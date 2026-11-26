@@ -6,7 +6,7 @@
   const root=doc.getElementById('iptm-page-body');
   if(!root)return;
   let nextId=0;
-  const uniqueId=prefix=>`${prefix}-${++nextId}`;
+  const uniqueId=prefix=>{let id;do{id=`${prefix}-${++nextId}`;}while(doc.getElementById(id));return id;};
   function accessibleName(el){
     return !!(el.getAttribute('aria-label')?.trim() || el.getAttribute('aria-labelledby')?.trim() ||
       el.labels?.length || el.closest('label'));
@@ -69,7 +69,7 @@
       for(const record of records)for(const n of record.addedNodes){
         if(n.nodeType!==1)continue;
         if(n.matches?.('input,select,textarea,button,table,.card,.msg.err,.alert.err')){
-          scopes.add(n.closest('.card')||root);
+          scopes.add(n.parentElement||root);
         } else if(n.querySelector?.('input,select,textarea,button,table,.card,.msg.err,.alert.err')){
           scopes.add(n);
         }

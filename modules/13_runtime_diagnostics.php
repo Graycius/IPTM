@@ -48,7 +48,7 @@ function cs_detect(): array {   // set, catena iptables e/o tabella nft del boun
     $mode = (string)($st['mode'] ?? 'unknown');
     $nft = !empty($st['nft_table']);
     $svc = (string)($st['svc'] ?? '');
-    $active = ($svc === 'active' || str_starts_with($svc, 'active'));
+    $active = ($svc === 'active');
     $usable = ($ch !== '') || ($nft && $mode === 'nftables') || ($active && in_array($mode, ['nftables', 'ipset'], true));
     return [
         'sets' => array_values($s4),

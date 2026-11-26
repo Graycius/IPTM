@@ -1,7 +1,7 @@
 <?php
-// APP_VERSION = '5.30.23';
+// APP_VERSION = '6.0.8';
 // Physical modules: no executable code in a web-writable directory.
-define('IPTM_RELEASE_DIR', '/usr/local/lib/iptables-manager/web/releases/5.30.23');
+define('IPTM_RELEASE_DIR', '/usr/local/lib/iptables-manager/web/releases/6.0.8');
 // Small, public, version-pinned static resource endpoint. It reads ONLY known
 // CSS/JS files shipped in the root-owned, immutable native release directory.
 // No session, helper, network probe or config is needed to serve UI resources.
@@ -25,13 +25,15 @@ if (isset($_GET['iptm_asset'])) {
   if (!is_int($size) || $size < 1 || $size > 1048576) {
     http_response_code(503); header('Cache-Control: no-store'); exit;
   }
-  $etag = '"iptm-5.30.23-' . $name . '-' . $size . '"';
+  $digest=@hash_file('sha256',$file);
+  if ($digest===false) {http_response_code(503);exit;}
+  $etag = '"iptm-6.0.8-' . $name . '-' . $digest . '"';
   header('Content-Type: ' . $mime . '; charset=utf-8');
   header('X-Content-Type-Options: nosniff');
   header('Cross-Origin-Resource-Policy: same-origin');
   header('Referrer-Policy: no-referrer');
   header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'");
-  header('Cache-Control: public, max-age=31536000, immutable');
+  header('Cache-Control: public, no-cache');
   header('ETag: ' . $etag);
   if (trim((string)($_SERVER['HTTP_IF_NONE_MATCH'] ?? '')) === $etag) {
     http_response_code(304); exit;
@@ -41,11 +43,28 @@ if (isset($_GET['iptm_asset'])) {
   exit;
 }
 $iptm_modules=['modules/00_bootstrap.php', 'modules/01_core_utilities.php', 'modules/02_rule_model.php', 'modules/03_rule_generation.php', 'modules/04_system_probes.php', 'modules/05_rule_import.php', 'modules/06_manual_rules.php', 'modules/07_identity_audit.php', 'modules/08_alias_ipsets.php', 'modules/09_packet_tracer.php', 'modules/10_net_devices_ips.php', 'modules/11_firewall_transaction.php', 'modules/12_policy_analysis.php', 'modules/13_runtime_diagnostics.php', 'modules/14_system_advice.php', 'modules/15_apps_services.php', 'modules/38_visual_engine.php', 'modules/16_statistics.php', 'modules/17_common_ui_ops.php', 'modules/18_integrations.php', 'modules/19_http_boot_auth.php', 'modules/20_download_backup.php', 'modules/21_application_state.php', 'modules/30_features_core.php', 'modules/23_firewall_pages.php', 'modules/24_network_pages.php', 'modules/25_antivirus_pages.php', 'modules/26_health_dns_qos_pages.php', 'modules/27_more_system_pages.php', 'modules/28_system_monitoring.php', 'modules/31_features_pages.php', 'modules/32_diagnostics_pages.php', 'modules/33_dns_wizard.php', 'modules/34_qos_pages.php', 'modules/35_iot_zones_pages.php', 'modules/36_health_pages.php', 'modules/37_topology_page.php', 'modules/39_retention_pages.php', 'modules/40_multinic_pages.php', 'modules/41_performance_pages.php', 'modules/42_policy_review.php', 'modules/22_actions_controller.php', 'modules/29_render_frontend.php'];
-foreach ($iptm_modules as $iptm_module) {
+$iptm_missing = [];
+foreach (array_merge($iptm_modules, ['actions/diagnostics.php', 'actions/dns.php', 'actions/firewall.php', 'actions/identity.php', 'actions/iot.php', 'actions/network.php', 'actions/qos.php', 'actions/security.php', 'actions/system.php', 'actions/update_backup.php']) as $iptm_module) {
   $iptm_file = IPTM_RELEASE_DIR . '/' . $iptm_module;
-  if (!is_file($iptm_file) || !is_readable($iptm_file)) {
-    http_response_code(503); header('Content-Type: text/plain; charset=utf-8');
-    exit('IPTM: moduli non installati. Eseguire sudo /usr/local/sbin/iptm-helper modules-deploy.');
-  }
-  require $iptm_file;
+  if (!is_file($iptm_file) || is_link($iptm_file) || !is_readable($iptm_file)) $iptm_missing[] = $iptm_module;
+}
+if ($iptm_missing) {
+  http_response_code(503);
+  header('Content-Type: text/plain; charset=utf-8');
+  $hint = 'Release incompleta in ' . IPTM_RELEASE_DIR
+    . '. Mancanti o non leggibili: ' . count($iptm_missing) . ' moduli (es. ' . $iptm_missing[0] . '). '
+    . 'Reinstalla il pacchetto Native Update da console, oppure: '
+    . 'sudo /usr/local/sbin/iptm-helper modules-deploy  (verifica integrità e ripara i permessi della release).';
+  exit('IPTM: ' . $hint);
+}
+if (isset($_GET['iptm_health'])) {
+  if (!in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1','::1','::ffff:127.0.0.1'], true)) { http_response_code(404); exit; }
+  $method=$_SERVER['REQUEST_METHOD']??'GET';
+  if (!in_array($method,['GET','HEAD'],true)) {header('Allow: GET, HEAD');http_response_code(405);exit;}
+  header('Content-Type: text/plain'); header('Cache-Control: no-store');header('X-Content-Type-Options: nosniff');
+  if($method==='HEAD')exit;
+  exit('IPTM_HEALTH 6.0.8');
+}
+foreach ($iptm_modules as $iptm_module) {
+  require IPTM_RELEASE_DIR . '/' . $iptm_module;
 }

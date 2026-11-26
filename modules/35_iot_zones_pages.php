@@ -2,6 +2,7 @@
 // IPTM 4: pg_zones section moved verbatim; no runtime behavior changed.
 function pg_zones() {
     if (pg_async_skeleton('zones', 'Zone IoT: filtro MAC o VLAN')) return;
+    echo '<section class="card"><h2>Prima di configurare le zone</h2><p>Le regole MAC agiscono solo sul traffico che attraversa questo firewall. Dispositivi nella stessa rete possono comunicare direttamente: per isolamento reale servono VLAN o reti separate. Le regole IPv4 non proteggono IPv6.</p><p><a class="btn s" href="?p=apply">Controlla e applica la bozza</a></p></section>';
     // Ispirato a IPFire (RED/GREEN/BLUE/ORANGE) e alle zone OpenWRT/pfSense
     $S = S_get(); $if = sys_ifaces(); $L = live_state();
     $wan = (string)($S['wan_if'] ?? ''); $lan = (string)($S['lan_if'] ?? '');
@@ -33,7 +34,7 @@ function pg_zones() {
             'desc' => 'Rete fidata (casa/ufficio). Di solito può uscire su Internet; l\'accesso al router può essere limitato.',
             'if' => $lan ?: '—',
             'nets' => $lanNets ?: '—',
-            'policy' => !empty($S['lockout_on']) ? 'Anti-lockout attivo (gestione sempre raggiungibile dalla LAN)' : 'Accesso gestione secondo regole INPUT',
+            'policy' => !empty($S['lockout_on']) ? 'Anti-lockout previsto dalla bozza (raggiungibilità da verificare dopo applicazione)' : 'Accesso gestione secondo regole INPUT',
             'features' => array_filter([
                 !empty($S['spi']) ? 'SPI / connection tracking' : '',
                 !empty($S['lan_cl']) ? 'Limite connessioni per client' : '',

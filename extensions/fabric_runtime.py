@@ -9,6 +9,10 @@ trials as absent after a reboot. Never run from the HTTP dispatcher.
 """
 from __future__ import annotations
 
+from command_transport import durable_replace
+
+from command_transport import capture
+
 import fcntl
 import hashlib
 import json
@@ -24,7 +28,7 @@ import time
 
 from multinic_manager import inventory, read_profile, validate, ValidationError
 
-VERSION = '5.30.23'
+VERSION = '6.0.8'
 STATE_DIR = Path('/var/lib/iptm-fabric-runtime')
 STATE = STATE_DIR / 'fabric-trial.json'
 LOCK = STATE_DIR / 'fabric-trial.lock'
@@ -40,7 +44,10 @@ class TrialError(ValueError):
 
 def call(argv, *, runner=None, timeout=12, check=True):
     """Argv only, no shell. Inject runner in tests."""
-    result = (runner or subprocess.run)(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    try:
+        result = capture(argv, timeout=timeout) if runner is None else runner(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise TrialError("Comando non disponibile: "+str(argv[0])) from exc
     if check and result.returncode:
         raise TrialError(f'Comando {argv[0]} non riuscito (exit {result.returncode}): {result.stderr[:180]}')
     return result
@@ -58,46 +65,25 @@ def secure_dir(path: Path):
 def atomic_state(doc: dict, path: Path | None = None):
     path = path or STATE
     secure_dir(path.parent)
-    if path.is_symlink():
-        raise TrialError('File di stato è un symlink')
-    fd, name = tempfile.mkstemp(prefix='.fabric-', dir=path.parent)
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            os.fchmod(stream.fileno(), 0o600)
-            json.dump(doc, stream, ensure_ascii=False, sort_keys=True)
-            stream.flush(); os.fsync(stream.fileno())
-        os.replace(name, path)
-        directory_fd = os.open(path.parent, os.O_DIRECTORY)
-        try: os.fsync(directory_fd)
-        finally: os.close(directory_fd)
-    finally:
-        if os.path.exists(name): os.unlink(name)
+    from command_transport import durable_json
+    try: durable_json(path, doc, ensure_ascii=False)
+    except (OSError, ValueError) as exc: raise TrialError(str(exc)) from exc
 
 
 def state_read(path: Path | None = None):
-    path = path or STATE
-    if path.is_symlink(): raise TrialError('File di stato non sicuro')
-    try:
-        raw = path.read_bytes()
-        if len(raw) > 65536: raise TrialError('Stato oltre 64 KiB')
-        obj = json.loads(raw)
-        if not isinstance(obj, dict) or obj.get('schema') != 1:
-            raise TrialError('Stato transazione non valido')
-        return obj
-    except FileNotFoundError:
-        return None
+    from command_transport import read_private_json
+    try:obj=read_private_json(path or STATE,limit=65536)
+    except (OSError,ValueError,UnicodeError) as exc:raise TrialError('Stato transazione non sicuro: '+str(exc)) from exc
+    if obj is not None and obj.get('schema')!=1:raise TrialError('Stato transazione non valido')
+    return obj
 
 
 def locking(path: Path | None = None):
     path = path or LOCK
     secure_dir(path.parent)
-    if path.is_symlink(): raise TrialError('Lock symlink non sicuro')
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    st = os.fstat(fd)
-    if st.st_uid != 0 or st.st_mode & 0o077:
-        os.close(fd); raise TrialError('Lock non protetto')
-    fcntl.flock(fd, fcntl.LOCK_EX)
-    return fd
+    from command_transport import acquire_domain_lock
+    try: return acquire_domain_lock(path)
+    except (OSError,ValueError) as exc: raise TrialError('Lock non protetto: '+str(exc)) from exc
 
 
 def _links(*, runner=None):
@@ -167,13 +153,7 @@ def boot_guard_install(*, unit: Path | None = None, script: str = SCRIPT, runner
     if unit.exists() and 'Description=IPTM Fabric boot trial recovery' not in unit.read_text():
         raise TrialError('Unità preesistente non riconosciuta')
     if unit.parent.is_symlink(): raise TrialError('Unità in directory symlink')
-    fd, tmp = tempfile.mkstemp(prefix='.iptm-fabric-', dir=unit.parent)
-    try:
-        with os.fdopen(fd, 'w') as file:
-            file.write(content);file.flush();os.fsync(file.fileno());os.fchmod(file.fileno(), 0o644)
-        os.replace(tmp, unit)
-    finally:
-        if os.path.exists(tmp): os.unlink(tmp)
+    durable_replace(unit, content.encode(), mode=0o644)
     call(['systemctl', 'daemon-reload'], runner=runner)
     call(['systemctl', 'enable', unit.name], runner=runner)
     return {'ok':True, 'boot_guard':str(unit)}
@@ -329,9 +309,15 @@ def main(argv: list[str]):
     raise TrialError('Uso: fabric-runtime status|preview|install-guard|apply HASH|confirm TOKEN|rollback TOKEN|expire|boot-recover')
 
 
+def coordinated_main(args):
+    from command_transport import driver_admission
+    with driver_admission('fabric_runtime',args):
+        return main(args)
+
+
 if __name__=='__main__':
     try:
-        print(json.dumps(main(sys.argv[1:]), ensure_ascii=False, separators=(',',':')))
+        print(json.dumps(coordinated_main(sys.argv[1:]), ensure_ascii=False, separators=(',',':')))
     except (TrialError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
         print(json.dumps({'ok':False,'error':str(exc)},ensure_ascii=False))
         sys.exit(2)

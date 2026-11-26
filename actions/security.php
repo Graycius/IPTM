@@ -44,12 +44,13 @@ case 'cs_feed_apply': {
     [$c,$o,$e]=priv('security-stack',null,['crowdsec-apply',$hash]);$res=json_decode($o,true);
     if($c===0&&!empty($res['ok']))unset($_SESSION['iptm_feed_plan']);
     flash($c===0&&!empty($res['ok'])?'Decisioni CrowdSec importate tramite cscli, durata limitata.':
-        'Importazione CrowdSec fallita: '.herr((string)($res['error']??$e??$o)),$c===0?'ok':'err');break;
+        'Importazione CrowdSec fallita: '.herr((string)($res['error']??$e??$o)),$c===0&&($res['ok']??false)===true?'ok':'err');break;
 }
 case 'su_source_stage': {
     $back='p=ips&t=ecosistema';
     if(($_SESSION['role']??'viewer')!=='admin'){flash('Solo amministratore.','err');break;}
-    $obj=['source'=>(string)($_POST['source_name']??''),'enabled'=>(string)($_POST['source_mode']??'')==='enable'];
+    if(!is_string($_POST['source_name']??null)||!in_array($_POST['source_mode']??null,['enable','disable'],true)){flash('Sorgente o modalità non valida.','err');break;}
+    $obj=['source'=>$_POST['source_name'],'enabled'=>$_POST['source_mode']==='enable'];
     [$c,$o,$e]=priv('security-stack',json_encode($obj,JSON_THROW_ON_ERROR),['suricata-stage']);$res=json_decode($o,true);
     if($c!==0||empty($res['ok'])||!preg_match('/^[a-f0-9]{64}$/D',(string)($res['sha256']??''))){
         unset($_SESSION['iptm_suricata_source']);flash('Anteprima sorgente rifiutata: '.herr((string)($res['error']??$e??$o)),'err');break;
@@ -66,7 +67,7 @@ case 'su_source_apply': {
     [$c,$o,$e]=priv('security-stack',null,['suricata-apply',$hash]);$res=json_decode($o,true);
     if($c===0&&!empty($res['ok']))unset($_SESSION['iptm_suricata_source']);
     flash($c===0&&!empty($res['ok'])?'Sorgenti aggiornate e regole verificate con suricata -T. Reload resta manuale.':
-        'Aggiornamento bloccato o fallito: '.herr((string)($res['error']??$e??$o)),$c===0?'ok':'err');break;
+        'Aggiornamento bloccato o fallito: '.herr((string)($res['error']??$e??$o)),$c===0&&($res['ok']??false)===true?'ok':'err');break;
 }
 case 'cs_autodetect': {
             $d = cs_detect();
@@ -126,9 +127,15 @@ case 'cs_autodetect': {
             $tk = (string)($_POST['tool'] ?? ''); $act = (string)($_POST['act'] ?? ''); if (!isset(tool_defs()[$tk]) || !in_array($act, ['start', 'stop', 'restart'], true)) { flash('Richiesta non valida.', 'err'); break; }
             [$c, $o, $e] = priv('tool-svc', null, [$tk, $act]); audit("programma $tk: $act"); flash($c === 0 ? "Servizio $tk: $act eseguito." . (trim($o) !== '' ? "\n" . trim($o) : '') : herr($o . $e), $c === 0 ? 'ok' : 'err'); break;
         }
-        case 'f2b_unban': { [$c, $o, $e] = priv('f2b-unban', null, [(string)($_POST['jail'] ?? ''), (string)($_POST['ip'] ?? '')]); audit('fail2ban sban ' . ($_POST['ip'] ?? '')); flash($c === 0 ? 'Indirizzo sbannato.' : herr($o . $e), $c === 0 ? 'ok' : 'err'); break; }
-        case 'cs_ban': { $d = (string)($_POST['dur'] ?? '4h'); [$c, $o, $e] = priv('cs-ban', null, [trim((string)($_POST['ip'] ?? '')), $d]); audit('crowdsec ban ' . ($_POST['ip'] ?? '') . " $d"); flash($c === 0 ? 'Decisione aggiunta (il bouncer la applica entro pochi secondi).' : herr($o . $e), $c === 0 ? 'ok' : 'err'); $back = !empty($_POST['from_cs']) ? 'p=crowdsec' : 'p=monitor'; break; }
-        case 'cs_unban': { [$c, $o, $e] = priv('cs-unban', null, [trim((string)($_POST['ip'] ?? ''))]); audit('crowdsec unban ' . ($_POST['ip'] ?? '')); flash($c === 0 ? 'Decisione rimossa.' : herr($o . $e), $c === 0 ? 'ok' : 'err'); $back = !empty($_POST['from_cs']) ? 'p=crowdsec' : 'p=monitor'; break; }
+        case 'f2b_unban': case 'cs_ban': case 'cs_unban': {
+            $back=$a!=='f2b_unban'&&!empty($_POST['from_cs'])?'p=crowdsec':'p=monitor';
+            try { $request=iptm_security_decision_request($a,$_POST); }
+            catch (InvalidArgumentException $e) { flash($e->getMessage(),'err'); break; }
+            [$c,$o,$e]=priv($request['command'],null,$request['args']);
+            if($c===0) { audit($request['command'].' '.implode(' ',$request['args'])); flash($request['success']); }
+            else flash(herr($o.$e),'err');
+            break;
+        }
         case 'cs_allow_add': { $d = (string)($_POST['dur'] ?? '8760h'); [$c, $o, $e] = priv('cs-allow-add', null, [trim((string)($_POST['ip'] ?? '')), $d]); audit('crowdsec allow ' . ($_POST['ip'] ?? '')); flash($c === 0 ? 'IP aggiunto in allowlist.' : herr($o . $e), $c === 0 ? 'ok' : 'err'); $back = 'p=crowdsec'; break; }
         case 'cs_allow_del': { [$c, $o, $e] = priv('cs-allow-del', null, [trim((string)($_POST['ip'] ?? ''))]); audit('crowdsec allow-del ' . ($_POST['ip'] ?? '')); flash($c === 0 ? 'Allow rimosso.' : herr($o . $e), $c === 0 ? 'ok' : 'err'); $back = 'p=crowdsec'; break; }
         case 'cs_collection_install': { $n = trim((string)($_POST['name'] ?? '')); [$c, $o, $e] = priv('cs-collection-install', null, [$n]); audit("crowdsec collection install $n"); flash($c === 0 ? "Collezione installata:\n" . trim($o) : herr($o . $e), $c === 0 ? 'ok' : 'err'); $back = 'p=crowdsec'; break; }
@@ -143,7 +150,7 @@ case 'cs_autodetect': {
         case 'su_test': { [$c, $o, $e] = priv('su-test'); flash(($c === 0 ? "Test OK\n" : "Test fallito\n") . trim($o . $e), $c === 0 ? 'ok' : 'err'); $back = 'p=ips&t=config'; break; }
         case 'su_homenet': {
             $hn = trim((string)($_POST['homenet'] ?? ''));
-            if ($hn === '' || !preg_match('/^[A-Za-z0-9.\/,\[\]_\s-]{1,200}$/', $hn)) { flash('HOME_NET non valido (usa CIDR separati da virgola, es. 192.168.1.0/24,10.0.0.0/8).', 'err'); break; }
+            if ($hn === '' || !preg_match('/^[A-Za-z0-9.\/,\[\]_\s-]{1,200}$/D', $hn)) { flash('HOME_NET non valido (usa CIDR separati da virgola, es. 192.168.1.0/24,10.0.0.0/8).', 'err'); break; }
             [$c, $o, $e] = priv('su-homenet', null, [$hn]); audit("suricata HOME_NET $hn");
             flash($c === 0 ? trim($o) : herr($o . $e), $c === 0 ? 'ok' : 'err'); $back = 'p=ips&t=regole'; break;
         }
@@ -155,7 +162,7 @@ case 'cs_autodetect': {
         }
         case 'su_disable_sid': {
             $sid = trim((string)($_POST['sid'] ?? ''));
-            if (!preg_match('/^\d{1,10}$/', $sid)) { flash('SID non valido (solo numeri).', 'err'); break; }
+            if (!preg_match('/^\d{1,10}$/D', $sid)) { flash('SID non valido (solo numeri).', 'err'); break; }
             [$c, $o, $e] = priv('su-disable-sid', null, [$sid]); audit("suricata suppress sid $sid");
             flash($c === 0 ? trim($o) : herr($o . $e), $c === 0 ? 'ok' : 'err'); $back = 'p=ips&t=regole'; break;
         }
@@ -352,7 +359,7 @@ case 'cs_autodetect': {
         case 'ti_vt_test': {
             $S = S_get();
             $key = trim((string)($_POST['virustotal'] ?? ($S['ti']['virustotal'] ?? '')));
-            if ($key === '' || !preg_match('/^[A-Za-z0-9_\-]{32,128}$/', $key)) { flash('Inserisci una chiave VirusTotal valida prima del test.', 'err'); $back = 'p=attacks'; break; }
+            if ($key === '' || !preg_match('/^[A-Za-z0-9_\-]{32,128}$/D', $key)) { flash('Inserisci una chiave VirusTotal valida prima del test.', 'err'); $back = 'p=attacks'; break; }
             // salva se fornita nel form
             if (trim((string)($_POST['virustotal'] ?? '')) !== '') {
                 $S['ti'] = array_merge(ti_cfg(), (array)($S['ti'] ?? []), ['virustotal' => $key]);
@@ -387,11 +394,11 @@ case 'cs_autodetect': {
                 'urlhaus' => !empty($_POST['urlhaus']) ? 1 : 0,
                 'cache_hours' => max(1, min(168, (int)($_POST['cache_hours'] ?? 24))),
             ];
-            if ($ti['abuseipdb'] !== '' && !preg_match('/^[A-Za-z0-9]{20,80}$/', $ti['abuseipdb'])) { flash('Chiave AbuseIPDB non valida.', 'err'); break; }
-            if ($ti['greynoise'] !== '' && !preg_match('/^[A-Za-z0-9_.-]{16,120}$/', $ti['greynoise'])) { flash('Chiave GreyNoise non valida.', 'err'); break; }
-            if ($ti['otx'] !== '' && !preg_match('/^[A-Za-z0-9]{16,120}$/', $ti['otx'])) { flash('Chiave OTX non valida.', 'err'); break; }
-            if ($ti['virustotal'] !== '' && !preg_match('/^[A-Za-z0-9_\-]{32,128}$/', $ti['virustotal'])) { flash('Chiave VirusTotal non valida (32–128 caratteri).', 'err'); break; }
-            if ($ti['urlscan'] !== '' && !preg_match('/^[A-Za-z0-9\-]{8,64}$/', $ti['urlscan'])) { flash('Chiave urlscan.io non valida.', 'err'); break; }
+            if ($ti['abuseipdb'] !== '' && !preg_match('/^[A-Za-z0-9]{20,80}$/D', $ti['abuseipdb'])) { flash('Chiave AbuseIPDB non valida.', 'err'); break; }
+            if ($ti['greynoise'] !== '' && !preg_match('/^[A-Za-z0-9_.-]{16,120}$/D', $ti['greynoise'])) { flash('Chiave GreyNoise non valida.', 'err'); break; }
+            if ($ti['otx'] !== '' && !preg_match('/^[A-Za-z0-9]{16,120}$/D', $ti['otx'])) { flash('Chiave OTX non valida.', 'err'); break; }
+            if ($ti['virustotal'] !== '' && !preg_match('/^[A-Za-z0-9_\-]{32,128}$/D', $ti['virustotal'])) { flash('Chiave VirusTotal non valida (32–128 caratteri).', 'err'); break; }
+            if ($ti['urlscan'] !== '' && !preg_match('/^[A-Za-z0-9\-]{8,64}$/D', $ti['urlscan'])) { flash('Chiave urlscan.io non valida.', 'err'); break; }
             $S['ti'] = $ti; S_put($S);
             // svuota cache se richiesto
             if (!empty($_POST['clear_cache'])) @unlink(DATA_DIR . '/ti-cache.json');
@@ -401,7 +408,7 @@ case 'cs_autodetect': {
         case 'av_save_key': {
             $S = S_get();
             $key = trim((string)($_POST['virustotal'] ?? ''));
-            if ($key !== '' && !preg_match('/^[A-Za-z0-9_\-]{32,128}$/', $key)) { flash('Chiave VirusTotal non valida (32–128 caratteri).', 'err'); $back = 'p=avscan'; break; }
+            if ($key !== '' && !preg_match('/^[A-Za-z0-9_\-]{32,128}$/D', $key)) { flash('Chiave VirusTotal non valida (32–128 caratteri).', 'err'); $back = 'p=avscan'; break; }
             $S['ti'] = array_merge(ti_cfg(), (array)($S['ti'] ?? []), ['virustotal' => $key]);
             S_put($S);
             flash($key === '' ? 'Chiave VirusTotal rimossa.' : 'Chiave VirusTotal salvata.');

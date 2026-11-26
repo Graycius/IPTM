@@ -1,16 +1,10 @@
 <?php
 // ===================== DOWNLOAD BACKUP =====================
-if (isset($_GET['dl']) && preg_match('/^rules\.v[46]\.\d{8}-\d{6}$/D', (string)$_GET['dl'])) {
+if (isset($_GET['dl']) && is_string($_GET['dl']) && str_starts_with($_GET['dl'],'rules.v')) {
     if (($_SESSION['role'] ?? '') !== 'admin') { http_response_code(403); exit('Solo admin'); }
-    $base = realpath(DATA_DIR . '/backups');
-    $path = $base !== false ? realpath(DATA_DIR . '/backups/' . $_GET['dl']) : false;
-    if ($base === false || $path === false || !str_starts_with($path, $base . DIRECTORY_SEPARATOR) || !is_file($path) || is_link(DATA_DIR . '/backups/' . $_GET['dl'])) {
-        http_response_code(404); exit('Backup non trovato');
-    }
+    try {$data=iptm_rules_backup_read($_GET['dl']);} catch(RuntimeException $e) {http_response_code(404);exit('Backup non disponibile');}
     header('Content-Type: text/plain'); header('Cache-Control: private, no-store'); header('X-Content-Type-Options: nosniff');
-    header('Content-Disposition: attachment; filename="' . basename($path) . '"');
-    header('X-Content-Type-Options: nosniff');
-    readfile($path); exit;
+    header('Content-Disposition: attachment; filename="'.$_GET['dl'].'"'); echo $data; exit;
 }
 if (($_GET['dl'] ?? '') === 'config-bundle') {
     if (($_SESSION['role'] ?? '') !== 'admin') { http_response_code(403); exit('Solo admin'); }
@@ -36,7 +30,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET' && ($_GET['p'] ?? '') === 'sqm'
     $statusPath = DATA_DIR . '/sqm-manual-job.status';
     if (is_file($statusPath) && !is_link($statusPath) && is_readable($statusPath)
         && ($statusSize = @filesize($statusPath)) !== false && $statusSize <= 4096) {
-        $out = (string)@file_get_contents($statusPath); $rc = 0; $err = '';
+        $out = (string)@file_get_contents($statusPath,false,null,0,4097); $rc = 0; $err = '';
+        if(strlen($out)>4096){$rc=1;$out='';$err='Stato job troppo grande';}
         if ($out === '') { $rc = 1; $err = 'Stato job vuoto'; }
     } elseif (is_file($statusPath) || is_link($statusPath)) {
         $rc=1; $out=''; $err='Stato SQM non leggibile o non sicuro: controlla proprietà e permessi del file di stato.';
@@ -52,7 +47,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET' && ($_GET['p'] ?? '') === 'sqm'
     }
     if ($rc === 0 && ($map['state'] ?? '') === 'running') {
         $started = (int)($map['started'] ?? 0);
-        if ($started <= 0 || time() - $started > 300) {
+        if ($started <= 0 || $started > time()+60 || time() - $started > 300) {
             $map = ['state'=>'failed','mode'=>'error','message'=>'Job SQM scaduto: controlla la diagnostica, limiti conservati'];
         }
     }

@@ -6,12 +6,47 @@ SQLite tables after schema inspection; sysctl changes are restricted to an
 explicit allow-list and IPTM-owned configuration file.
 """
 from __future__ import annotations
-import argparse, atexit, csv, datetime, fcntl, ipaddress, json, os, pathlib, re, shutil, sqlite3, subprocess, sys, tempfile, time, urllib.request, urllib.parse, urllib.error
+import argparse, atexit, base64, hashlib, stat, csv, datetime, fcntl, ipaddress, json, os, pathlib, re, shutil, sqlite3, subprocess, sys, tempfile, time, urllib.request, urllib.parse, urllib.error
 from contextlib import contextmanager
 from typing import Optional, List
 
+# Shared transport loaded only for commands; journal recovery stays standalone.
+def iptm_transport():
+    import importlib.util
+    from pathlib import Path
+    source=Path(__file__).resolve()
+    if source.parent.name == 'runtime':
+        module=source.parent.parent/'extensions'/'command_transport.py'
+    else:
+        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/command_transport.py')
+    if not module.is_file() or module.is_symlink():
+        raise OSError('Trasporto IPTM assente o non sicuro')
+    cached=getattr(iptm_capture,'_module',None)
+    if cached is None:
+        spec=importlib.util.spec_from_file_location('_iptm_runtime_transport',module)
+        cached=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cached)
+        iptm_capture._module=cached
+    return cached
+
+def iptm_capture(argv, **options):
+    return iptm_transport().capture(argv, **options)
+
+
+def restore_syntax_probe(tool, path):
+    """Bound diagnostic input and both output streams; never apply rules."""
+    if tool not in ('iptables-restore', 'ip6tables-restore'):
+        raise ValueError('Restore non valido')
+    with path.open('rb') as stream:
+        data = stream.read(16 * 1024 * 1024 + 1)
+    if len(data) > 16 * 1024 * 1024:
+        raise OSError('Dump regole troppo grande per il test')
+    return iptm_capture([tool, '--test'], input_data=data, text=False,
+                        timeout=4, stdout_limit=65536, stderr_limit=65536)
+
+
 DATA = pathlib.Path('/var/lib/iptables-manager')
-RETHINK_SCRIPT = pathlib.Path('/usr/local/lib/iptables-manager/web/releases/5.30.23/extensions/rethink_catalog.py')
+RETHINK_SCRIPT = pathlib.Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/rethink_catalog.py')
 DB_CANDIDATES = [pathlib.Path('/etc/pihole/gravity.db'), pathlib.Path('/var/lib/pihole/gravity.db')]
 SYSCTL_FILE = pathlib.Path('/etc/sysctl.d/98-iptm-hardening.conf')
 BACKUP_DIR = DATA / 'backups' / 'maintenance'
@@ -295,7 +330,7 @@ def compensate_pihole_import(db, records, pihole_cli, with_adlists):
     # Force a supported resync after compensating the exact inserted records.
     command=[pihole_cli,'-g'] if with_adlists else [pihole_cli,'reloaddns']
     try:
-        result=subprocess.run(command,capture_output=True,text=True,timeout=300 if with_adlists else 60)
+        result=iptm_capture(command, timeout=300 if with_adlists else 60, stdout_limit=1048576, stderr_limit=262144)
         synced=result.returncode==0
     except (OSError,subprocess.TimeoutExpired): synced=False
     return {'compensated':remaining==0,'dns_consistent':synced and remaining==0,
@@ -328,7 +363,7 @@ def import_pihole(args):
     # Gravity DB is SQLite. Validate schema before opening a write transaction.
     BACKUP_DIR.mkdir(parents=True,exist_ok=True,mode=0o700)
     lock_path=BACKUP_DIR/'pihole-import.lock'
-    lock_fd=os.open(lock_path,os.O_CREAT|os.O_RDWR,0o600)
+    lock_fd=os.open(lock_path,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
     try: fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError: os.close(lock_fd); raise ValueError('import Pi-hole già in corso')
     conn=sqlite3.connect(str(db),timeout=15,isolation_level=None)
@@ -388,10 +423,10 @@ def import_pihole(args):
     refresh_error=None
     try:
         if inserted['adlists']:
-            r=subprocess.run([pihole_cli,'-g'],capture_output=True,text=True,timeout=300)
+            r=iptm_capture([pihole_cli, '-g'], timeout=300, stdout_limit=4194304, stderr_limit=262144)
             if r.returncode: refresh_error='gravity-refresh-exit-'+str(r.returncode)
         elif any(inserted.values()):
-            r=subprocess.run([pihole_cli,'reloaddns'],capture_output=True,text=True,timeout=60)
+            r=iptm_capture([pihole_cli, 'reloaddns'], timeout=60, stdout_limit=4194304, stderr_limit=262144)
             if r.returncode: refresh_error='dns-reload-exit-'+str(r.returncode)
     except (OSError,subprocess.TimeoutExpired):
         refresh_error='service-refresh-unavailable'
@@ -450,29 +485,175 @@ def import_pihole_json(args):
 def catalog_cmd(_args):
     emit({'count':len(CATALOG),'lists':[{'id':i,'url':u,'category':c,'description':d,'default_selected':False} for i,u,c,d in CATALOG], 'regex_patterns':regex_catalog()}); return 0
 
-def canon_sysctl(key): return key.lstrip('-').replace('.', '/')
-def scan_sysctl():
-    roots=['/etc/sysctl.d','/run/sysctl.d','/usr/local/lib/sysctl.d','/usr/lib/sysctl.d','/lib/sysctl.d']
-    selected={}; files=[]
-    for root in roots:
-        for p in sorted(pathlib.Path(root).glob('*.conf')) if pathlib.Path(root).exists() else []:
-            if p.name not in selected: selected[p.name]=p
-            files.append(str(p))
-    effective=list(selected.values())
-    if pathlib.Path('/etc/sysctl.conf').is_file(): effective.append(pathlib.Path('/etc/sysctl.conf'))
-    entries=[]
-    for p in effective:
+def canon_sysctl(key):
+    key=key.lstrip('-')
+    # systemd-sysctl: first separator selects interpretation; a slash-first
+    # key may contain dots in an interface name (e.g. eth0.10).
+    dot=key.find('.');slash=key.find('/')
+    if dot>=0 and (slash<0 or dot<slash):return key.translate(str.maketrans('./','/.'))
+    return key
+
+def scan_sysctl(root=pathlib.Path('/')):
+    root=pathlib.Path(root);selected={};files=[];errors=[];masked=[]
+    for relative in ('etc/sysctl.d','run/sysctl.d','usr/local/lib/sysctl.d','usr/lib/sysctl.d','lib/sysctl.d'):
+        directory=root/relative
+        try:paths=sorted(directory.glob('*.conf'))
+        except OSError as e:errors.append({'file':str(directory),'error':str(e)});continue
+        for path in paths:
+            files.append(str(path));selected.setdefault(path.name,path)
+    effective=[selected[name] for name in sorted(selected)]
+    legacy=root/'etc/sysctl.conf'
+    if legacy.is_file():effective.append(legacy)
+    grouped={}; evidence={}
+    for path in effective:
         try:
-            for no,line in enumerate(p.read_text(errors='replace').splitlines(),1):
-                s=line.strip()
-                if not s or s.startswith(('#',';')): continue
-                m=re.match(r'^(-?)([A-Za-z0-9_./*-]+)\s*=\s*(.*?)\s*$',s)
-                if m: entries.append({'key':canon_sysctl(m.group(2)),'raw_key':m.group(2),'value':m.group(3),'file':str(p),'line':no,'ignore_errors':bool(m.group(1))})
-        except OSError: pass
-    grouped={}
-    for e in entries: grouped.setdefault(e['key'],[]).append(e)
-    conflicts=[{'key':k,'definitions':v,'winner':v[-1]} for k,v in grouped.items() if len(v)>1]
-    return {'files_scanned':files,'effective_files':[str(p) for p in effective],'keys':len(grouped),'duplicate_or_override_keys':len(conflicts),'conflicts':conflicts}
+            if path.is_symlink() and path.resolve()==pathlib.Path('/dev/null'):
+                masked.append(str(path));evidence[str(path)]='mask';continue
+            raw=path.read_bytes();evidence[str(path)]=hashlib.sha256(raw).hexdigest()
+            for no,line in enumerate(raw.decode('utf-8').splitlines(),1):
+                text=line.strip()
+                if not text or text.startswith(('#',';')):continue
+                match=re.fullmatch(r'(-?)([A-Za-z0-9_./*?\[\]-]+)\s*=\s*(.*?)\s*',text)
+                if not match:
+                    errors.append({'file':str(path),'error':'Direttiva non interpretata alla riga '+str(no)});continue
+                ignore,key,value=match.groups();canonical=canon_sysctl(key)
+                entry={'key':canonical,'raw_key':key,'value':value,'file':str(path),'line':no,'ignore_errors':bool(ignore)}
+                grouped.setdefault(canonical,[]).append(entry)
+        except (OSError,RuntimeError,UnicodeError) as exc:errors.append({'file':str(path),'error':str(exc)})
+    conflicts=[{'key':key,'definitions':items,'winner':items[-1]} for key,items in sorted(grouped.items()) if len(items)>1]
+    return {'files_scanned':files,'effective_files':[str(p) for p in effective],'masked_files':masked,'evidence':evidence,'errors':errors,'complete':not errors,'keys':len(grouped),'duplicate_or_override_keys':len(conflicts),'conflicts':conflicts,'ordering':'precedenza directory per nome, ordine lessicografico globale, sysctl.conf ultimo (procps); glob non espansi','ipv4_keys':sum(k.startswith('net/ipv4/') for k in grouped),'ipv6_keys':sum(k.startswith('net/ipv6/') for k in grouped)}
+
+# Persistent consolidation is deliberately separate from runtime hardening.
+# Only identical assignments in ordinary local files can be removed safely.
+# Different values, vendor files, glob exclusions, symlinks and order-sensitive
+# forwarding/IPv6 switches require explicit manual review.
+def consolidation_plan(root=pathlib.Path('/')):
+    root=pathlib.Path(root); audit=scan_sysctl(root); changes={}; skipped=[]
+    local=root/'etc/sysctl.d'; legacy=root/'etc/sysctl.conf'
+    # Digest the exact bytes parsed by the audit, not a later read.
+    evidence=dict(audit['evidence'])
+    def protected(path):
+        st=path.lstat()
+        return stat.S_ISREG(st.st_mode) and st.st_uid==0 and not st.st_mode&0o022 and st.st_nlink==1
+    # Any nontrivial glob/exclusion can change matching after removing explicit keys.
+    complex_rules=False
+    for name in audit['effective_files']:
+        path=pathlib.Path(name)
+        if str(path) in audit['masked_files']:continue
+        try:
+            for line in path.read_text().splitlines():
+                raw=line.strip()
+                if not raw or raw.startswith(('#',';')):continue
+                key=raw.split('=',1)[0].strip().lstrip('-')
+                if any(c in key for c in '*?[]') or '=' not in raw:complex_rules=True
+        except (OSError,UnicodeError):complex_rules=True
+    for group in audit['conflicts']:
+        defs=group['definitions']; key=group['key']; winner=defs[-1]
+        # No changing intermediate boot values or forwarding-induced defaults.
+        if (not audit['complete'] or complex_rules or len({(x['value'],x['ignore_errors']) for x in defs})!=1
+            or not any(x.fullmatch(key.replace('/','.')) for x in SYSCTL_ALLOW)
+            or key.endswith(('/ip_forward','/forwarding','/disable_ipv6'))):
+            skipped.append({'key':key,'reason':'precedenza complessa, valori differenti o chiave sensibile'});continue
+        paths=[pathlib.Path(x['file']) for x in defs]
+        try:
+            if any((q.parent!=local and q!=legacy) or not protected(q) for q in paths):
+                skipped.append({'key':key,'reason':'file non locale, link o non protetto'});continue
+            for x in defs[:-1]:changes.setdefault(x['file'],[]).append(x['line'])
+        except OSError:skipped.append({'key':key,'reason':'file non leggibile'})
+    edits=[]
+    for name,lines in sorted(changes.items()):
+        path=pathlib.Path(name); old=path.read_bytes(); text=old.decode('utf-8').splitlines(keepends=True)
+        if hashlib.sha256(old).hexdigest()!=evidence[name] or not protected(path):
+            raise ValueError('Sorgente modificata durante anteprima: '+name)
+        for n in sorted(set(lines)):text[n-1]='# IPTM duplicate: '+text[n-1]
+        new=''.join(text).encode(); st=path.stat()
+        edits.append({'file':str(path),'before':hashlib.sha256(old).hexdigest(),'after':hashlib.sha256(new).hexdigest(),
+                      'lines':sorted(set(lines)),'mode':stat.S_IMODE(st.st_mode),'gid':st.st_gid,'data':base64.b64encode(new).decode()})
+    result={'edits':edits,'skipped':skipped,'complete':audit['complete'],'runtime_changed':False,'evidence':evidence,'root':str(root)}
+    if result['complete']:verify_consolidation_sources(result,evidence)
+    result['sha256']=hashlib.sha256(json.dumps(result,sort_keys=True).encode()).hexdigest()
+    return result
+
+
+def consolidation_write(path,data,mode,gid):
+    iptm_transport().durable_replace(path,data,mode=mode,group=gid)
+
+
+def consolidation_verify_target(path, entry):
+    st=path.lstat()
+    if not stat.S_ISREG(st.st_mode) or st.st_uid!=0 or st.st_nlink!=1 or stat.S_IMODE(st.st_mode)!=entry['mode'] or st.st_gid!=entry['gid'] or st.st_mode&0o022:
+        raise ValueError('Metadati sysctl modificati o non protetti: '+str(path))
+
+def consolidation_restore(journal):
+    # Compare all files before writing any: never overwrite independent edits.
+    for entry in journal['files']:
+        path=pathlib.Path(entry['file']); consolidation_verify_target(path,entry); current=hashlib.sha256(path.read_bytes()).hexdigest()
+        if path.is_symlink() or current not in (entry['before'],entry['after']):
+            raise ValueError('File modificato esternamente: '+str(path))
+    for entry in reversed(journal['files']):
+        path=pathlib.Path(entry['file']);consolidation_verify_target(path,entry)
+        current=hashlib.sha256(path.read_bytes()).hexdigest()
+        if current not in (entry['before'],entry['after']):raise ValueError('Modifica concorrente: '+str(path))
+        if current==entry['after']:
+            consolidation_write(path,base64.b64decode(entry['original'],validate=True),entry['mode'],entry['gid'])
+        if hashlib.sha256(path.read_bytes()).hexdigest()!=entry['before']:raise RuntimeError('Ripristino non verificato: '+str(path))
+
+
+def verify_consolidation_sources(plan, expected):
+    audit=scan_sysctl(pathlib.Path(plan['root']))
+    if not audit['complete'] or set(audit['effective_files'])!=set(expected):
+        raise ValueError('Elenco sorgenti sysctl modificato')
+    for name,digest in expected.items():
+        actual=audit['evidence'].get(name)
+        if actual!=digest:raise ValueError('Sorgente sysctl modificata: '+name)
+
+
+def consolidation_apply(plan, state):
+    if not plan['complete'] or not plan['edits']:raise ValueError('Nessuna modifica consolidabile')
+    if state.exists() or state.is_symlink():raise ValueError('Backup precedente presente: ripristinare o archiviare manualmente')
+    expected=dict(plan['evidence']);verify_consolidation_sources(plan,expected)
+    records=[]
+    for edit in plan['edits']:
+        path=pathlib.Path(edit['file']);consolidation_verify_target(path,edit);old=path.read_bytes()
+        if path.is_symlink() or hashlib.sha256(old).hexdigest()!=edit['before']:raise ValueError('Anteprima scaduta: '+str(path))
+        records.append({**edit,'original':base64.b64encode(old).decode()})
+    journal={'files':records,'created':time.time()}
+    consolidation_write(state,json.dumps(journal).encode(),0o600,0)
+    try:
+        for edit in records:
+            verify_consolidation_sources(plan,expected)
+            path=pathlib.Path(edit['file']);consolidation_verify_target(path,edit)
+            if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest()!=edit['before']:raise ValueError('Modifica concorrente: '+str(path))
+            consolidation_write(path,base64.b64decode(edit['data'],validate=True),edit['mode'],edit['gid'])
+            if hashlib.sha256(path.read_bytes()).hexdigest()!=edit['after']:raise RuntimeError('Scrittura non verificata')
+            expected[edit['file']]=edit['after']
+        verify_consolidation_sources(plan,expected)
+    except BaseException:
+        consolidation_restore(journal)
+        raise
+    return len(records)
+
+
+def sysctl_consolidation(args):
+    if args.cmd=='sysctl-consolidate-preview':
+        plan=consolidation_plan()
+        emit({'ok':plan['complete'],'sha256':plan['sha256'],'edits':[{k:v for k,v in e.items() if k!='data'} for e in plan['edits']],
+              'skipped':plan['skipped'],'runtime_changed':False});return 0 if plan['complete'] else 1
+    root_required()
+    # Same lock as hardening; journal is root-owned outside web data.
+    state=pathlib.Path('/var/lib/iptm-sysctl-consolidation.json')
+    gate=iptm_transport().transaction_gate(domain='/run/lock/iptm-sysctl.lock',recovery=args.cmd=='sysctl-consolidate-rollback')
+    gate.__enter__()
+    try:
+        if args.cmd=='sysctl-consolidate-rollback':
+            st=state.lstat()
+            if not stat.S_ISREG(st.st_mode) or st.st_uid or st.st_mode&0o077:raise ValueError('Journal non protetto')
+            consolidation_restore(json.loads(state.read_text()));state.unlink();emit({'ok':True,'runtime_changed':False});return 0
+        plan=consolidation_plan()
+        if args.sha256!=plan['sha256']:raise ValueError('Anteprima scaduta: rigenerare il piano')
+        count=consolidation_apply(plan,state)
+        emit({'ok':True,'files':count,'backup':str(state),'runtime_changed':False});return 0
+    finally:gate.__exit__(None,None,None)
 
 def sysctl_audit(_args): emit({'ok':True,**scan_sysctl()}); return 0
 
@@ -486,89 +667,110 @@ def validate_sysctl(lines):
         if len(val)>128 or any(c in val for c in '\n\r\x00'): raise ValueError(f'valore non valido per {key}')
         if key.endswith(('tcp_rmem','tcp_wmem')):
             nums=val.split()
-            if len(nums)!=3 or not all(x.isdigit() for x in nums): raise ValueError(f'tripletta non valida: {key}')
+            if len(nums)!=3 or not all(x.isascii() and x.isdigit() for x in nums): raise ValueError(f'tripletta non valida: {key}')
+            lo,mid,hi=map(int,nums)
+            if not 0<=lo<=mid<=hi<=2147483647:raise ValueError(f'tripletta fuori intervallo: {key}')
+            val=f'{lo} {mid} {hi}'
         elif not re.fullmatch(r'[A-Za-z0-9_.-]+',val): raise ValueError(f'valore non valido: {key}')
         out.append((key,val))
     keys=[k for k,_ in out]
     if len(keys)!=len(set(keys)): raise ValueError('chiavi duplicate nel payload')
     return out
 
+def sysctl_read(key):
+    r=iptm_capture(['sysctl', '-n', key], timeout=10, stdout_limit=1048576, stderr_limit=262144)
+    if r.returncode: raise RuntimeError(f'impossibile leggere {key}: {(r.stderr or r.stdout).strip()}')
+    return ' '.join(r.stdout.split())
+
+
+def sysctl_write(key,value):
+    r=iptm_capture(['sysctl', '-q', '-w', f'{key}={value}'], timeout=10, stdout_limit=1048576, stderr_limit=262144)
+    if r.returncode: raise RuntimeError(f'{key}: {(r.stderr or r.stdout).strip()}')
+
+
+def sysctl_transaction(pairs, read, write, commit):
+    """Snapshot all keys before writes; verify each write and each rollback.
+
+    Callers serialize access and supply atomic persistent commit. A failing
+    write is also compensated, since it might have changed the kernel.
+    """
+    old={k:read(k) for k,_ in pairs}; attempted=[]
+    try:
+        for k,v in pairs:
+            attempted.append(k); write(k,v)
+            if ' '.join(read(k).split())!=' '.join(v.split()):
+                raise RuntimeError('Valore runtime diverso da quello richiesto: '+k)
+        for k,v in pairs:
+            if ' '.join(read(k).split())!=' '.join(v.split()):raise RuntimeError('Valore runtime cambiato durante la transazione: '+k)
+        commit()
+    except BaseException as exc:
+        issues=[]
+        for k in reversed(attempted):
+            try:
+                write(k,old[k])
+                if ' '.join(read(k).split())!=' '.join(old[k].split()):raise RuntimeError('readback')
+            except Exception as e:issues.append(k+': '+str(e))
+        if issues:raise RuntimeError(str(exc)+'; RIPRISTINO RUNTIME INCOMPLETO: '+'; '.join(issues)) from exc
+        raise
+
+
+def sysctl_merge(previous, updates, replace=False):
+    if replace:return list(updates)
+    # Preserve untouched managed settings, including unavailable kernel keys.
+    existing=validate_sysctl([line.strip() for line in previous.splitlines()
+                              if line.strip() and not line.lstrip().startswith(('#',';'))])
+    merged=dict(existing);merged.update(updates)
+    return list(merged.items())
+
+
+def sysctl_commit_file(path, payload):
+    if payload is not None:
+        iptm_transport().durable_replace(path,payload)
+        return
+    iptm_transport().durable_unlink(path)
+
+
 def sysctl_apply(args):
-    lines=parse_lines(args.file)
-    pairs=validate_sysctl(lines)
-    if not pairs:
-        emit({'ok':False,'error':'Nessuna assegnazione sysctl fornita. Inserisci almeno una riga nel formato chiave = valore; il testo di esempio non viene applicato.','mode':'apply' if args.apply else 'dry-run'})
-        return 2
-    # The web UI is often used on kernels without selected optional modules,
-    # or with IPv6 entirely disabled. Report EACH missing key before writing.
+    pairs=validate_sysctl(parse_lines(args.file));replace=getattr(args,'replace',False)
+    if not pairs and not replace:
+        emit({'ok':False,'error':'Inserisci almeno una assegnazione sysctl valida.'});return 2
+    if not args.apply and replace:raise ValueError('Sostituzione richiede --apply')
     missing=[k for k,_ in pairs if not (pathlib.Path('/proc/sys')/k.replace('.', '/')).exists()]
     available=[(k,v) for k,v in pairs if k not in missing]
     if not args.apply:
-        emit({'ok':bool(available),'mode':'dry-run','target':str(SYSCTL_FILE),
-              'keys':available,'skipped_unsupported':missing,
-              'error':('Nessuna delle chiavi richieste è disponibile nel kernel: '+', '.join(missing)) if not available else None,
-              'warning':'Nessuna modifica eseguita. Le chiavi non disponibili non saranno applicate.'})
+        emit({'ok':bool(available),'mode':'dry-run','target':str(SYSCTL_FILE),'keys':available,
+              'skipped_unsupported':missing,'error':None if available else 'Nessuna chiave disponibile nel kernel',
+              'warning':'Nessuna modifica. Le altre impostazioni IPTM restano invariate.'})
         return 0 if available else 2
-    if not available:
-        emit({'ok':False,'error':'Nessuna chiave sysctl applicabile sul kernel corrente: '+', '.join(missing)+'. Nessun file o valore runtime modificato.',
-              'skipped_unsupported':missing})
-        return 2
-    root_required(); SYSCTL_FILE.parent.mkdir(parents=True,exist_ok=True)
-    lock_fd=os.open('/run/lock/iptm-sysctl-maintenance.lock',os.O_CREAT|os.O_RDWR,0o600)
-    try: fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    except BlockingIOError: os.close(lock_fd); raise ValueError('operazione sysctl già in corso')
-    old_runtime={}; skipped=[]
-    for k,_ in pairs:
-        proc_path=pathlib.Path('/proc/sys')/k.replace('.', '/')
-        if not proc_path.exists():
-            skipped.append(k); continue
-        r=subprocess.run(['sysctl','-n',k],capture_output=True,text=True)
-        if r.returncode: raise ValueError(f'impossibile leggere il valore runtime di {k}: {(r.stderr or r.stdout).strip()}')
-        old_runtime[k]=r.stdout.strip()
-    pairs=[(k,v) for k,v in pairs if k in old_runtime]
-    if not pairs:
-        emit({'ok':False,'error':'Nessuna chiave sysctl applicabile sul kernel corrente: '+', '.join(skipped)+'. Nessun file o valore runtime modificato.',
-              'skipped_unsupported':skipped})
-        return 2
-    # Il profilo BBR può richiedere il caricamento del modulo prima del set.
-    if any(k=='net.ipv4.tcp_congestion_control' and v=='bbr' for k,v in pairs):
-        subprocess.run(['modprobe','-q','tcp_bbr'],capture_output=True,text=True)
-    backup=backup_file(SYSCTL_FILE)
-    fd,tmp=tempfile.mkstemp(prefix='.iptm-sysctl-',dir=str(SYSCTL_FILE.parent))
+    if not available and pairs:
+        emit({'ok':False,'error':'Nessuna chiave applicabile sul kernel corrente.','skipped_unsupported':missing});return 2
+    root_required();SYSCTL_FILE.parent.mkdir(parents=True,exist_ok=True)
+    lockpath='/run/lock/iptm-sysctl.lock'
+    gate=iptm_transport().transaction_gate(domain=lockpath)
+    gate.__enter__()
+    backup=None
     try:
-        with os.fdopen(fd,'w') as f:
-            f.write('# Managed by IPTM maintenance engine. Do not edit while IPTM is applying changes.\n')
-            for k,v in pairs: f.write(f'{k} = {v}\n')
-            f.flush(); os.fsync(f.fileno())
-        os.chmod(tmp,0o600); os.chown(tmp,0,0)
-        applied=[]; committed=False
-        try:
-            for k,v in pairs:
-                r=subprocess.run(['sysctl','-q','-w',f'{k}={v}'],capture_output=True,text=True,timeout=10)
-                if r.returncode: raise RuntimeError(f'{k}: {(r.stderr or r.stdout).strip()}')
-                applied.append(k)
-            os.replace(tmp,SYSCTL_FILE); committed=True
-            dfd=os.open(str(SYSCTL_FILE.parent),os.O_DIRECTORY); os.fsync(dfd); os.close(dfd)
-        except Exception:
-            if committed:
-                if backup and backup.exists():
-                    restore_tmp=str(SYSCTL_FILE)+'.restore.'+str(os.getpid()); shutil.copy2(backup,restore_tmp); os.replace(restore_tmp,SYSCTL_FILE)
-                else:
-                    try: SYSCTL_FILE.unlink()
-                    except FileNotFoundError: pass
-            for k in reversed(applied):
-                old=old_runtime.get(k)
-                if old is not None: subprocess.run(['sysctl','-q','-w',f'{k}={old}'],capture_output=True,timeout=10)
-            raise
-        rotate_backup_files(BACKUP_DIR, re.escape(SYSCTL_FILE.name)+r'\.\d{8}-\d{6}\.\d+\.bak')
-        emit({'ok':True,'applied':len(pairs),'skipped_unsupported':skipped,'file':str(SYSCTL_FILE),'backup':str(backup) if backup else None}); return 0
+        if SYSCTL_FILE.is_symlink() or (SYSCTL_FILE.exists() and (not SYSCTL_FILE.is_file() or SYSCTL_FILE.stat().st_uid!=0 or SYSCTL_FILE.stat().st_mode&0o022)):
+            raise ValueError('File sysctl non protetto')
+        old=SYSCTL_FILE.read_bytes() if SYSCTL_FILE.exists() else None
+        final=sysctl_merge(old.decode() if old is not None else '',available,replace)
+        payload=('# Managed by IPTM maintenance engine.\n'+''.join(f'{k} = {v}\n' for k,v in final)).encode() if final else None
+        backup=backup_file(SYSCTL_FILE)
+        if any(k=='net.ipv4.tcp_congestion_control' and v=='bbr' for k,v in available):
+            iptm_capture(['modprobe', '-q', 'tcp_bbr'], timeout=10, stdout_limit=1048576, stderr_limit=262144)
+        def commit():
+            try:sysctl_commit_file(SYSCTL_FILE,payload)
+            except Exception as exc:
+                try:sysctl_commit_file(SYSCTL_FILE,old)
+                except Exception as rollback:raise RuntimeError(str(exc)+'; RIPRISTINO FILE INCOMPLETO: '+str(rollback)) from exc
+                raise
+        sysctl_transaction(available,sysctl_read,sysctl_write,commit)
+        try:rotate_backup_files(BACKUP_DIR,re.escape(SYSCTL_FILE.name)+r'\.\d{8}-\d{6}\.\d+\.bak')
+        except OSError:pass # retention cannot invalidate a completed transaction
+        emit({'ok':True,'applied':len(available),'persisted':len(final),'skipped_unsupported':missing,'file':str(SYSCTL_FILE),'backup':str(backup) if backup else None});return 0
     except Exception as e:
-        try: os.unlink(tmp)
-        except OSError: pass
-        emit({'ok':False,'error':str(e),'backup':str(backup) if backup else None}); return 1
-    finally:
-        try: fcntl.flock(lock_fd,fcntl.LOCK_UN); os.close(lock_fd)
-        except OSError: pass
+        emit({'ok':False,'error':str(e),'backup':str(backup) if backup else None});return 1
+    finally:gate.__exit__(None,None,None)
 
 def sysctl_verify(_args):
     data=[]
@@ -579,7 +781,7 @@ def sysctl_verify(_args):
             if not s or s.startswith('#'): continue
             m=re.match(r'^([A-Za-z0-9_.]+)\s*=\s*(.*?)\s*$',s)
             if m:
-                k,v=m.groups(); r=subprocess.run(['sysctl','-n',k],capture_output=True,text=True)
+                k,v=m.groups(); r=iptm_capture(['sysctl', '-n', k], timeout=10, stdout_limit=1048576, stderr_limit=262144)
                 actual=r.stdout.strip() if r.returncode==0 else None
                 data.append({'key':k,'configured':v,'runtime':actual,'match':actual==v})
     emit({'ok':all(x['match'] for x in data),'file':str(SYSCTL_FILE),'values':data}); return 0 if all(x['match'] for x in data) else 1
@@ -773,7 +975,7 @@ def pihole_api_json(_args):
     if not password:
         # Password fetched only by the root worker: never returned to the web session.
         import importlib.util
-        credential_script=pathlib.Path('/usr/local/lib/iptables-manager/web/releases/5.30.23/extensions/pihole_credentials.py')
+        credential_script=pathlib.Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/pihole_credentials.py')
         if credential_script.is_symlink() or not credential_script.is_file():
             raise PiholeApiError('Archivio credenziali IPTM non installato')
         st=credential_script.stat()
@@ -1081,8 +1283,7 @@ def preflight_checks(root: pathlib.Path = pathlib.Path('/'), *, probe_commands: 
         binary = shutil.which(name) if probe_commands else None
         if not binary: return None
         try:
-            return subprocess.run([binary, *args], capture_output=True,
-                                  text=True, timeout=seconds, check=False)
+            return iptm_capture([binary, *args], timeout=seconds, stdout_limit=1048576, stderr_limit=262144)
         except (OSError, subprocess.TimeoutExpired):
             return None
 
@@ -1245,10 +1446,7 @@ def preflight_checks(root: pathlib.Path = pathlib.Path('/'), *, probe_commands: 
             tool = 'iptables-restore' if filename.endswith('v4') else 'ip6tables-restore'
             if f.exists() and f.is_file() and shutil.which(tool):
                 try:
-                    with f.open('rb') as inp:
-                        r = subprocess.run([tool, '--test'], stdin=inp,
-                                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                           timeout=4, check=False)
+                    r = restore_syntax_probe(tool, f)
                     ok = (r.returncode == 0)
                     add('Sintassi '+filename, 'ok' if ok else 'warn',
                         'Test restore superato' if ok else 'Test fallito: confronta backend e stato IPv6; nessuna regola applicata')
@@ -1311,8 +1509,11 @@ def main():
     sub.add_parser('pihole-api-json')
     pi=sub.add_parser('pihole-import'); pi.add_argument('--db'); pi.add_argument('--whitelist'); pi.add_argument('--allow-regex'); pi.add_argument('--deny-regex'); pi.add_argument('--adlists',action='append'); pi.add_argument('--apply',action='store_true')
     sa=sub.add_parser('sysctl-audit')
-    sy=sub.add_parser('sysctl-apply'); sy.add_argument('--file',required=True); sy.add_argument('--apply',action='store_true')
+    sy=sub.add_parser('sysctl-apply'); sy.add_argument('--file',required=True); sy.add_argument('--apply',action='store_true'); sy.add_argument('--replace',action='store_true')
     sub.add_parser('sysctl-verify')
+    sub.add_parser('sysctl-consolidate-preview')
+    sc=sub.add_parser('sysctl-consolidate-apply');sc.add_argument('--sha256',required=True)
+    sub.add_parser('sysctl-consolidate-rollback')
     sub.add_parser('preflight')
     ur=sub.add_parser('update-recovery'); ur.add_argument('operation',choices=['stage','recover','commit']); ur.add_argument('--state',required=True); ur.add_argument('--web')
     a=ap.parse_args()
@@ -1328,6 +1529,7 @@ def main():
         if a.cmd=='sysctl-audit': return sysctl_audit(a)
         if a.cmd=='sysctl-apply': return sysctl_apply(a)
         if a.cmd=='sysctl-verify': return sysctl_verify(a)
+        if a.cmd.startswith('sysctl-consolidate-'): return sysctl_consolidation(a)
         if a.cmd=='preflight': return preflight_cli(a)
         if a.cmd=='update-recovery': return update_recovery_cli(a)
     except Exception as e:

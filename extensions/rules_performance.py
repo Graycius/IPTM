@@ -25,14 +25,16 @@ def analyze(raw: str) -> dict:
     stats=Counter()
     chain_hits=Counter()
     filter_table=False
+    table=None
     checks=[]
     seen=set()
     duplicates=[]
     rules=[]
     for lineno,line in enumerate(lines,1):
         t=line.strip()
-        if t.startswith('*'):filter_table=t=='*filter'
-        if t=='COMMIT':filter_table=False
+        if t.startswith('*'):
+            table=t[1:];filter_table=table=='filter'
+        if t=='COMMIT':filter_table=False;table=None
         if not t.startswith('-A '):continue
         parts=t.split()
         if len(parts)<4:continue
@@ -40,8 +42,9 @@ def analyze(raw: str) -> dict:
         stats['rules']+=1
         if len(rules)<15000:rules.append((lineno,chain,t))
         chain_hits[chain]+=1
-        if t in seen and len(duplicates)<20:duplicates.append(lineno)
-        seen.add(t)
+        key=(table,t)
+        if key in seen and len(duplicates)<20:duplicates.append(lineno)
+        seen.add(key)
         if '-j LOG' in t or '-j NFLOG' in t or '-j ULOG' in t:stats['logging']+=1
         if '--match-set' in t:stats['ipset_lookups']+=1
         if '-m hashlimit' in t:stats['hashlimit']+=1

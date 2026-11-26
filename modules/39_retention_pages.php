@@ -1,54 +1,43 @@
 <?php
-/** IPTM retention overview: no filesystem access from PHP, only the typed root helper. */
+/** Retention workspace; only fixed typed helper operations, never direct disk access. */
+function iptm_retention_fields(): array {
+    return ['backup_days'=>['Backup automatici: giorni',7,730], 'backup_keep'=>['Backup protetti per categoria',3,100], 'report_days'=>['Report diagnostici/Lynis: giorni',7,365], 'report_keep'=>['Report recenti protetti',3,100], 'stats_days'=>['Statistiche: giorni',14,365], 'max_backup_mib'=>['Budget backup automatici (MiB)',128,65536], 'log_copies'=>['Archivi log IPTM compressi',3,90]];
+}
+function iptm_retention_value(mixed $v): int|false {
+    return is_int($v)||(is_string($v)&&preg_match('/^[0-9]{1,8}$/D',$v))?filter_var($v,FILTER_VALIDATE_INT):false;
+}
 function pg_retention(): void {
-    $admin=(($_SESSION['role']??'')==='admin');
-    [$rc,$raw,$err]=priv('retention',null,['status']);
-    $status=$rc===0?json_decode($raw,true):null;
-    if (!is_array($status) || empty($status['ok'])) {
-        echo '<div class="msg err">Stato rotazione non disponibile: '.h(herr($raw.$err)).'</div>';return;
+    $admin=($_SESSION['role']??'')==='admin';$status=iptm_view_probe('retention',['status']);
+    iptm_view_start('Ultima rotazione','Timer giornaliero iptm-retention.timer. Non rimuove backup manuali, configurazioni attive, recuperi pendenti o log di altri programmi.');
+    if(empty($status['ok'])){iptm_view_error((string)$status['error']);iptm_view_end();return;}
+    $last=(array)($status['last_run']??[]);$rows=[];
+    foreach(['time'=>'Ultima esecuzione UTC','deleted'=>'Elementi eliminati','reclaimed_bytes'=>'Byte recuperati','logs'=>'Rotazione log IPTM'] as $k=>$label)$rows[]=[$label,$last[$k]??'Non ancora eseguita'];
+    iptm_view_table(['Indicatore','Valore'],$rows,'Risultati dell’ultima esecuzione');
+    foreach((array)($last['warnings']??[]) as $msg)echo '<p class="msg warn">'.iptm_view_text($msg).'</p>';
+    foreach((array)($last['errors']??[]) as $msg)echo '<p class="msg err">'.iptm_view_text($msg).'</p>';
+    iptm_view_end();
+    iptm_view_start('Politica di conservazione','La rotazione protegge sempre i backup più recenti. In caso di quota superata considera solo backup con almeno 24 ore di età.');
+    $policy=(array)($status['policy']??[]);$valid=true;
+    foreach(iptm_retention_fields() as $k=>[$label,$min,$max]){ $n=iptm_retention_value($policy[$k]??null); if($n===false||$n<$min||$n>$max)$valid=false; }
+    if(!$valid)echo '<p class="msg warn">Politica incompleta o non valida: salvataggio disabilitato per non sostituire impostazioni sconosciute.</p>';
+    if($admin&&$valid)iptm_view_form('retention','retention_save');
+    foreach(iptm_retention_fields() as $k=>[$label,$min,$max]){
+        $id='iptm-ret-'.$k;
+        echo '<div class="iptm-workspace-field"><label for="'.h($id).'">'.iptm_view_text($label).'</label><input id="'.h($id).'" type="number" name="'.h($k).'" value="'.h(iptm_retention_value($policy[$k]??null)===false?'':$policy[$k]).'" min="'.$min.'" max="'.$max.'" required'.($admin&&$valid?'':' disabled').'></div>';
     }
-    $pol=(array)($status['policy']??[]);
-    $last=(array)($status['last_run']??[]);
-    echo '<div class="hero"><h2>Rotazione backup e log</h2><p>Conservazione automatica IPTM. Non cancella backup manuali, configurazioni attive, ripristini pendenti o i log di altri programmi.</p></div>';
-    echo '<div class="card"><h3>Stato e ultima esecuzione</h3>';
-    echo '<p>Timer: <code>iptm-retention.timer</code> · Frequenza: giornaliera (systemd).</p>';
-    echo '<table><tr><th>Indicatore</th><th>Valore</th></tr>';
-    foreach (['time'=>'Ultima esecuzione UTC','deleted'=>'Elementi eliminati','reclaimed_bytes'=>'Byte recuperati','logs'=>'Rotazione log IPTM'] as $key=>$label) {
-        echo '<tr><td>'.h($label).'</td><td>'.h($last[$key]??'Non ancora eseguita').'</td></tr>';
+    if($admin&&$valid)iptm_view_submit('Salva politica');
+    iptm_view_end();
+    iptm_view_start('Anteprima e manutenzione','Calcola gli elementi eliminabili senza cancellarli. La rotazione reale opera in background con la politica salvata, non con un elenco fissato dall’anteprima.');
+    echo iptm_view_link('retention','Calcola anteprima',['preview'=>'1']);
+    if(($_GET['preview']??'')==='1'){
+        $view=iptm_view_probe('retention',['preview']);
+        if(empty($view['ok']))iptm_view_error((string)$view['error']);else{
+            echo '<p>'.(int)($view['total']??0).' elementi · '.number_format((int)($view['reclaim_bytes']??0)/1048576,2,',','.').' MiB recuperabili.</p>';
+            $rows=[];foreach((array)($view['groups']??[]) as $group=>$row)if(is_array($row))$rows[]=[$group,$row['items']??null,number_format((int)($row['bytes']??0)/1048576,2,',','.')];
+            iptm_view_table(['Categoria','Elementi','MiB'],$rows,'Elementi eliminabili');
+            foreach((array)($view['warnings']??[]) as $w)echo '<p class="msg warn">'.iptm_view_text($w).'</p>';
+        }
     }
-    echo '</table>';
-    foreach ((array)($last['warnings']??[]) as $msg) echo '<p class="mut">⚠ '.h($msg).'</p>';
-    foreach ((array)($last['errors']??[]) as $msg) echo '<p class="msg err">'.h($msg).'</p>';
-    echo '</div>';
-    $fields=[
-        'backup_days'=>['Backup automatici: giorni',7,730],
-        'backup_keep'=>['Backup recenti da proteggere per categoria',3,100],
-        'report_days'=>['Report diagnostici/Lynis: giorni',7,365],
-        'report_keep'=>['Report recenti per categoria',3,100],
-        'stats_days'=>['Statistiche: giorni (minimo 14)',14,365],
-        'max_backup_mib'=>['Budget backup automatici (MiB)',128,65536],
-        'log_copies'=>['Archivi log IPTM compressi',3,90]
-    ];
-    echo '<div class="card"><h3>Politica di conservazione</h3><p class="mut">Un backup viene eliminato solo quando supera l’età indicata e non rientra nei più recenti protetti. In caso di quota superata vengono considerati solo backup vecchi di almeno 24 ore, mai i più recenti. Le impostazioni sono applicate dal processo root.</p>';
-    if ($admin) echo '<form method="post" class="acc">'.fh('p=retention').'<input type=hidden name=action value=retention_save>';
-    foreach ($fields as $key=>[$label,$low,$high]) {
-        echo '<label class="fl"><span>'.h($label).'</span><input type=number '.($admin?'':'disabled').' name="'.h($key).'" value="'.(int)($pol[$key]??$low).'" min="'.$low.'" max="'.$high.'" required></label>';
-    }
-    if ($admin) echo '<p><button class=g>Salva politica</button></p></form>';
-    echo '</div>';
-    echo '<div class="card"><h3>Anteprima e manutenzione</h3><p>Anteprima di sola lettura. La rotazione dei log applicativi usa logrotate; non modifica journald, Pi-hole, CrowdSec o Suricata.</p>';
-    echo '<a class="btn" href="?p=retention&amp;preview=1">Calcola elementi eliminabili</a>';
-    if (($_GET['preview']??'')==='1') {
-        [$prc,$pout,$perr]=priv('retention',null,['preview']);
-        $view=$prc===0?json_decode($pout,true):null;
-        if (is_array($view)&&!empty($view['ok'])) {
-            echo '<p><b>'.(int)$view['total'].'</b> elementi eliminabili · '.number_format(((int)($view['reclaim_bytes']??0))/1048576,2,',','.').' MiB recuperabili.</p>';
-            echo '<table><tr><th>Categoria</th><th>Elementi</th><th>MiB</th></tr>';
-            foreach ((array)($view['groups']??[]) as $group=>$row) echo '<tr><td>'.h($group).'</td><td>'.(int)$row['items'].'</td><td>'.number_format(((int)$row['bytes'])/1048576,2,',','.').'</td></tr>';
-            echo '</table>';
-            foreach ((array)($view['warnings']??[]) as $warning) echo '<p class="mut">⚠ '.h($warning).'</p>';
-        } else echo '<p class="msg err">Anteprima non disponibile: '.h(herr($pout.$perr)).'</p>';
-    }
-    if ($admin) echo '<form method=post>'.fh('p=retention').'<input type=hidden name=action value=retention_run><p><button>Esegui rotazione in background</button></p></form>';
-    echo '<p class=mut>Backup manuali, lock, journal di recupero, policy e configurazioni correnti non vengono eliminati. Il sistema mantiene i log nativi dei servizi sotto le rispettive politiche.</p></div>';
+    if($admin){iptm_view_form('retention','retention_run');iptm_view_submit('Esegui rotazione in background','s');}
+    iptm_view_end();
 }

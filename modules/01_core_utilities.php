@@ -1,6 +1,6 @@
 <?php
 // ===================== UTILITA' =====================
-function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 
 /** Prefer Argon2id when available; fall back to PASSWORD_DEFAULT. */
 function iptm_password_hash(string $pw): string {
@@ -298,8 +298,10 @@ function ip_ok(): bool {
 function run(array $cmd, ?string $in = null, float $timeout = 30.0, int $maxOutput = 8388608): array {
     // Bounded, multiplexed execution; stdin must not be written synchronously
     // before the timeout starts (large Pi-hole imports used to freeze workers).
-    if (!$cmd || $timeout <= 0 || $maxOutput < 1024) return [2, '', 'parametri non validi'];
-    $startedAt = microtime(true);
+    if (!$cmd || !array_is_list($cmd) || !is_finite($timeout) || $timeout <= 0 || $maxOutput < 1024) return [2, '', 'parametri non validi'];
+    foreach ($cmd as $arg) if (!is_string($arg) || str_contains($arg, "\0")) return [2, '', 'argomento non valido'];
+    if ($cmd[0] === '') return [2, '', 'comando non valido'];
+    $startedAt = hrtime(true) / 1e9;
     $proc = @proc_open($cmd, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
     if (!is_resource($proc)) return [127, '', 'proc_open non disponibile'];
     foreach ($pipes as $pipe) stream_set_blocking($pipe, false);
@@ -307,9 +309,9 @@ function run(array $cmd, ?string $in = null, float $timeout = 30.0, int $maxOutp
     $stdinOpen = true; $stdoutOpen = true; $stderrOpen = true;
     if ($total === 0) { fclose($pipes[0]); $stdinOpen = false; }
     $out = ''; $err = ''; $truncated = false; $stdinOk = true; $timedOut = false;
-    $exitCode = null; $deadline = microtime(true) + $timeout;
+    $exitCode = null; $deadline = $startedAt + $timeout;
     while (true) {
-        if (microtime(true) >= $deadline) { $timedOut = true; break; }
+        if (hrtime(true) / 1e9 >= $deadline) { $timedOut = true; break; }
         $st = proc_get_status($proc);
         if (!$st['running'] && $exitCode === null && (int)$st['exitcode'] >= 0) $exitCode = (int)$st['exitcode'];
         if (!$st['running'] && $stdinOpen) { fclose($pipes[0]); $stdinOpen = false; $stdinOk = ($offset === $total); }
@@ -336,7 +338,7 @@ function run(array $cmd, ?string $in = null, float $timeout = 30.0, int $maxOutp
             if (feof($pipe)) { fclose($pipe); if ($isOut) $stdoutOpen = false; else $stderrOpen = false; }
         }
     }
-    if ($timedOut) {
+    if ($timedOut || !$stdinOk) {
         @proc_terminate($proc, 15); usleep(150000);
         $st = proc_get_status($proc); if ($st['running']) @proc_terminate($proc, 9);
     }
@@ -345,7 +347,7 @@ function run(array $cmd, ?string $in = null, float $timeout = 30.0, int $maxOutp
     if ($stderrOpen && is_resource($pipes[2])) fclose($pipes[2]);
     $closed = proc_close($proc);
     $rc = $timedOut ? 124 : ($exitCode !== null ? $exitCode : $closed);
-    if (!$stdinOk) { $rc = $rc === 0 ? 1 : $rc; $err .= "\nstdin incompleto"; }
+    if (!$stdinOk) { $rc = $rc === 0 || $rc < 0 ? 1 : $rc; $err .= "\nstdin incompleto"; }
     if ($timedOut) $err .= "\ntimeout (" . $timeout . "s)";
     if ($truncated) {
         $err .= "\noutput troncato";
@@ -356,28 +358,28 @@ function run(array $cmd, ?string $in = null, float $timeout = 30.0, int $maxOutp
         // sudo -n HELPER <operation> <subcommand>: the operation is argv[3], not the helper path.
         $operation = isset($cmd[3]) && is_string($cmd[3]) ? $cmd[3] : 'process';
         $subcommand = isset($cmd[4]) && is_string($cmd[4]) ? $cmd[4] : '';
-        if (!preg_match('/^[a-z0-9_-]{1,36}$/i', $subcommand)) $subcommand='';
+        if (!preg_match('/^[a-z0-9_-]{1,36}$/iD', $subcommand)) $subcommand='';
         error_log('IPTM request=' . iptm_request_id() . ' operation=' . preg_replace('/[^a-z0-9_-]/i', '', $operation)
             . ' exit=' . $rc . ' timed_out=' . ($timedOut ? 'yes' : 'no')
             . ' output_truncated=' . ($truncated ? 'yes' : 'no')
             . ' subcommand=' . $subcommand
-            . ' elapsed_ms=' . (int)round((microtime(true) - $startedAt) * 1000)); 
+            . ' elapsed_ms=' . (int)round((hrtime(true) / 1e9 - $startedAt) * 1000)); 
     }
     return [$rc, $out, trim($err)];
 }
 const KC_RO = ['release-list', 'compat6-readiness', 'svc-state', 'cat', 'cat6', 'test', 'test6', 'rollback-prepare', 'rules-performance', 'v6cap', 'v6diag', 'save', 'save6', 'savec', 'journal', 'conf', 'ping', 'notice-status', 'ipset-info', 'ipset-test', 'ipset-hits', 'cs-status', 'conns', 'leases', 'suricata', 'selftest', 'backend', 'lists-status', 'sqm-status', 'sqm-v2-status', 'sqm-v3-status', 'security-integrations', 'suricata-eve-summary', 'sqm-probe', 'sqm-calibrate-status', 'sqm-safe-status', 'sqm-safe-preflight', 'version', 'post-suggest', 'compat', 'tool-status', 'tool-log', 'tool-logs', 'f2b-status', 'cs-decisions', 'vnstat-json', 'watch-status', 'capture', 'wg-status', 'wg-peer-conf', 'wg-peer-qr', 'cs-info', 'cs-collections', 'cs-log-discover', 'cs-scenarios', 'cs-metrics', 'cs-alerts', 'cs-bouncers', 'cs-allowlist', 'cs-acquis', 'su-info', 'su-alerts', 'su-stats', 'su-sources', 'su-config', 'su-test', 'su-rules-list', 'su-local-get', 'cs-parsers', 'cs-bouncer-get', 'cs-bouncer-status', 'cs-simulation', 'rules-check', 'ti-check', 'ti-summary', 'sec-audit', 'sysctl-audit', 'dns-status', 'dns-test'];
 function kc(string $k, callable $f) { return $GLOBALS['_kc'][$k] ??= $f(); }   // cache per richiesta di letture del kernel; si azzera dopo ogni comando che modifica lo stato
 function priv(string $cmd, ?string $in = null, array $args = []): array {
-    $readonly = in_array($cmd, KC_RO, true) || (($cmd === 'qos-policy' && ($args[0]??'')==='status') || ($cmd === 'upgrade-cleanup' && in_array(($args[0]??''),['scan','report'],true)) || ($cmd === 'qos-engine' && in_array(($args[0]??''),['status','inspect','calibrate-status','auto-status','traffic-inspect'],true)) || ($cmd === 'security-stack' && in_array(($args[0]??''),['status','plan','suricata-sources'],true)) || ($cmd === 'nm-editor' && in_array(($args[0]??''),['inventory','preview','trial-status'],true))) || ($cmd === 'ipv6-control' && ($args[0] ?? '') === 'status') || ($cmd === 'dns-guard' && in_array(($args[0] ?? ''), ['status','events','preview'], true)) || ($cmd === 'multi-nic' && in_array(($args[0]??''), ['inventory','status'], true)) || ($cmd === 'anti-dpi-sources' && in_array(($args[0] ?? ''), ['status','catalog'], true));
-    if (!$readonly) $GLOBALS['_kc'] = [];
+    $readonly = ($cmd==='release-cleanup' && in_array(($args[0]??''),['preview','select-preview','migrate-preview','archive-preview'],true)) || in_array($cmd, KC_RO, true) || (($cmd === 'qos-policy' && ($args[0]??'')==='status') || ($cmd === 'upgrade-cleanup' && in_array(($args[0]??''),['scan','report'],true)) || ($cmd === 'qos-engine' && in_array(($args[0]??''),['status','inspect','calibrate-status','auto-status','traffic-inspect'],true)) || ($cmd === 'security-stack' && in_array(($args[0]??''),['status','plan','suricata-sources'],true)) || ($cmd === 'nm-editor' && in_array(($args[0]??''),['inventory','preview','trial-status'],true))) || ($cmd === 'ipv6-control' && ($args[0] ?? '') === 'status') || ($cmd === 'dns-guard' && in_array(($args[0] ?? ''), ['status','events','preview'], true)) || ($cmd === 'multi-nic' && in_array(($args[0]??''), ['inventory','status'], true)) || ($cmd === 'anti-dpi-sources' && in_array(($args[0] ?? ''), ['status','catalog'], true));
+    if (!$readonly) { $GLOBALS['_kc'] = []; unset($GLOBALS['_if']); }
     // Never abort an updater during file replacement merely because the generic
     // read-only status timeout (30 s) elapsed. Mutating jobs need separate budgets.
-    $deadline = ($cmd==='security' && ($args[0]??'')==='mac-inventory') ? 15.0
+    $deadline = (in_array($cmd,['dns-status','dns-test'],true) ? 60.0 : (in_array($cmd,['release-cleanup','upgrade-cleanup'],true) ? 120.0 : null)) ?? (($cmd==='security' && ($args[0]??'')==='mac-inventory') ? 15.0
         : (in_array($cmd, ['self-update','ui-update','dns-bundle','release-rollback'], true) ? 600.0
         : (in_array($cmd, ['save','save6','cat','cat6'], true) ? 40.0
         : ($cmd === 'tool-status' ? 25.0 // dpkg-query + apt-cache + systemctl are bounded individually
         : (($cmd === 'maintenance' && ($args[0] ?? '') === 'preflight') ? 45.0
-        : (($cmd === 'maintenance' || $cmd === 'security') ? 300.0 : ($readonly ? 12.0 : 180.0))))));
+        : (($cmd === 'maintenance' || $cmd === 'security') ? 300.0 : ($readonly ? 12.0 : 180.0)))))));
     // Only small stable read-only status commands: avoid repeated sudo/systemctl
     // launches on old ARM hardware. Cache is request-local and invalidated by
     // every mutating priv() call; never cache stdin/output-heavy or failed jobs.
@@ -490,4 +492,23 @@ function pending(): ?array {
         return ['fam'=>'?', 'until'=>0, 'status'=>'recovery_required', 'invalid'=>true];
     $p['status'] = time() >= (int)$p['until'] ? 'recovery_required' : 'pending';
     return $p;
+}
+
+
+/** Resolve a rules backup under the one approved directory. No links or arbitrary paths. */
+function iptm_rules_backup_path(string $name): ?string {
+    if (!preg_match('/^rules\.v[46]\.\d{8}-\d{6}(?:\.[A-Za-z0-9_-][A-Za-z0-9_.-]{0,79})?$/D',$name)) return null;
+    $dir=DATA_DIR.'/backups';
+    if (is_link($dir)) return null;
+    $base=realpath($dir);$file=$dir.'/'.$name;
+    if ($base===false||is_link($file)||!is_file($file)||!is_readable($file)) return null;
+    $real=realpath($file);
+    return $real!==false&&dirname($real)===$base?$real:null;
+}
+function iptm_rules_backup_read(string $name): string {
+    $path=iptm_rules_backup_path($name);
+    if($path===null)throw new RuntimeException('Backup regole non trovato o non consentito.');
+    $data=@file_get_contents($path,false,null,0,4194305);
+    if(!is_string($data)||trim($data)===''||strlen($data)>4194304)throw new RuntimeException('Backup vuoto, illeggibile o oltre 4 MiB.');
+    return $data;
 }

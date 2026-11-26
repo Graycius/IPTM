@@ -6,7 +6,9 @@ Never flush tables or touch third-party chains; perform a fresh exact snapshot c
 before each deletion. All operations are logged with a root-only snapshot.
 """
 from __future__ import annotations
-import fcntl, hashlib, json, os, pathlib, re, subprocess, sys, time
+
+from command_transport import capture, OutputLimitError, transaction_gate, durable_json
+import fcntl, hashlib, json, os, pathlib, re, shlex, subprocess, sys, time
 
 BASE=pathlib.Path('/var/lib/iptm-live-rule-cleanup')
 TABLES=('filter','nat','mangle','raw','security')
@@ -15,12 +17,30 @@ APPEND=re.compile(r'^-A (IPTM_[A-Za-z0-9_]{1,24}) (.+)$')
 class CleanupError(Exception): pass
 
 def command(*args):
-    try: p=subprocess.run(args,capture_output=True,text=True,timeout=20,check=False)
+    try: p=capture(args,timeout=20)
     except (OSError,subprocess.TimeoutExpired) as e:raise CleanupError(str(e)) from e
     if p.returncode: raise CleanupError('Comando non riuscito: '+str(args[0])+': '+p.stderr[-280:])
     return p.stdout
 
 def digest(x):return hashlib.sha256(x.encode()).hexdigest()
+
+def pure_terminal(line):
+    try:t=shlex.split(line)
+    except ValueError:return False
+    # Conservative subset of iptables-save syntax. Unknown extensions, stateful
+    # matches, goto and side effects are never eligible, even when identical.
+    one={'-p','-s','-d','-i','-o','--sport','--dport','--sports','--dports','--ports','--ctstate','--state','--comment','--icmp-type','--icmpv6-type','--mac-source'}
+    pure={'tcp','udp','multiport','conntrack','state','comment','icmp','icmp6','mac'}
+    if len(t)<4 or t[-2]!='-j' or t[-1] not in ('ACCEPT','DROP','RETURN'):return False
+    i=2
+    while i<len(t)-2:
+        if t[i]=='!':i+=1;continue
+        if i+1>=len(t)-2:return False
+        if t[i]=='-m' and t[i+1] in pure:i+=2;continue
+        if t[i] in one:i+=2;continue
+        return False
+    return i==len(t)-2
+
 
 def candidates(snapshot):
     """Only consecutive identical rules in explicit IPTM-owned *user chains*."""
@@ -40,7 +60,7 @@ def candidates(snapshot):
             last_line=None
             continue
         chain=m[1];index[chain]+=1
-        if last_line==line:
+        if last_line==line and pure_terminal(line):
             findings.append({'table':table,'chain':chain,'number':index[chain],'rule':line})
         last_line=line
     return findings
@@ -74,8 +94,7 @@ def ensure_root():
 def apply(expected):
     if not re.fullmatch('[a-f0-9]{64}',expected):raise CleanupError('SHA256 non valido')
     ensure_root()
-    with (BASE/'lock').open('a+') as lock:
-        os.chmod(BASE/'lock',0o600);fcntl.flock(lock,fcntl.LOCK_EX)
+    with transaction_gate(domain=BASE/'lock'):
         before=snapshot();p=plan(before)
         if p['plan_sha256']!=expected:raise CleanupError('Il firewall è cambiato: rigenerare anteprima')
         if not p['findings']:return {'ok':True,'removed':0}
@@ -109,7 +128,7 @@ def apply(expected):
                     except Exception as rollback_error:failures.append(str(rollback_error))
                 raise CleanupError('Pulizia arrestata: '+str(exc)+ ('; ripristino parziale: '+str(failures) if failures else '; ripristino tentato'))
         report={'ok':True,'removed':len(removed),'snapshots':stamp,'details':removed}
-        log=BASE/(stamp+'.json');log.write_text(json.dumps(report,indent=2));log.chmod(0o600)
+        durable_json(BASE/(stamp+'.json'),report)
         return report
 
 def main(argv):
@@ -120,4 +139,4 @@ def main(argv):
 
 if __name__=='__main__':
     try:print(json.dumps(main(sys.argv[1:]),ensure_ascii=False))
-    except (CleanupError,ValueError) as ex:print(json.dumps({'ok':False,'error':str(ex)}));sys.exit(1)
+    except (CleanupError,ValueError,OSError) as ex:print(json.dumps({'ok':False,'error':str(ex)}));sys.exit(1)

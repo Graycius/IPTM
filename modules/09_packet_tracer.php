@@ -2,15 +2,25 @@
 // ===================== v2: PACKET TRACER =====================
 function t_split(string $v): array { $v = trim($v); return ($v !== '' && $v[0] === '!') ? [true, trim(substr($v, 1))] : [false, $v]; }
 function t_cidr(string $c, string $ip): bool {
-    if ($ip === '') return false; [$n, $p] = array_pad(explode('/', $c), 2, '32'); $a = ip2long($ip); $b = ip2long($n); if ($a === false || $b === false) return false;
+    if ($ip === '' || substr_count($c,'/') > 1) return false; [$n, $p] = array_pad(explode('/', $c), 2, '32'); if(!ctype_digit((string)$p)||(int)$p>32)return false; $a = ip2long($ip); $b = ip2long($n); if ($a === false || $b === false) return false;
     $m = (int)$p === 0 ? 0 : ((-1 << (32 - (int)$p)) & 0xFFFFFFFF); return ($a & $m) === ($b & $m);
 }
 function t_ip(string $spec, string $ip): bool { [$ng, $v] = t_split($spec); $h = false; foreach (explode(',', $v) as $c) if (t_cidr(trim($c), $ip)) { $h = true; break; } return $ng ? !$h : $h; }
 function t_if(string $spec, string $name): bool { [$ng, $v] = t_split($spec); $h = $name !== '' && (str_ends_with($v, '+') ? str_starts_with($name, substr($v, 0, -1)) : $name === $v); return $ng ? !$h : $h; }
 function t_port(string $spec, string $port): bool {
-    [$ng, $v] = t_split($spec); $h = false;
-    if ($port !== '') foreach (explode(',', $v) as $r) { if (str_contains($r, ':')) { [$a, $b] = explode(':', $r); $a = $a === '' ? 0 : (int)$a; $b = $b === '' ? 65535 : (int)$b; if ((int)$port >= $a && (int)$port <= $b) $h = true; } elseif ((int)$r === (int)$port) $h = true; }
-    return $ng ? !$h : $h;
+    [$neg, $value] = t_split($spec);
+    if (!ctype_digit($port) || (int)$port > 65535 || $value === '') return false;
+    $matched = false;
+    foreach (explode(',', $value) as $range) {
+        if (!preg_match('/^(?:[0-9]{1,5}|[0-9]{0,5}:[0-9]{0,5})$/D', $range)) return false;
+        if (str_contains($range, ':')) {
+            [$lo, $hi] = explode(':', $range, 2);
+            $lo = $lo === '' ? 0 : (int)$lo; $hi = $hi === '' ? 65535 : (int)$hi;
+        } else { $lo = $hi = (int)$range; }
+        if ($lo > $hi || $hi > 65535) return false;
+        $matched = $matched || ((int)$port >= $lo && (int)$port <= $hi);
+    }
+    return $neg ? !$matched : $matched;
 }
 function t_extra(string $x, array $k, array &$nt): bool {
     $x = trim($x); if ($x === '') return true; $ok = true;
@@ -38,13 +48,18 @@ function t_rule(array $f, array $k, array &$nt): bool {
     if ($f['s'] !== '' && !t_ip($f['s'], $k['s'])) return false; if ($f['d'] !== '' && !t_ip($f['d'], $k['d'])) return false;
     if ($f['p'] !== '') { [$ng, $v] = t_split($f['p']); $h = $v === 'all' || $v === $k['p']; if ($ng ? $h : !$h) return false; }
     foreach ([['sport', 'sport'], ['sports', 'sport'], ['dport', 'dport'], ['dports', 'dport']] as [$a, $b]) if ($f[$a] !== '' && !t_port($f[$a], $k[$b])) return false;
-    if ($f['ports'] !== '' && !(t_port($f['ports'], $k['sport']) || t_port($f['ports'], $k['dport']))) return false;
+    if ($f['ports'] !== '') {
+        [$neg, $ports] = t_split($f['ports']);
+        if ($k['sport'] === '' || $k['dport'] === '') { $nt[] = 'Porte non specificate: match multiport non valutabile.'; return false; }
+        $matches = t_port($ports, $k['sport']) || t_port($ports, $k['dport']);
+        if ($neg ? $matches : !$matches) return false;
+    }
     if ($f['ctstate'] !== '') { [$ng, $v] = t_split($f['ctstate']); $st = explode(',', $v); $h = in_array($k['state'], $st, true) || (!empty($k['dnat']) && in_array('DNAT', $st, true)); if ($ng ? $h : !$h) return false; }
     return t_extra($f['extra'], $k, $nt);
 }
 function t_policy(array $M, string $t, string $c): string { $ti = tb($M, $t); if ($ti >= 0) foreach ($M[$ti]['items'] as $it) if ($it['t'] === 'chain' && $it['n'] === $c) return $it['p'] === '-' ? 'ACCEPT' : $it['p']; return 'ACCEPT'; }
 function t_chain(array $M, string $t, string $c, array &$k, array &$steps, array &$nt, int $depth = 0): string {
-    if ($depth > 12) return 'RETURN'; $ti = tb($M, $t); if ($ti < 0) return 'RETURN'; $n = 0;
+    if ($depth > 12) {$nt[]='Profondità catena oltre il limite di simulazione.';return 'RETURN';} $ti = tb($M, $t); if ($ti < 0) return 'RETURN'; $n = 0;
     foreach ($M[$ti]['items'] as $it) {
         if ($it['t'] !== 'rule' || rchain($it['r']) !== $c) continue; $n++; if (!$it['on']) continue;
         $f = rule_parse($it['r']); if (!t_rule($f, $k, $nt)) continue; $tg = $f['target']; $steps[] = [$t, $c, $n, $it['r']];
@@ -53,7 +68,7 @@ function t_chain(array $M, string $t, string $c, array &$k, array &$steps, array
         if ($tg === 'REDIRECT') { $k['d'] = $k['local_ip'] ?: $k['d']; $k['dnat'] = true; if (preg_match('/--to-ports? (\d+)/', $f['targs'], $m)) $k['dport'] = $m[1]; return 'NAT'; }
         if ($tg === 'SNAT' || $tg === 'MASQUERADE') { $k['snat'] = $tg === 'SNAT' ? (preg_match('/--to-source ([\d.]+)/', $f['targs'], $m) ? $m[1] : '?') : 'IP dell\'interfaccia di uscita'; return 'NAT'; }
         $declared = false; foreach ($M[$ti]['items'] as $x) if ($x['t'] === 'chain' && $x['n'] === $tg) $declared = true;
-        if ($declared) { $v = t_chain($M, $t, $tg, $k, $steps, $nt, $depth + 1); if ($v !== 'RETURN') return $v; }
+        if ($declared) { $v = t_chain($M, $t, $tg, $k, $steps, $nt, $depth + 1); if ($v !== 'RETURN') return $v; } else { $nt[]='Target non simulato: '.$tg; }
     }
     return 'RETURN';
 }
@@ -73,4 +88,18 @@ function trace_packet(array $M, array $P): array {
     }
     foreach ($stages as [$t, $c]) { if ($t === 'nat' && !$isNew) continue; if (!$run($t, $c)) break; }
     return compact('verdict', 'where', 'steps', 'nt', 'k');
+}
+
+/** Public simulation input: strict IPv4 and bounded parameters. */
+function iptm_trace_input(array $query,array $ifaces): array {
+    $p=[];foreach(['flow'=>'local','in'=>'','out'=>'','src'=>'','dst'=>'','proto'=>'tcp','sport'=>'','dport'=>'','state'=>'NEW'] as $key=>$default){
+        $v=$query[$key]??$default;if(!is_string($v)||strlen($v)>100)throw new InvalidArgumentException('Parametro non valido: '.$key);$p[$key]=trim($v);
+    }
+    if(!in_array($p['flow'],['local','forward','out'],true)||!in_array($p['proto'],['tcp','udp','icmp'],true)||!in_array($p['state'],['NEW','ESTABLISHED'],true))throw new InvalidArgumentException('Percorso, protocollo o stato non valido.');
+    foreach(['in','out'] as $key)if($p[$key]!==''&&!array_key_exists($p[$key],$ifaces))throw new InvalidArgumentException('Interfaccia non rilevata: '.$key);
+    foreach(['src','dst'] as $key)if(!filter_var($p[$key],FILTER_VALIDATE_IP,FILTER_FLAG_IPV4))throw new InvalidArgumentException('Indicare indirizzi IPv4 validi.');
+    foreach(['sport','dport'] as $key)if($p[$key]!==''&&(!ctype_digit($p[$key])||(int)$p[$key]>65535||(int)$p[$key]<1||$p['proto']==='icmp'))throw new InvalidArgumentException('Porta non valida: '.$key);
+    $p['local_ips']=[];foreach($ifaces as $addresses)foreach((array)$addresses as $address){$ip=explode('/',(string)$address,2)[0];if(filter_var($ip,FILTER_VALIDATE_IP,FILTER_FLAG_IPV4))$p['local_ips'][]=$ip;}
+    $p['local_ip']=$p['local_ips'][0]??'';
+    return $p;
 }

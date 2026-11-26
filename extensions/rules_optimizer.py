@@ -42,6 +42,9 @@ class R:
                 continue
         return ''
 
+    def negated(self, *names):
+        return any(t in names and ((i>0 and self.tokens[i-1]=='!') or (i+1<len(self.tokens) and self.tokens[i+1]=='!')) for i,t in enumerate(self.tokens))
+
     def ports(self):
         raw = self.option('--dport', '--dports', '--destination-port', '--destination-ports')
         result: set[int] = set()
@@ -93,7 +96,11 @@ def parse(text):
             table = ''
             section = ''
         elif table and s.startswith(':'):
-            chains[table].add(s[1:].split(None, 1)[0])
+            parts=s[1:].split(None, 1)
+            if not parts:
+                warnings.append({'id':'SYNTAX_CHAIN','severity':'high','line':i+1,'message':'Dichiarazione catena vuota'})
+                continue
+            chains[table].add(parts[0])
         else:
             m = MANAGED_BEGIN.match(s)
             if m:
@@ -121,7 +128,7 @@ def parse(text):
 def cidr_nets(rules):
     nets = []
     for r in rules:
-        if r.section not in ('lockout', 'ssh-acc', 'lan-tcp', 'dns-redir', 'nat-masq'):
+        if r.negated('-s','--source') or r.section not in ('lockout', 'ssh-acc', 'lan-tcp', 'dns-redir', 'nat-masq'):
             continue
         for val in r.source().split(','):
             if not val:

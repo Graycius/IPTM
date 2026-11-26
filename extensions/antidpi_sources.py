@@ -10,6 +10,8 @@ import csv, fcntl, hashlib, io, json, os, pathlib, re, secrets, subprocess, sys,
 from contextlib import contextmanager
 import urllib.request, urllib.parse
 
+from command_transport import capture
+
 ROOT = pathlib.Path('/var/lib/iptm-antidpi/sources')
 MAX_SOURCE = 2 * 1024 * 1024
 MAX_HOSTLIST = 16 * 1024 * 1024
@@ -47,32 +49,23 @@ def directory():
 @contextmanager
 def operation_lock():
     directory()
-    lock=ROOT/'operations.lock'
-    fd=os.open(lock,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
-    try:
-        if os.fstat(fd).st_uid!=0 or os.fstat(fd).st_mode&0o077:
-            raise SourceError('Lock fonti non protetto')
-        fcntl.flock(fd,fcntl.LOCK_EX)
+    from command_transport import domain_lock
+    with domain_lock(ROOT/'operations.lock'):
         yield
-    finally:os.close(fd)
+
 
 def safe_read(path,maxbytes=MAX_JOB_JSON):
-    if path.is_symlink() or not path.is_file() or path.stat().st_uid!=0 or path.stat().st_mode & 0o077 or path.stat().st_size>maxbytes:
-        raise SourceError('File report non sicuro')
-    return json.loads(path.read_text())
+    from command_transport import read_private_json
+    try:result=read_private_json(path,limit=maxbytes)
+    except (OSError,ValueError,UnicodeError) as exc:raise SourceError('File report non sicuro') from exc
+    if result is None:raise SourceError('File report mancante')
+    return result
+
 
 def write(path,data):
     directory()
-    if path.is_symlink():raise SourceError('Percorso simbolico non consentito')
-    fd,tmp=tempfile.mkstemp(dir=ROOT,prefix='.stage-')
-    try:
-        with os.fdopen(fd,'w') as f:
-            os.fchmod(f.fileno(),0o600)
-            json.dump(data,f,sort_keys=True,ensure_ascii=False,separators=(',',':'))
-            f.flush();os.fsync(f.fileno())
-        os.replace(tmp,path)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    from command_transport import durable_json
+    durable_json(path,data,ensure_ascii=False)
 
 class HttpsOnly(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
@@ -99,10 +92,10 @@ def parse_csv_domains(blob):
         url=(row.get('url') or row.get('URL') or '').strip()
         if not url:continue
         if not url.startswith(('http://','https://')):continue
-        parsed=urllib.parse.urlsplit(url)
-        domain=(parsed.hostname or '').lower().rstrip('.')
-        try:domain=domain.encode('idna').decode('ascii')
-        except UnicodeError:continue
+        try:
+            parsed=urllib.parse.urlsplit(url)
+            domain=(parsed.hostname or '').lower().rstrip('.').encode('idna').decode('ascii')
+        except (ValueError,UnicodeError):continue
         if HOST.fullmatch(domain):out.add(domain)
     return out
 
@@ -121,7 +114,8 @@ def parse_plain_domains(blob):
             continue
         for token in tokens:
             if token.lower().startswith(('http://','https://')):
-                token=urllib.parse.urlsplit(token).hostname or ''
+                try:token=urllib.parse.urlsplit(token).hostname or ''
+                except ValueError:continue
             token=token.lower().rstrip('.')
             try:token=token.encode('idna').decode('ascii')
             except UnicodeError:continue
@@ -234,7 +228,7 @@ def request_start(data):
          '--property=Nice=10','--property=CPUQuota=30%',
          '/usr/bin/python3','-B',str(pathlib.Path(__file__).resolve()),'work',token]
     try:
-        result=subprocess.run(cmd,stdin=subprocess.DEVNULL,capture_output=True,timeout=12)
+        result=capture(cmd, timeout=12, text=False, stdout_limit=1048576, stderr_limit=262144)
     except (OSError,subprocess.TimeoutExpired) as ex:
         job['state']='failed';job['error']='systemd-run non disponibile';write(ROOT/(token+'.json'),job);write(prev,{'token':token,'state':'failed'})
         raise SourceError('Avvio worker non riuscito') from ex
@@ -443,7 +437,12 @@ def main():
     if op=='work' and len(sys.argv)==3 and TOKEN.fullmatch(sys.argv[2]):return do_work(sys.argv[2])
     raise SourceError('Operazione non autorizzata')
 
+def coordinated_main():
+    from command_transport import driver_admission
+    with driver_admission('antidpi_sources',sys.argv[1:]):
+        return main()
+
 if __name__=='__main__':
-    try:print(json.dumps(main(),ensure_ascii=False))
+    try:print(json.dumps(coordinated_main(),ensure_ascii=False))
     except (SourceError,OSError,ValueError,TypeError,KeyError) as ex:
         print(json.dumps({'ok':False,'error':str(ex)},ensure_ascii=False));sys.exit(1)

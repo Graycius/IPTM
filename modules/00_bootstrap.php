@@ -10,16 +10,21 @@
 //   {"ALLOWED_NETS":["192.168.1.0/24"],"ROLLBACK_SECS":120,"IDLE_SECS":3600}
 // (gli aggiornamenti sostituiscono questo file PHP ma non toccano quello JSON; i valori già modificati qui vengono migrati in automatico)
 const WEB_CONF = '/etc/iptables-manager.web.json';
-$__wc = is_readable(WEB_CONF) ? (json_decode((string)@file_get_contents(WEB_CONF), true) ?: []) : [];
-$__wp = fn(string $k, string $d): string => (isset($__wc[$k]) && is_string($__wc[$k]) && preg_match('~^/[A-Za-z0-9._/-]{1,200}$~', $__wc[$k])) ? $__wc[$k] : $d;
+$__wc=[];
+if (file_exists(WEB_CONF)||is_link(WEB_CONF)) {
+    $__raw=is_file(WEB_CONF)&&!is_link(WEB_CONF)?@file_get_contents(WEB_CONF,false,null,0,65537):false;
+    if(!is_string($__raw)||strlen($__raw)>65536||!(json_decode($__raw) instanceof stdClass)){http_response_code(503);exit('IPTM: configurazione web non valida o non leggibile. Verificare da console.');}
+    $__wc=json_decode($__raw,true);unset($__raw);
+}
+$__wp = fn(string $k, string $d): string => (isset($__wc[$k]) && is_string($__wc[$k]) && preg_match('~^/[A-Za-z0-9._/-]{1,200}$~D', $__wc[$k])) ? $__wc[$k] : $d;
 $__wi = fn(string $k, int $d, int $lo, int $hi): int => (isset($__wc[$k]) && is_int($__wc[$k]) && $__wc[$k] >= $lo && $__wc[$k] <= $hi) ? $__wc[$k] : $d;
 define('RULES_FILE', $__wp('RULES_FILE', '/etc/iptables/rules.v4'));
 define('DATA_DIR', $__wp('DATA_DIR', '/var/lib/iptables-manager'));   // fuori dalla web-root: mkdir + chown utente-web
 define('ALLOWED_NETS', (isset($__wc['ALLOWED_NETS']) && is_array($__wc['ALLOWED_NETS']) && $__wc['ALLOWED_NETS'] && !array_filter($__wc['ALLOWED_NETS'], fn($n) =>
     !is_string($n)
-    || !preg_match('~^(?:\d{1,3}\.){3}\d{1,3}/(?:0|[1-9]|[12][0-9]|3[0-2])$~', $n)
+    || !preg_match('~^(?:\d{1,3}\.){3}\d{1,3}/(?:0|[1-9]|[12][0-9]|3[0-2])$~D', $n)
     || filter_var(substr($n, 0, strrpos($n, '/')), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false))
-    ? array_values($__wc['ALLOWED_NETS']) : ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']);   // predefinito: solo reti private; CIDR IPv4 validi
+    ? array_values($__wc['ALLOWED_NETS']) : (array_key_exists('ALLOWED_NETS',$__wc)?['127.0.0.0/8']:['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']));   // predefinito: solo reti private; CIDR IPv4 validi
 // Configurable IPv6 management scopes. If ALLOWED_NETS is explicitly
 // restricted to specific IPv4 networks, default IPv6 access becomes loopback
 // only. Add ALLOWED_NETS6 explicitly to authorize private IPv6 clients.
@@ -38,11 +43,11 @@ if (isset($__wc['ALLOWED_NETS6']) && is_array($__wc['ALLOWED_NETS6'])) {
 }
 define('ALLOWED_NETS6', $__v6);
 unset($__v6, $__provided, $__valid, $__net, $__match);
-define('ROLLBACK_SECS', $__wi('ROLLBACK_SECS', 180, 30, 3600));      // secondi per confermare dopo "Applica"
+define('ROLLBACK_SECS', $__wi('ROLLBACK_SECS', 60, 10, 3600));      // secondi per confermare dopo "Applica"
 define('MIN_PW', $__wi('MIN_PW', 10, 8, 128));
 define('IDLE_SECS', $__wi('IDLE_SECS', 1800, 60, 86400));           // scadenza della sessione per inattivita'
-const APP_VERSION = '5.30.23';
-const APP_BUILD = '20261123.1.iptm-5.30.23';
+const APP_VERSION = '6.0.8';
+const APP_BUILD = '20261126.1.iptm-6.0.8';
 const SETTINGS_SCHEMA = 46;   // versione schema settings.json (migrazioni in S_load)
 define('HELPER', $__wp('HELPER', '/usr/local/sbin/iptm-helper'));   // creato da install-dietpi.sh (operazioni root)
 define('BIN_IP', $__wp('BIN_IP', '/usr/sbin/ip'));
@@ -66,11 +71,11 @@ const SEC_FIELDS = [
         'closeports' => 'b', 'close_range' => 'ports', 'final_drop' => 'b', 'logdrop_on' => 'b', 'ld_src_rate' => 'rate', 'ld_src_burst' => 'n:1:100000', 'ld_glob_rate' => 'lrate', 'ld_glob_burst' => 'n:1:10000', 'ld_prefix' => 'prefix',
         'raw_lo' => 'b', 'raw_drop' => 'b', 'raw_tcp' => 'ports', 'raw_udp' => 'ports', 'log_in' => 'b', 'log_out' => 'b', 'log_drop' => 'b', 'log_rate' => 'lrate',
         'knock_on' => 'b', 'knock_ports' => 'ports', 'knock_target' => 'port', 'knock_secs' => 'n:5:3600', 'knock_nets' => 'nets',
-        'lockout_on' => 'b', 'mgmt_ports' => 'ports', 'drop_frag' => 'b', 'portscan' => 'b', 'ps_hits' => 'n:5:50', 'ps_secs' => 'n:10:600', 'ps_ban' => 'n:60:86400', 'bogon_wan' => 'b', 'lan_flood' => 'b', 'lf_rate' => 'n:1:100000', 'lf_burst' => 'n:1:100000', 'egress_smtp' => 'b', 'egress_allow' => 'nets', 'egress_ports' => 'ports',
+        'lockout_on' => 'b', 'mgmt_nets' => 'nets', 'mgmt_ports' => 'ports', 'drop_frag' => 'b', 'portscan' => 'b', 'ps_hits' => 'n:5:50', 'ps_secs' => 'n:10:600', 'ps_ban' => 'n:60:86400', 'bogon_wan' => 'b', 'lan_flood' => 'b', 'lf_rate' => 'n:1:100000', 'lf_burst' => 'n:1:100000', 'egress_smtp' => 'b', 'egress_allow' => 'nets', 'egress_ports' => 'ports',
         'stealth' => 'b', 'synproxy' => 'b', 'sp_ports' => 'ports', 'tarpit' => 'b', 'dns_rebind' => 'b', 'raw_invalid' => 'b', 'arp_protect' => 'b', 'tcp_fastopen_off' => 'b', 'glob_new_limit' => 'b', 'gn_rate' => 'n:1:100000', 'gn_burst' => 'n:1:100000'],
     'forward' => ['loopback' => 'b', 'dmz_on' => 'b', 'dmz_ip' => 'ip', 'dmz_excl' => 'ports'],
     'access' => [], 'fwdtable' => [], 'router' => [],
-    'vpn' => ['wg_on' => 'b', 'wg_port' => 'port', 'wg_if' => 'if', 'wg_input' => 'b', 'wg_lan' => 'b', 'wg_lan_to_vpn' => 'b'],
+    'vpn' => ['wg_on' => 'b', 'wg_port' => 'port', 'wg_if' => 'if', 'wg_input' => 'b', 'wg_lan' => 'b', 'wg_internet' => 'b', 'wg_lan_to_vpn' => 'b', 'wg_local_tcp' => 'ports', 'wg_local_udp' => 'ports', 'wg_net' => 'nets', 'wg_fwd_nets' => 'nets', 'wg_fwd_tcp' => 'ports', 'wg_fwd_udp' => 'ports'],
 ];
 const BUILTIN = ['filter' => ['INPUT', 'FORWARD', 'OUTPUT'], 'nat' => ['PREROUTING', 'INPUT', 'OUTPUT', 'POSTROUTING'],
     'mangle' => ['PREROUTING', 'INPUT', 'FORWARD', 'OUTPUT', 'POSTROUTING'], 'raw' => ['PREROUTING', 'OUTPUT'],

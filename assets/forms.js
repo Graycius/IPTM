@@ -7,12 +7,14 @@
     if(event.defaultPrevented || !(form instanceof HTMLFormElement))return;
     if(form.method.toLowerCase()!=='post' || !form.checkValidity())return;
     const wait=document.getElementById('iptm-global-wait');
-    if(wait)wait.hidden=false;
+    if(wait)queueMicrotask(()=>{if(!event.defaultPrevented)wait.hidden=false;});
   });
+  window.addEventListener('pageshow',()=>{const wait=document.getElementById('iptm-global-wait');if(wait)wait.hidden=true;});
   // The Health and QoS transaction countdowns are display-only.
   setInterval(function(){
     const e=document.getElementById('iptm-health-seconds');if(!e)return;
-    const n=Math.max(0,Number(e.dataset.until)-Math.floor(Date.now()/1000));
+    const until=Number(e.dataset.until);if(!Number.isFinite(until)||until<=0){e.textContent='Scadenza non verificabile';return;}
+    const n=Math.max(0,until-Math.floor(Date.now()/1000));
     e.textContent=n>0?n+' s':'Scaduto — verificare il ripristino';
   },1000);
 })();

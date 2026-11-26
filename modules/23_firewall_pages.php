@@ -19,19 +19,21 @@ function model_json(): string {
 
 function pg_rules() {
     global $M;
-    $tn = $_GET['t'] ?? 'filter'; $ti = tb($M, $tn);
+    $tn = is_string($_GET['t'] ?? null) ? $_GET['t'] : 'filter'; $ti = tb($M, $tn);
     if ($ti < 0) { foreach ($M as $k => $b) if ($b['k'] === 'table') { $ti = $k; break; } }
     if ($ti < 0) { echo '<section class="card"><h2>Nessuna tabella nella bozza</h2><p>Apri l’editor avanzato per crearne una.</p><a class="btn s" href="?p=raw">Editor avanzato</a></section>'; return; }
     $tn = $M[$ti]['name']; $items = $M[$ti]['items'];
     $chs = []; foreach (BUILTIN[$tn] ?? [] as $bc) $chs[$bc] = '-';
     foreach (chains_of($items) as $c) $chs[$c['n']] = $c['p'];
     foreach ($items as $it) if ($it['t'] === 'rule') $chs[rchain($it['r'])] ??= '-';
-    $ch = $_GET['c'] ?? array_key_first($chs); if (!isset($chs[$ch])) $ch = array_key_first($chs);
+    if (!$chs) { iptm_view_error('Nessuna catena disponibile in questa tabella.'); return; }
+    $ch = is_string($_GET['c'] ?? null) ? $_GET['c'] : array_key_first($chs); if (!isset($chs[$ch])) $ch = array_key_first($chs);
+    $editable = ($_SESSION['role'] ?? 'viewer') === 'admin';
     $draftCount = count(chain_rules($items, $ch));
     echo iptm_policy_review_ui(ser($M), S_get());
     echo '<section class="iptm-rules-workbench" aria-label="Gestione delle regole firewall">';
     echo '<header class="iptm-workbench-heading"><div><span class="iptm-eyebrow">Firewall / editor regole</span><h2>Regole ' . h($tn) . ' · ' . h($ch) . '</h2><p class="mut">' . $draftCount . ' regole nella bozza · policy ' . h($chs[$ch]) . ' · ordine di valutazione dall’alto verso il basso</p></div>';
-    echo '<div class="iptm-workbench-actions"><a class="btn s" href="?p=rulesaudit">Analizza rules.v4</a><a class="btn s" href="?p=wizard">Creazione guidata</a><a class="btn" href="?p=rule&amp;t=' . rawurlencode((string)$tn) . '&amp;c=' . rawurlencode((string)$ch) . '">Nuova regola</a></div></header>';
+    echo '<div class="iptm-workbench-actions"><a class="btn s" href="?p=rulesaudit">Analizza rules.v4</a>' . ($editable ? '<a class="btn s" href="?p=wizard">Creazione guidata</a><a class="btn" href="?p=rule&amp;t=' . rawurlencode((string)$tn) . '&amp;c=' . rawurlencode((string)$ch) . '">Nuova regola</a>' : '<span class="mut">Sola lettura</span>') . '</div></header>';
     echo '<nav class="iptm-workbench-tabs" aria-label="Tabelle iptables">';
     foreach ($M as $b) if ($b['k'] === 'table') {
         $name = $b['name']; $current = $name === $tn;
@@ -60,6 +62,7 @@ function pg_rules() {
         $buf = [];
         $n++; $f = rule_parse($it['r']); [$cl, $lb] = act_label($f['target']);
         echo '<tr class="iptm-rule-row ' . ($it['on'] ? '' : 'off') . '"><td class="iptm-rule-number">' . $n . '</td><td><div class="iptm-rule-description"><span class="b b-' . h($cl) . '">' . h($lb) . '</span>' . ($mg ? '<span class="b b-jump" title="Generata dalle impostazioni">' . h($mg) . '</span>' : '') . h(describe($f)) . '</div><code>' . h($it['r']) . '</code></td><td>' . ($it['on'] ? hit_cell($HL, $tn, $ch, $it['r']) : '<span class="mut">Disattivata</span>') . '</td>';
+        if (!$editable) { echo '<td><span class="mut">Sola lettura</span></td></tr>'; continue; }
         echo '<td><form method="post" class="ops iptm-rule-actions" aria-label="Operazioni sulla regola ' . $n . '">' . fh() . '<input type="hidden" name="action" value="rule_op"><input type="hidden" name="t" value="' . h($tn) . '"><input type="hidden" name="idx" value="' . $i . '">';
         echo '<button type="submit" name="op" value="up" aria-label="Sposta su la regola ' . $n . '" title="Sposta su">↑</button><button type="submit" name="op" value="down" aria-label="Sposta giù la regola ' . $n . '" title="Sposta giù">↓</button>';
         echo '<button type="submit" name="op" value="toggle" aria-label="' . ($it['on'] ? 'Disattiva' : 'Attiva') . ' la regola ' . $n . '" title="' . ($it['on'] ? 'Disattiva' : 'Attiva') . '">' . ($it['on'] ? '⏸' : '▶') . '</button>';
@@ -72,7 +75,7 @@ function pg_rules() {
 
 function pg_rule() {
     global $M;
-    $tn = $_GET['t'] ?? 'filter'; $ti = tb($M, $tn); if ($ti < 0) { echo '<div class=card>Tabella inesistente.</div>'; return; }
+    $tn = is_string($_GET['t'] ?? null) ? $_GET['t'] : 'filter'; $ti = tb($M, $tn); if ($ti < 0) { echo '<div class=card>Tabella inesistente.</div>'; return; }
     $ix = isset($_GET['idx']) ? (int)$_GET['idx'] : -1; $edit = $ix >= 0 && ($M[$ti]['items'][$ix]['t'] ?? '') === 'rule';
     $it = $edit ? $M[$ti]['items'][$ix] : null; $f = $edit ? rule_parse($it['r']) : array_fill_keys(['chain', 'i', 'o', 's', 'd', 'p', 'sport', 'dport', 'sports', 'dports', 'ports', 'ctstate', 'extra', 'target', 'targs'], '');
     if (!$edit) { $f['chain'] = $_GET['c'] ?? 'INPUT'; $f['target'] = 'ACCEPT'; }
@@ -108,28 +111,40 @@ function pg_wizard() {
 }
 
 function pg_chains() {
-    echo '<div class="iptm-task-intro"><div><span class="iptm-eyebrow">FIREWALL / STRUTTURA</span><h2>Catene e tabelle</h2><p>Organizza le catene iptables per tabella. Modifiche e riordinamenti interessano la bozza, non il firewall attivo.</p></div><a class="btn s" href="?p=rules">Visualizza regole</a></div>';
-    global $M;
-    foreach ($M as $b) if ($b['k'] === 'table') {
-        $tn = $b['name']; echo '<div class=card><h2>Tabella ' . h($tn) . '</h2><table>';
-        $all = []; foreach (BUILTIN[$tn] ?? [] as $bc) $all[$bc] = null; foreach (chains_of($b['items']) as $c) $all[$c['n']] = $c['p'];
-        foreach ($all as $c => $p) {
-            $bi = in_array($c, BUILTIN[$tn] ?? [], true); $nr = count(chain_rules($b['items'], $c));
-            echo '<tr><td><b>' . h($c) . '</b> <small>' . ($bi ? 'predefinita' : 'personalizzata') . ' · ' . $nr . ' regole</small></td><td><form method=post class=ops data-iptm-layout="ui-3f0497fe70">' . fh('p=chains') . '<input type=hidden name=action value=chain_op><input type=hidden name=t value="' . h($tn) . '"><input type=hidden name=chain value="' . h($c) . '">';
-            if ($bi) echo '<span>policy</span><select name=policy data-iptm-layout="ui-75d5f75d1a"><option' . ($p === 'ACCEPT' ? ' selected' : '') . '>ACCEPT</option><option' . ($p === 'DROP' ? ' selected' : '') . '>DROP</option></select><button name=op value=policy>Imposta</button>';
-            else echo '<label><input type=checkbox name=withrules value=1> elimina anche le regole</label><button class=d name=op value=del>Elimina</button>';
-            echo '</form></td></tr>';
+    global $M;$admin=($_SESSION['role']??'viewer')==='admin';
+    iptm_view_start('Struttura del firewall','La policy si applica ai pacchetti non gestiti da alcuna regola. DROP richiede autorizzazioni esplicite per i servizi necessari. Tutte le modifiche riguardano la bozza.');
+    echo iptm_view_link('rules','Visualizza regole');iptm_view_end();
+    foreach($M as $b){
+        if(($b['k']??'')!=='table')continue;$tn=$b['name'];$all=[];
+        foreach(BUILTIN[$tn]??[] as $c)$all[$c]=null;
+        foreach(chains_of($b['items']) as $c)$all[$c['n']]=$c['p'];
+        iptm_view_start('Tabella '.$tn);
+        echo '<div class="iptm-table-scroll" role="region" aria-label="Catene" tabindex="0"><table><thead><tr><th scope="col">Catena</th><th scope="col">Tipo</th><th scope="col">Regole</th><th scope="col">Policy</th>'.($admin?'<th scope="col">Azioni</th>':'').'</tr></thead><tbody>';
+        foreach($all as $c=>$policy){
+            $built=in_array($c,BUILTIN[$tn]??[],true);
+            echo '<tr><th scope="row">'.iptm_view_text($c).'</th><td>'.($built?'Predefinita':'Personalizzata').'</td><td>'.count(chain_rules($b['items'],$c)).'</td><td>'.iptm_view_text($policy).'</td>';
+            if($admin){
+                echo '<td>';iptm_view_form('chains','chain_op',['t'=>$tn,'chain'=>$c,'op'=>$built?'policy':'del']);
+                if($built){$id='policy-'.hash('sha256',$tn.'|'.$c);echo '<label for="'.$id.'">Nuova policy</label><select name="policy" id="'.$id.'"><option value="ACCEPT"'.($policy==='ACCEPT'?' selected':'').'>ACCEPT</option><option value="DROP"'.($policy==='DROP'?' selected':'').'>DROP</option></select>';iptm_view_submit('Imposta','s');}
+                else{echo '<label><input type="checkbox" name="withrules" value="1"> Elimina anche le regole</label>';iptm_view_submit('Elimina catena','d');}
+                echo '</td>';
+            }echo '</tr>';
         }
-        echo '</table><form method=post class=ops data-iptm-layout="ui-0521fd815d">' . fh('p=chains') . '<input type=hidden name=action value=chain_op><input type=hidden name=op value=add><input type=hidden name=t value="' . h($tn) . '"><input name=chain placeholder="nuova catena (es. WEB-ALLOW)" data-iptm-layout="ui-ad426e4154" pattern="[A-Za-z0-9_.:-]{1,28}" required><button>＋ Crea catena</button></form></div>';
+        echo '</tbody></table></div>';
+        if($admin){iptm_view_form('chains','chain_op',['t'=>$tn,'op'=>'add']);$id='new-chain-'.hash('sha256',$tn);echo '<label for="'.$id.'">Nome nuova catena</label><input id="'.$id.'" name="chain" placeholder="WEB-ALLOW" pattern="[A-Za-z0-9_.:-]{1,28}" maxlength="28" required>';iptm_view_submit('Crea catena');}
+        iptm_view_end();
     }
-    echo '<p class=mut>La <b>policy</b> è l\'azione per i pacchetti che nessuna regola ha gestito. Con policy DROP + regole di ACCEPT esplicite hai un firewall «chiuso di default».</p>';
 }
 
 function pg_raw() {
-    echo '<div class="iptm-task-intro"><div><span class="iptm-eyebrow">FIREWALL / AVANZATE</span><h2>Editor testuale delle regole</h2><p>Per utenti esperti. Rivedi differenze e sintassi della bozza prima dell’applicazione.</p></div><a class="btn s" href="?p=rules">Editor visuale</a></div><div class="iptm-safety-note" role="note"><strong>Attenzione alla connettività</strong><span>Le regole per SSH, DNS e interfaccia web devono rimanere raggiungibili. Usa sempre la procedura di applicazione con rollback.</span></div>';
     global $draftTxt;
-    echo '<div class=card><h2>Editor testo (bozza completa)</h2><p class=mut>Modifica diretta del file per gli utenti esperti. Commenti e ordine sono mantenuti esattamente come li scrivi.</p><form method=post>' . fh('p=raw') . '<input type=hidden name=action value=raw_save>
-<textarea name=txt rows=32 spellcheck=false>' . h($draftTxt) . '</textarea><p><button>💾 Salva nella bozza</button></p></form></div>';
+    iptm_view_start('Editor della bozza completa','Modificare il testo non cambia il firewall attivo. Conserva le regole SSH, DNS e web; verifica la sintassi e le differenze prima di applicare.');
+    echo '<div class="iptm-workspace-actions">'.iptm_view_link('rules','Editor visuale').iptm_view_link('apply','Controlla e applica').'</div>';
+    if(($_SESSION['role']??'viewer')==='admin')iptm_view_form('raw','raw_save');
+    echo '<label for="iptm-raw-editor">Testo iptables-restore</label><textarea id="iptm-raw-editor" name="txt" rows="32" spellcheck="false"'.(($_SESSION['role']??'viewer')==='admin'?'':' readonly').'>'.htmlspecialchars((string)$draftTxt,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8').'</textarea>';
+    if(($_SESSION['role']??'viewer')==='admin')iptm_view_submit('Salva nella bozza');
+    else echo '<p>Modifica riservata agli amministratori.</p>';
+    iptm_view_end();
 }
 
 function pg_apply() {
@@ -176,14 +191,13 @@ function pg_apply() {
     try {$dnsGuardRemoved=iptm_dns_guard_losses($fileTxt,$draftTxt);}
     catch(RuntimeException $ex){$dnsGuardRemoved=[];echo '<p class="msg err">Controllo DNS/DoT non riuscito: '.h($ex->getMessage()).'</p>';}
     if($dnsGuardRemoved)echo '<div class="msg err" role="alert"><strong>La bozza rimuoverebbe protezioni DNS presenti su disco:</strong> '.h(implode(', ',$dnsGuardRemoved)).'. <a href="?p=setup">Ripristina i blocchi nella pagina Setup</a>, oppure conferma espressamente la cancellazione sotto.</div>';
-    echo '<section class="card iptm-apply-primary"><h2>Applica la bozza</h2><p class=mut>IPTM verifica le regole e le applica temporaneamente con rollback automatico. L’applicazione definitiva delle regole richiede che il canale di gestione rimanga raggiungibile.</p>';
+    echo '<section class="card iptm-apply-primary"><h2>Applica la bozza</h2><p class=mut>Un clic per applicare: IPTM esegue i controlli prima della modifica e attiva il rollback automatico. L’applicazione definitiva delle regole richiede che il canale di gestione rimanga raggiungibile.</p>';
 
     echo '<div class=ops data-iptm-layout="ui-08ace85272">';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=rules_verify><button class=s>Test facoltativo</button></form>';
-    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=apply><input type=hidden name=secs value="'.(int)ROLLBACK_SECS.'">';
-    if ($dnsGuardRemoved) echo '<label><input type=checkbox name=confirm_dns_guard_removal value=1 required> Autorizzo esplicitamente la rimozione delle protezioni DNS/DoT indicate (operazione in prova con rollback)</label>';
-    echo '<button class=g>Applica in prova con rollback</button></form>';
-    echo '</div><p class=mut><b>Non viene confermato automaticamente.</b> Dopo il caricamento verifica da un secondo client SSH, la LAN, DNS e VPN: premi «Conferma e salva» nel pannello transazione pendente prima della scadenza. Senza conferma il watchdog ripristina le regole precedenti. Le modifiche non vengono scritte su rules.v4 finché non confermate.</p></section>';
+    if ($dnsGuardRemoved) echo '<p class="msg warn">La bozza non include alcune protezioni DNS/DoT presenti su disco: verranno rimosse all’applicazione.</p>';
+    echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=apply>'.iptm_trial_timeout_field('4').'<button class=g>Applica ora</button></form>';
+    echo '</div><p class=mut>Le regole vengono applicate in prova: verifica SSH, DNS e LAN, poi premi Conferma e salva. Senza conferma si attiva il ripristino automatico. Il caricamento può ricreare le catene runtime di Docker, CrowdSec e fail2ban.</p></section>';
     echo '<details class="card iptm-apply-advanced"><summary><b>Strumenti avanzati</b> · sintassi, pulizia, regole manuali e operazioni sul file</summary><div class=ops data-iptm-layout="ui-0e001e227c">';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=test><button class=s>Test solo sintassi</button></form>';
     echo '<form method=post>'.fh('p=apply').'<input type=hidden name=action value=policy_export><button class=s>Esporta policy YAML</button></form>';
@@ -310,7 +324,7 @@ function pg_apply() {
         . '<p><button class=s>💾 Crea backup etichettato</button></p></form></div>';
     echo '<div class=card><h3>Backup automatici — ultimi 10 per tipologia (più backup manuali)</h3><table>';
     foreach (array_slice($bk, 0, 30) as $f) { $n = basename($f);
-        echo '<tr><td>' . h($n) . '</td><td>' . number_format(filesize($f)) . ' B</td><td class=ops><a href="?dl=' . h($n) . '">⬇ scarica</a><form method=post>' . fh('p=apply') . '<input type=hidden name=action value=restore_backup><input type=hidden name=name value="' . h($n) . '"><button>↩ carica in bozza</button></form></td></tr>'; }
+        echo '<tr><td>' . h($n) . '</td><td>' . number_format(filesize($f)) . ' B</td><td class=ops><a href="?dl=' . h($n) . '">⬇ scarica</a><form method=post>' . fh('p=apply') . '<input type=hidden name=rev6 value="' . h($backupRev6 ??= hash('sha256',v6_get())) . '"><input type=hidden name=action value=restore_backup><input type=hidden name=name value="' . h($n) . '"><button>↩ carica in bozza</button></form></td></tr>'; }
     echo $bk ? '' : '<tr><td class=mut>Nessun backup ancora.</td></tr>'; echo '</table></div>';
     if (($_SESSION['role']??'')==='admin') {
         $eligible=array_values(array_filter($bk, static function($f) { return is_file($f) && !is_link($f) && preg_match('/^rules\.v[46]\.\d{8}-\d{6}$/D',basename($f)) && filemtime($f)<time()-7*86400; }));
@@ -330,53 +344,22 @@ function pg_apply() {
 }
 
 function pg_guide() {
-    echo <<<'HTML'
-<div class=card><h2>📘 Guida</h2>
-<details open><summary>Come funziona (stile DD-WRT)</summary>
-<p>Le pagine <b>Setup, Sicurezza, NAT/Forward, Restrizioni</b> si comportano come il firmware DD-WRT: imposti opzioni (Abilita/Disabilita) e lo script <b>genera le regole iptables</b> per te, scrivendole in blocchi delimitati da <code># &gt;&gt;&gt; IPTM:…</code> / <code># &lt;&lt;&lt; IPTM:…</code> dentro <code>rules.v4</code>. Le tue regole scritte a mano restano dove sono; i blocchi gestiti si rigenerano a ogni «Salva» (non modificarli a mano: usa «Regole avanzate»).</p>
-<table><tr><th>DD-WRT</th><th>Qui</th></tr>
-<tr><td>Firewall SPI, Block WAN requests, Filter IDENT/Multicast, Limit SSH/Telnet, Impede DoS, Log management</td><td>Sicurezza → Firewall</td></tr>
-<tr><td>Port Range Forward, DMZ, NAT loopback</td><td>NAT / Forward</td></tr>
-<tr><td>Access Restrictions (policy per client, giorni, orari, servizi, parole chiave)</td><td>Restrizioni accesso</td></tr>
-<tr><td>WAN/LAN, NAT, DNS redirect, IP forwarding</td><td>Setup</td></tr>
-<tr><td>Commands → Firewall script</td><td>Avanzate → Editor testo / Regole / Wizard</td></tr>
-<tr><td>QoS</td><td>Rete → QoS (SQM/CAKE)</td></tr><tr><td>Port triggering, UPnP, filtri Java/ActiveX/Cookie</td><td>non supportati (moduli assenti nel kernel Debian o obsoleti)</td></tr></table></details>
-<details open><summary>CrowdSec, Docker e i tuoi script: come convivono con il firewall</summary><p><b>CrowdSec</b>: gli agganci li crea e li reinserisce il bouncer stesso (catena <code>CROWDSEC_CHAIN</code>); l'app non scrive regole sui suoi set, perché il bouncer li crea solo per le origini che hanno decisioni (<code>crowdsec-blacklists-0</code>, <code>-1</code>… oppure un solo <code>crowdsec-blacklists</code> nelle versioni Debian) e deve poterli ricreare. L'app gli indica solo le catene da proteggere (INPUT, FORWARD se router, DOCKER-USER) e lo riavvia dopo ogni «Applica», perché il caricamento delle regole svuota la sua catena. Se usi il bouncer in modo nftables non serve nulla: lavora in una tabella propria.</p><p>Apri <b>Strumenti → Rilevamento sistema</b> per vedere ipset e catene del kernel con il loro gestore. Prima di applicare, lo script dichiara in automatico le catene create a runtime (CrowdSec, fail2ban, Docker) e toglie i riferimenti a set CrowdSec che non esistono; se una catena non esiste affatto, blocca l'applicazione invece di lasciare il firewall a metà.</p></details>
-<details open><summary>Perché i client possono perdere la connessione (e cosa fa ora lo script)</summary><ul>
-<li><b>Liste IP «bogon»</b> (es. FireHOL Level 1) contengono 10.x, 172.16.x e 192.168.x: usate come blocco globale spegnerebbero la LAN. Ora le reti private e le tue LAN sono <b>sempre escluse</b> (catena <code>IPTM-BL</code>) e l'helper le toglie anche dalle liste scaricate. Il GeoIP blocca di default solo il traffico in <b>ingresso</b>.</li>
-<li><b>Caricare un file azzera tutto</b>: Docker, CrowdSec, fail2ban e i tuoi script ricreano le loro catene a runtime. In «Applica &amp; Backup» vedi cosa andrebbe perso e imposti i servizi/lo script da rilanciare dopo ogni applicazione (con esito per ogni passo e test di connettività).</li>
-<li><b>«Salva» senza modifiche non ricarica più il firewall</b>: se la bozza è equivalente al file attivo (stesso comportamento, ignorando commenti, duplicati e ordine tra regole con lo stesso verdetto) non cambia nulla.</li>
-<li><b>Protezioni contro la perdita di regole</b>: prima di applicare simulo la tua connessione alla pagina e blocco se ti chiuderesti fuori; se bozza e impostazioni non coincidono, il salvataggio viene rifiutato; le regole generate non sono modificabili a mano; ogni salvataggio mostra «+N / −M regole».</li></ul></details>
-<details><summary>Importazione pulita e ottimizzata</summary><p>L'importazione riconosce le opzioni e rimuove le regole <b>duplicate</b> e quelle <b>irraggiungibili</b> (dopo una regola che chiude la catena); le righe adiacenti che differiscono solo per porte o reti vengono <b>unite</b> (es. <code>-s a,b</code>, <code>--dports 80,443</code>) e prendono un nome parlante (SSH, DNS, WireGuard…). Il risultato è verificato come semanticamente equivalente all'originale.</p></details>
-<details><summary>Protezioni aggiuntive (Sicurezza e Hardening kernel)</summary><ul>
-<li><b>Anti-lockout</b> (come pfSense), scarto dei <b>frammenti</b> IP, <b>rilevamento port scan</b> configurabile (hitcount / finestra / ban), filtro <b>bogon dal WAN</b>, limite di <b>nuove connessioni per client</b>, blocco <b>SMTP in uscita</b>, <b>modalità stealth</b>, <b>SYNPROXY</b>, <b>TARPIT</b> e protezione <b>DNS rebinding</b> di base.</li>
-<li><b>Hardening del kernel</b> (CIS e progetti noti): SYN cookies, niente source routing né redirect ICMP, ignora ping broadcast, rp_filter <i>loose</i> (adatto a router e VPN).</li></ul></details>
-<details><summary>Wizard da zero: suggerimenti</summary><p>Il wizard precompila i campi dall'<b>ultima configurazione confermata</b> (quella che hai premuto «Conferma» dopo un test riuscito), oppure dalle impostazioni correnti.</p></details>
-<details open><summary>Importazione delle tue regole</summary><p>Al primo accesso la pagina <b>Importa regole</b> analizza il file e trasforma le regole scritte a mano in <b>opzioni già selezionate</b> (Setup, Sicurezza, Accesso router). Le regole generate sono identiche e nello stesso ordine; quelle non riconoscibili restano in Avanzate → Regole. L'originale viene salvato nei backup e puoi tornare indietro con «Azzera impostazioni».</p></details>
-<details open><summary>Configurazione guidata da zero</summary><p>La pagina <b>Wizard da zero</b> ti pone una domanda alla volta (ruolo del dispositivo, interfacce e reti, NAT, DNS locale, livello di sicurezza, VPN, SSH, servizi, Docker/CrowdSec, port forwarding, liste IP/GeoIP, log, IPv6) e crea tutta la configurazione nella <b>bozza</b>. Poi controlli le differenze e applichi con rollback automatico.</p></details>
-<details><summary>Strumenti: cosa fanno</summary><ul>
-<li><b>Packet tracer</b>: simula un pacchetto nelle regole della bozza e mostra quale regola decide (ipotesi: limiti non superati; ipset e payload non valutabili).</li>
-<li><b>Connessioni</b>: tabella di conntrack con filtri, «chiudi connessione» e «blocca IP». <b>Dispositivi</b>: ARP + lease DHCP, Wake-on-LAN, scorciatoia per creare una restrizione. <b>IPS</b>: avvisi di Suricata.</li>
-<li><b>Alias · Liste · GeoIP</b>: gruppi con nome (<code>@nome</code> nelle tabelle), liste di IP malevoli scaricate ogni giorno (timer systemd), blocco per Paese, blocco manuale. Usano ipset: vengono ripristinati al boot dal servizio <code>iptm-ipset</code> prima del caricamento delle regole.</li>
-<li><b>Port knocking</b> (Sicurezza), <b>QoS/SQM</b> con CAKE (Rete), <b>IPv6</b> semplice (Rete), <b>Storico</b> con differenze e registro delle operazioni.</li>
-<li><b>Account</b>: più utenti (amministratore o sola lettura), autenticazione a due fattori TOTP, notifiche Telegram/webhook.</li></ul></details>
-<details><summary>Aggiornare a una nuova versione</summary><p>Copia sul DietPi i file nuovi (<code>iptables-manager.php</code>, <code>iptm-helper</code>, <code>install-dietpi.sh</code>, <code>update-dietpi.sh</code>) e, come root: <pre>bash update-dietpi.sh</pre>Mantiene impostazioni, utenti, backup e regole; controlla la sintassi prima di sostituire i file e conserva la versione precedente in <code>/var/lib/iptables-manager/</code>.</p></details>
-<details open><summary>Flusso sicuro</summary><ol><li>Modifica → «Salva (bozza)»: il firewall attivo non cambia.</li><li>«Applica ora»: carica nel kernel e salva subito su <code>/etc/iptables/rules.v4</code> (con backup datato).</li></ol></details>
-<details><summary>Installazione su DietPi (Debian 13 Trixie)</summary>
-<ol><li>Da <code>dietpi-software</code> installa un web server con PHP (es. Lighttpd/Nginx/Apache + PHP-FPM).</li>
-<li>Copia sul DietPi <code>iptables-manager.php</code> e <code>install-dietpi.sh</code>, poi come root: <pre>bash install-dietpi.sh ./iptables-manager.php /var/www</pre></li>
-<li>L'installer: installa <code>iptables-persistent</code>, crea l'helper <code>/usr/local/sbin/iptm-helper</code> con la riga sudoers (solo quell'helper), la cartella dati e il file di configurazione <code>/etc/iptables-manager.conf</code> (servizi da riavviare dopo l'applicazione, es. docker/crowdsec).</li>
-<li>Apri <code>http://IP/iptables-manager.php</code>: il codice di setup è in <code>/var/lib/iptables-manager/setup-token.txt</code>.</li></ol>
-<p><b>Backend iptables</b>: l'installer imposta <b>iptables-legacy</b> (predefinito). nftables (<code>iptables-nft</code>) è l'alternativa: installa con <code>--nft</code> oppure cambia da Amministrazione → Gestione (carica le regole nel nuovo backend, svuota il vecchio e riavvia i servizi).</p><p><b>Protezione IoT</b>: seleziona i dispositivi dall’inventario OUI locale e genera bozze MAC. Non vengono installati script esterni o cron; eventuali automazioni precedenti richiedono migrazione verificata.</p>
-<p>Se PHP-FPM ha <code>NoNewPrivileges=yes</code>, sudo non funziona: l'installer lo segnala e dà il comando per correggerlo.</p></details>
-<details><summary>Note importanti</summary><ul>
-<li><b>Interfaccia unica</b>: se WAN e LAN condividono la scheda (come bond0), attiva «WAN e LAN sulla stessa interfaccia» in Setup e indica le reti LAN: il lato WAN è «tutto ciò che non è LAN».</li>
-<li><b>Orari</b> delle restrizioni: convertiti in UTC (il modulo time lavora in UTC) usando il fuso di PHP; dopo un cambio ora legale premi di nuovo «Salva».</li>
-<li><b>Ordine</b>: i blocchi «top» vanno prima di tutto, quelli «est» subito dopo la regola RELATED,ESTABLISHED, quelli «end» prima della regola finale catch-all.</li>
-<li>Applicare ricarica <b>tutte</b> le tabelle: Docker, CrowdSec, script IoT vanno riavviati (configurali in <code>/etc/iptables-manager.conf</code>).</li>
-<li><b>Sicurezza</b>: chi accede controlla il firewall. Accesso limitato a reti private (<code>ALLOWED_NETS</code>); usa HTTPS o VPN e non esporre su Internet.</li><li>Solo IPv4.</li></ul></details></div>
-HTML;
+    iptm_view_start('Come usare IPTM','Le configurazioni vengono preparate nella bozza. L’attivazione del firewall è separata e deve essere confermata dopo la prova.');
+    $sections=[
+        ['1. Rileva il sistema','Controlla interfacce, gateway, servizi e accesso amministrativo. Non scegliere una WAN diversa da quella effettivamente utilizzata.','system','Rilevamento sistema'],
+        ['2. Conserva una copia','Esporta il profilo e conserva un backup DietPi. L’export portabile non include tutte le credenziali.','config','Backup e configurazioni'],
+        ['3. Prepara la bozza','Usa il wizard o importa le regole correnti. Controlla sempre LAN, VPN, DNS e le catene di Docker/CrowdSec.','zero','Wizard completo'],
+        ['4. Analizza le modifiche','Verifica le differenze e simula il traffico. La simulazione non riproduce tutti i moduli o lo stato del kernel.','tracer','Simulazione pacchetto'],
+        ['5. Prova e conferma','Mantieni una console locale disponibile. Verifica SSH, navigazione e DNS da un secondo dispositivo durante la prova. Se un controllo fallisce, non confermare.','apply','Applica e backup'],
+        ['6. Controlla prestazioni e servizi','Configura QoS dopo avere verificato WAN e proprietà delle qdisc. Le modifiche DNS, sysctl, reti e servizi hanno procedure dedicate.','health','Salute DietPi']
+    ];foreach($sections as [$title,$desc,$route,$label])echo '<article class="iptm-guide-step"><h3>'.iptm_view_text($title).'</h3><p>'.iptm_view_text($desc).'</p>'.iptm_view_link($route,$label).'</article>';
+    iptm_view_end();
+    iptm_view_start('Aggiornamenti e recupero','Da una 5.30.29 funzionante usa il pacchetto Native Update, non l’archivio FULL. Conserva il digest da una fonte attendibile. HTTP resta supportato; non esporre IPTM sulla WAN.');
+    echo '<p>La distribuzione FULL contiene installatore, recovery, guida e test. Segui il README incluso, non i vecchi script install-dietpi.sh o update-dietpi.sh.</p>'.iptm_view_link('update','Aggiornamenti'). ' '.iptm_view_link('history','Storico e ripristino');iptm_view_end();
+    iptm_view_start('Limiti della simulazione','IPv4 e IPv6 hanno bozze distinte. Le policy MAC richiedono controllo della topologia. I set IP, il routing, i moduli dinamici e i servizi esterni possono modificare il risultato osservato.');
+    echo '<p>Un test positivo non garantisce la raggiungibilità da tutte le reti. Mantieni sempre un percorso di recupero indipendente.</p>';iptm_view_end();
 }
+
 
 
 /** IPTM 5.30.9: one-click offline rules.v4 audit and in-memory hardening. */

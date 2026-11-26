@@ -15,8 +15,8 @@ function chart_donut_slice(float $cx, float $cy, float $r, float $rw, float $sta
 function iptm_stat_rule_label(string $rule, string $fallback=''): string {
     if ($rule==='') return $fallback!==''?$fallback:'Regola firewall';
     preg_match('/(?:^|\s)-j\s+([A-Z][A-Z0-9_-]*)/',$rule,$jump);
-    preg_match('/(?:^|\s)-A\s+([A-Z][A-Z0-9_-]*)/',$rule,$chain);
-    preg_match('/(?:^|\s)-p\s+(tcp|udp|icmp)/i',$rule,$proto);
+    preg_match('/(?:^|\s)-A\s+([A-Za-z0-9_][A-Za-z0-9_.-]*)(?:\s|$)/',$rule,$chain);
+    preg_match('/(?:^|\s)-p\s+(ipv6-icmp|icmpv6|tcp|udp|icmp)(?:\s|$)/i',$rule,$proto);
     preg_match('/--dport(?:s)?\s+([0-9,:-]+)/',$rule,$ports);
     $names=['DROP'=>'Bloccati','REJECT'=>'Rifiutati','ACCEPT'=>'Consentiti','LOG'=>'Registrati','DNAT'=>'Inoltrati','MASQUERADE'=>'NAT in uscita'];
     $act=$names[$jump[1]??'']??'Regola personalizzata';

@@ -1,7 +1,10 @@
 /* IPTM 4.2: shared chart interactions. SVG and data table render on server without JS. */
 (() => {
  'use strict';
- const encode = value => '"' + String(value).replace(/"/g, '""') + '"';
+ const encode = value => {
+   let s=String(value); if (/^[\s\uFEFF]*[=+@-]/.test(s) && !/^-?\d+(?:[.,]\d+)?$/.test(s)) s="'"+s;
+   return '"'+s.replace(/"/g,'""')+'"';
+ };
  async function copyData(button) {
    const chart = button.closest('.iptm-visual');
    if (!chart) return;
@@ -16,7 +19,7 @@
      else {
        const temporary = document.createElement('textarea');
        temporary.value = csv;temporary.style.position = 'fixed'; temporary.style.left = '-9999px';
-       document.body.append(temporary);temporary.select();ok = document.execCommand('copy');temporary.remove();
+       document.body.append(temporary);try{temporary.select();ok=document.execCommand('copy');}finally{temporary.remove();}
      }
    } catch {ok = false;}
    const feedback = chart.querySelector('.iptm-chart-feedback');

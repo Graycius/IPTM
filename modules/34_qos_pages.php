@@ -15,7 +15,7 @@ function pg_sqm() {
     if(($measurement['state']??'')==='completed' && ($measurement['interface']??'')===($calibration['last_valid']['interface']??$measurement['interface']??null) &&
         is_array($measurement['proposal']??null) && count($measurement['proposal'])===2)
         $best=(array)$measurement['proposal'];
-    $profile=(string)($_SESSION['iptm_qos_last_wan']??$q['interface']??$state['interface']??$allSettings['setup']['wan_if']??'');
+    $profile='';foreach([$_SESSION['iptm_qos_last_wan']??null,$q['interface']??null,$state['interface']??null,$allSettings['wan_if']??null,$allSettings['setup']['wan_if']??null] as $candidate){if(is_string($candidate)&&preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$/D',$candidate)){$profile=$candidate;break;}}
     if(($calibration['last_valid']['interface']??null)!==$profile)$best=[];
     $audit=null;
     if(preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$/D',$profile)){

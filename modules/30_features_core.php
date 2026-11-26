@@ -17,7 +17,8 @@ function iptm_iot_policy_short_labels(): array {
 /** Filtering directions are stored in the old in/out/both format. */
 function iptm_list_direction(mixed $selection): string {
     if (is_string($selection) && in_array($selection,['in','out','both'],true)) return $selection;
-    if (!is_array($selection) || count($selection)>2 || count(array_diff($selection,['in','out']))>0) return 'in';
+    if (!is_array($selection) || count($selection)>2) return 'in';
+    foreach ($selection as $dir) if (!is_string($dir) || !in_array($dir,['in','out'],true)) return 'in';
     $in=in_array('in',$selection,true); $out=in_array('out',$selection,true);
     return $in && $out?'both':($out?'out':'in');
 }
@@ -35,6 +36,7 @@ function iptm_v4_to_v6_preview(string $text, string $mapping): array {
                (!ctype_digit($pieces[1]) || (int)$pieces[1]>$maximum)))
                throw new InvalidArgumentException('Prefisso IP non valido: '.$subnet);
         }
+        if (isset($map[$x[1]]) && $map[$x[1]] !== $x[2]) throw new InvalidArgumentException('Mapping IPv4 duplicato con destinazioni differenti: '.$x[1]);
         $map[$x[1]]=$x[2];
     }
     $rules=[];$skipped=[];$table='filter';$chains=[];$lines=preg_split('/\R/',$text);
@@ -55,7 +57,7 @@ function iptm_v4_to_v6_preview(string $text, string $mapping): array {
         $cmd=$r;
         $bad='';
         if (preg_match('/(?:-m (?:mac|recent|iprange|addrtype)|-j (?:DNAT|SNAT|MASQUERADE|REDIRECT|CT|MARK)|--(?:tcp-flags|icmp-type|reject-with|set-mark|match-set|to-destination|to-source)|\b(?:0x[0-9a-f]+)\b)/i',$cmd))$bad='estensione IPv4 o target non traslabile in sicurezza';
-        if (preg_match('/(?:^|\s)(?:-p|--protocol)\s+icmp(?:\s|$)/',$cmd))$bad='ICMPv4 e ICMPv6 hanno tipi diversi';
+        if (preg_match('/(?:^|\s)(?:-p|--protocol)\s+(?:icmp|1)(?:\s|$)/',$cmd))$bad='ICMPv4 e ICMPv6 hanno tipi diversi';
         if (preg_match('/\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:\/[0-9]{1,2})?\b/',$cmd)) {
             $cmd=preg_replace_callback('/(?<![A-Za-z0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:\/[0-9]{1,2})?/',function($m)use($map,&$bad){
                if(!isset($map[$m[0]])) {$bad='Manca mapping IPv4→IPv6 per '.$m[0];return $m[0];}
@@ -66,7 +68,12 @@ function iptm_v4_to_v6_preview(string $text, string $mapping): array {
             $bad='Indirizzo IPv4 residuo: mapping non completo';
         // A strict allowlist: no bare extensions, shell substitutions or unconstrained tokens.
         if(!preg_match('/^[A-Za-z0-9 _.:\/!,-]+$/D',$cmd))$bad='caratteri o opzioni non supportate';
-        if(preg_match('/(?:^|\s)-(?:m|j)\s+([^\s]+)/',$cmd,$test) && !in_array($test[1],['ACCEPT','DROP','REJECT','RETURN','LOG','conntrack','multiport','limit','comment'],true))$bad='modulo/target non autorizzato';
+        if (preg_match_all('/(?:^|\s)(-m|--match|-j|--jump|-g|--goto)\s+([^\s]+)/', $cmd, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $allowed = in_array($match[1], ['-m','--match'], true) ? ['conntrack','multiport','limit','comment','tcp','udp'] : ['ACCEPT','DROP','REJECT','RETURN','LOG'];
+                if (!in_array($match[2], $allowed, true) || in_array($match[1], ['-g','--goto'], true)) $bad='modulo/target non autorizzato';
+            }
+        }
         if($bad!==''){$skipped[]=$r.' — '.$bad;continue;}
         $rules[]=$cmd;
     }

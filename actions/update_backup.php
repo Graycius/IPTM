@@ -1,10 +1,53 @@
 <?php
 /* IPTM action domain: update_backup. Inherits the authenticated controller scope. */
 switch ($a) {
+case 'release_cleanup_run': {
+    $back='p=update';
+    if(($_SESSION['role']??'')!=='admin'||($_POST['release_cleanup_confirm']??'')!=='1'){flash('Conferma amministratore richiesta.','err');break;}
+    if (($_POST['release_cleanup_mode']??'')==='archive') {
+        $digest=$_POST['release_plan_sha256']??null;
+        if(!is_string($digest)||!preg_match('/^[a-f0-9]{64}$/D',$digest)){flash('Anteprima archivio non valida.','err');break;}
+        [$rc,$out,$err]=priv('release-cleanup',null,['archive-apply',$digest]);$r=$rc===0?json_decode($out,true):null;
+        if(is_array($r)){
+            $issues=(array)($r['errors']??[]);$m=count((array)($r['archived']??[]));
+            flash('Copie helper archiviate: '.$m.' · Protette: '.count((array)($r['deferred']??[])).($issues?' · '.implode('; ',$issues):' · Originali conservati nell’archivio root.'),$issues?'err':'ok');
+            audit('Bonifica copie helper: '.$m);
+        }else flash('Archiviazione non eseguita: '.herr($err?:$out),'err');
+        $back='p=update&release_force_preview=1';break;
+    }
+    if (($_POST['release_cleanup_mode']??'')==='migrate') {
+        $digest=$_POST['release_plan_sha256']??null;
+        if(!is_string($digest)||!preg_match('/^[a-f0-9]{64}$/D',$digest)){flash('Anteprima migrazione non valida.','err');break;}
+        [$rc,$out,$err]=priv('release-cleanup',null,['migrate-apply',$digest]);$r=$rc===0?json_decode($out,true):null;
+        if(is_array($r)){
+            $m=count((array)($r['migrated']??[]));$d=count((array)($r['deferred']??[]));$issues=(array)($r['errors']??[]);
+            flash('Unità migrate: '.$m.' · Unità preservate: '.$d.($issues?' · '.implode('; ',$issues):' · Nessun servizio riavviato.'),$issues?'err':'ok');
+            audit('Migrazione riferimenti release: '.$m);
+        }else flash('Migrazione non eseguita: '.herr($err?:$out),'err');
+        $back='p=update&release_force_preview=1';break;
+    }
+    if (($_POST['release_cleanup_mode']??'')==='selected') {
+        $versions=$_POST['release_versions']??null;$digest=$_POST['release_plan_sha256']??null;
+        if(!is_array($versions)||!array_is_list($versions)||count($versions)<1||count($versions)>100||!is_string($digest)||!preg_match('/^[a-f0-9]{64}$/D',$digest)) {flash('Selezione o anteprima non valida.','err');break;}
+        foreach($versions as $v)if(!is_string($v)||!preg_match('/^[0-9]+(?:\.[0-9]+){1,3}$/D',$v)){flash('Versione non valida.','err');break 2;}
+        if(count(array_unique($versions))!==count($versions)){flash('Versioni duplicate.','err');break;}
+        $args=array_merge(['select-apply',$digest],$versions);
+    }else{$args=['apply'];}
+    [$rc,$out,$err]=priv('release-cleanup',null,$args);$r=$rc===0?json_decode($out,true):null;
+    if(is_array($r)){
+        $removed=count((array)($r['deleted']??[]));$issues=array_merge((array)($r['errors']??[]),empty($r['reason'])?[]:[(string)$r['reason']]);
+        foreach((array)($r['quarantined']??[]) as $q)$issues[]='Rimozione interrotta, residuo protetto: '.$q;
+        flash('Release rimosse: '.$removed.($issues?' · '.implode('; ',$issues):' · configurazioni e archivi di ripristino conservati.'),$issues?'err':'ok');
+        audit('Pulizia directory release: '.$removed);
+    }else flash('Pulizia non eseguita: '.herr($err?:$out),'err');
+    break;
+}
 case 'upgrade_cleanup_run': {
     $back='p=update';
     if (($_SESSION['role'] ?? '') !== 'admin') { flash('Solo amministratori.', 'err'); break; }
-    [$code, $out, $err] = priv('upgrade-cleanup', null, ['apply']);
+    $expected=$_POST['cleanup_sha256']??null;
+    if (!is_string($expected)||!preg_match('/^[a-f0-9]{64}$/D',$expected)||($_POST['cleanup_confirm']??null)!=='1') {flash('Calcola e conferma prima l’anteprima di bonifica.','err');break;}
+    [$code, $out, $err] = priv('upgrade-cleanup', null, ['retire',$expected]);
     $result = $code === 0 ? json_decode($out, true) : null;
     if ($code === 0 && is_array($result) && !empty($result['ok'])) {
         flash('Pulizia verificata: '.count((array)($result['retired']??[])).' unità ritirate, '.count((array)($result['archived']??[])).' copie obsolete archiviate; componenti operativi preservati.', 'ok');
@@ -15,19 +58,18 @@ case 'upgrade_cleanup_run': {
 case 'retention_save': {
     $back='p=retention';
     if (($_SESSION['role']??'')!=='admin') { flash('Solo amministratori.', 'err'); break; }
-    $fields=['backup_days'=>[7,730], 'backup_keep'=>[3,100], 'report_days'=>[7,365],
-             'report_keep'=>[3,100], 'stats_days'=>[14,365],
-             'max_backup_mib'=>[128,65536], 'log_copies'=>[3,90]];
+    $fields=iptm_retention_fields();
     $values=[];$valid=true;
-    foreach ($fields as $key=>[$min,$max]) {
-        $value=filter_var($_POST[$key]??null,FILTER_VALIDATE_INT);
+    foreach ($fields as $key=>[$label,$min,$max]) {
+        $value=iptm_retention_value($_POST[$key]??null);
         if ($value===false || $value<$min || $value>$max) {$valid=false;break;}
         $values[$key]=(int)$value;
     }
     if (!$valid) { flash('Valori di conservazione non validi.', 'err'); break; }
     [$rc,$out,$err]=priv('retention',json_encode($values,JSON_THROW_ON_ERROR),['configure']);
-    flash($rc===0?'Politica di rotazione salvata.':'Salvataggio non riuscito: '.herr($out.$err), $rc===0?'ok':'err');
-    if ($rc===0) audit('rotazione backup/log: politica aggiornata');
+    $response=json_decode($out,true);$saved=$rc===0&&($response['ok']??false)===true;
+    flash($saved?'Politica di rotazione salvata.':'Salvataggio non riuscito: '.herr($out.$err), $saved?'ok':'err');
+    if ($saved) audit('rotazione backup/log: politica aggiornata');
     break;
 }
 case 'retention_run': {
@@ -88,28 +130,21 @@ case 'policy_export': {
                 flash('Seleziona un file JSON IPTM valido (max 5 MiB).','err'); break;
             }
             $raw=file_get_contents($f['tmp_name']);
+            $importLock=@fopen(DATA_DIR.'/apply.lock','c');
+            if(!$importLock || !@flock($importLock,LOCK_EX|LOCK_NB)) {if(is_resource($importLock))fclose($importLock);flash('Altra transazione in corso.','err');break;}
             try {
                 $plan=iptm_import_plan((string)$raw);
-                // Validate iptables syntax before any persistent write; do not touch the running firewall.
-                [$tc,$to,$te]=priv('test',$plan['draft']);
-                if ($tc!==0) { flash('Regole incompatibili: importazione annullata. '.herr($to.$te),'err'); break; }
-                settings_snapshot('bundle-import');
-                $prev=get_draft(); $old=S_get();
-                S_put($plan['settings']);
-                if (!put_draft($plan['draft'])) {
-                    $GLOBALS['_Sc']=null; S_put($old); put_draft($prev);
-                    flash('Importazione bozza fallita: ripristino delle impostazioni tentato.','err'); break;
-                }
+                iptm_stage_configuration($plan['settings'],$plan['draft'],$plan['draft6']??null);
                 audit('importazione profilo portabile IPTM: solo bozza');
                 flash('Profilo importato nella bozza: rimossi ' . (int)($plan['removed_comments']??0) . ' commenti del vecchio rules.v4 (incluse regole disattivate). Regole attive e marcatori IPTM preservati. Nessuna regola live modificata. Verifica prima in Applica.');
                 $back='p=apply';
-            } catch (Throwable $e) { flash('Bundle rifiutato: '.substr($e->getMessage(),0,250),'err'); }
+            } catch (Throwable $e) { flash('Bundle rifiutato: '.substr($e->getMessage(),0,500),'err'); } finally {iptm_release_apply_lock($importLock);}
             break;
         }
         
         case 'release_rollback': {
             $ver = trim((string)($_POST['target_version'] ?? ''));
-            if (!preg_match('/^\d+(?:\.\d+){1,3}$/', $ver)) {
+            if (!preg_match('/^\d+(?:\.\d+){1,3}$/D', $ver)) {
                 flash('Versione non valida.', 'err');
                 $back = 'p=update';
                 break;
@@ -246,7 +281,26 @@ case 'policy_export': {
             flash('Backup automatici eliminati: '.$deleted.'; conservati/non idonei: '.$skipped.'. Gli snapshot di emergenza, i backup etichettati e i 10 più recenti non sono stati toccati.');
             break;
         }
-        case 'restore_backup':
-            $n = (string)($_POST['name'] ?? ''); if (preg_match('/^rules\.v[46]\.\d{8}-\d{6}$/', $n) && is_file(DATA_DIR . '/backups/' . $n)) { ($n[7] === '6' ? 'v6_put' : 'put_draft')((string)file_get_contents(DATA_DIR . '/backups/' . $n)); flash('Backup caricato nella bozza (non ancora applicato).'); } else flash('Backup non trovato.', 'err'); break;
+        case 'restore_backup': {
+            $name=$_POST['name']??null;
+            if(!is_string($name)){flash('Nome backup non valido.','err');break;}
+            $lock=@fopen(DATA_DIR.'/apply.lock','c');
+            if(!$lock||!@flock($lock,LOCK_EX|LOCK_NB)){if(is_resource($lock))fclose($lock);flash('Altra transazione in corso.','err');break;}
+            try {
+                if(is_file(DATA_DIR.'/pending.json'))throw new RuntimeException('Prova firewall pendente.');
+                $text=iptm_rules_backup_read($name);$v6=$name[7]==='6';
+                [$rc,$out,$err]=priv($v6?'test6':'test',$text);
+                if($rc!==0)throw new RuntimeException('Test regole fallito: '.herr($out.$err));
+                $seen=$v6?v6_expected():($GLOBALS['_draft_read_sha']??null);
+                $old=$v6?v6_get():get_draft();
+                if(!is_string($seen)||!hash_equals($seen,hash('sha256',$old)))throw new RuntimeException('Bozza cambiata o revisione assente. Ricarica la pagina Storico.');
+                $backup=DATA_DIR.'/backups/rules.v'.($v6?'6':'4').'.'.gmdate('Ymd-His').'.'.bin2hex(random_bytes(4));
+                if(!atomic_data_write($backup,$old,0600))throw new RuntimeException('Backup della bozza corrente non riuscito.');
+                if(!($v6?v6_put($text):put_draft($text)))throw new RuntimeException('Scrittura bozza fallita.');
+                flash('Backup caricato nella bozza, non applicato. Le impostazioni possono richiedere riallineamento.');
+            }catch(Throwable $e){flash($e->getMessage(),'err');}finally{iptm_release_apply_lock($lock);}
+            break;
+        }
+
         
 }

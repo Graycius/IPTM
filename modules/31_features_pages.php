@@ -1,50 +1,51 @@
 <?php
 function pg_v6convert(): void {
     $result=$_SESSION['v6_convert']??null;
-    echo '<div class=hero><h2>Convertitore IPv4 → IPv6</h2><p>Prepara soltanto un’anteprima. Gli indirizzi IPv4 non hanno equivalenti IPv6 automatici: indica le corrispondenze, controlla le regole scartate e valida manualmente con ip6tables-restore.</p></div>';
-    echo '<div class=card><form method=post>'.fh('p=v6convert').'<input type=hidden name=action value=ipv4_convert_preview>';
-    echo '<label class=fl>Regole IPv4 da analizzare<textarea name=source_v4 rows=10 maxlength=131072 placeholder="*filter&#10;:INPUT ACCEPT [0:0]&#10;-A INPUT -p tcp --dport 22 -j ACCEPT&#10;COMMIT"></textarea></label>';
-    echo '<label class=fl>Mapping indirizzi (una riga IPv4 = IPv6 per ciascuna rete)<textarea name=address_map rows=4 maxlength=8192 placeholder="192.168.1.0/24 = fd00:1::/64"></textarea></label>';
-    echo '<p class=mut>Non converte automaticamente NAT IPv4, moduli specifici IPv4, ICMPv4 e target non supportati. Non deduce l’IPv6 dei dispositivi. Non tocca il firewall.</p><button class=g>Genera anteprima</button></form></div>';
+    iptm_view_start('Prepara una conversione','Indica le corrispondenze IPv4/IPv6. NAT IPv4, ICMPv4, moduli e target incompatibili non vengono convertiti automaticamente. Nessuna modifica live.');
+    $admin=($_SESSION['role']??'viewer')==='admin';
+    if($admin)iptm_view_form('v6convert','ipv4_convert_preview');else echo '<fieldset disabled><legend>Anteprima disponibile agli amministratori</legend>';
+    echo '<label for="iptm-v4-source">Regole IPv4</label><textarea id="iptm-v4-source" name="source_v4" rows="10" maxlength="131072" placeholder="*filter&#10;:INPUT ACCEPT [0:0]&#10;-A INPUT -p tcp --dport 22 -j ACCEPT&#10;COMMIT"></textarea><label for="iptm-v6-map">Mappatura indirizzi (una rete per riga)</label><textarea id="iptm-v6-map" name="address_map" rows="4" maxlength="8192" placeholder="192.168.1.0/24 = fd00:1::/64"></textarea>';
+    if($admin)iptm_view_submit('Genera anteprima');else echo '</fieldset>';iptm_view_end();
     if(!is_array($result))return;
-    echo '<div class=card><h3>Risultato: '.(int)$result['converted'].' regole convertite, '.count($result['skipped']).' scartate</h3>';
-    if($result['skipped']){echo '<div class="msg warn"><b>Conversione parziale: non applicare senza revisione.</b></div><details open><summary>Regole da convertire manualmente</summary><pre>'.h(implode("\n",$result['skipped'])).'</pre></details>';}
-    echo '<label class=fl>Anteprima ip6tables-restore<textarea rows=12 readonly>'.h($result['text']).'</textarea></label><p class=mut>Per applicare, verifica nella pagina IPv6; non è prevista una conversione diretta in produzione.</p></div>';
+    $skipped=array_filter((array)($result['skipped']??[]),'is_string');
+    iptm_view_start('Esito della conversione');
+    echo '<p>'.(int)($result['converted']??0).' regole convertite · '.count($skipped).' scartate.</p>';
+    if($skipped) echo '<p class="msg warn">Conversione parziale: non applicare senza revisione.</p><details open><summary>Regole scartate</summary><pre>'.iptm_view_text(implode("\n",$skipped),'').'</pre></details>';
+    echo '<label for="iptm-v6-result">Anteprima ip6tables-restore</label><textarea id="iptm-v6-result" rows="12" readonly>'.iptm_view_text($result['text']??'','').'</textarea><p>Controlla la sintassi e le regole scartate prima di usare l’editor IPv6.</p>'.iptm_view_link('v6','Apri IPv6');iptm_view_end();
 }
 
 function pg_unbound_hardening(): void {
-    $admin=($_SESSION['role']??'viewer')==='admin';
-    echo '<div class=hero><div><h2>Hardening Unbound</h2><p>Protegge la riservatezza delle richieste DNS ricorsive. Non modifica le porte, gli upstream o Pi-hole. Salva un backup e verifica la sintassi prima del reload.</p></div></div>';
-    echo '<div class=card><h3>Scegli un profilo</h3><p><b>Bilanciato:</b> minimizzazione QNAME, DNSSEC e privacy con compatibilità elevata. <b>Restrittivo:</b> minimizzazione rigorosa, può interrompere alcuni domini. <b>Compatibile:</b> evita opzioni che possono causare incompatibilità.</p>';
-    echo '<form method=post>'.fh('p=unbound').'<input type=hidden name=action value=dns_unbound_harden>';
-    echo '<label class=fl>Profilo Unbound<select name=unbound_profile><option value=balanced>Bilanciato (consigliato)</option><option value=strict>Restrittivo (verifica DNS prima di confermare)</option><option value=compatible>Compatibilità</option></select></label>';
-    echo '<p class=mut>Il controllo esegue unbound-checkconf e, se il servizio è attivo, prova a ricaricarlo. Una verifica fallita tenta il rollback. Le modifiche non sovrascrivono configurazioni Unbound create da altri strumenti.</p>';
-    echo '<button class=g '.($admin?'':'disabled').'>Verifica e applica hardening</button></form></div>';
-    echo '<div class=card><h3>Parametri gestiti</h3><p>Nasconde identità e versione del resolver, attiva harden-glue e harden-dnssec-stripped, minimizza i nomi interrogati, riduce le risposte e disattiva log-queries/log-replies. DNSSEC richiede un trust anchor valido, da verificare separatamente.</p></div>';
+    iptm_view_start('Profili Unbound','Protegge la privacy del resolver senza cambiare porte, upstream o Pi-hole. Il backend verifica la sintassi, salva un backup e tenta il rollback in caso di errore.');
+    iptm_view_table(['Profilo','Comportamento'],[['Bilanciato','Minimizzazione QNAME e DNSSEC con compatibilità elevata'],['Restrittivo','Minimizzazione rigorosa; possibili domini incompatibili'],['Compatibile','Evita impostazioni restrittive']],'Confronto dei profili');
+    if(($_SESSION['role']??'viewer')==='admin'){
+        iptm_view_form('unbound','dns_unbound_harden');
+        echo '<label for="iptm-unbound-profile">Profilo da applicare</label><select id="iptm-unbound-profile" name="unbound_profile"><option value="balanced">Bilanciato</option><option value="strict">Restrittivo</option><option value="compatible">Compatibile</option></select>';
+        iptm_view_submit('Verifica e applica hardening');
+    } else echo '<p class="mut">Modifiche riservate agli amministratori.</p>';
+    iptm_view_end();iptm_view_start('Parametri gestiti','Identità/versione nascoste, harden-glue, harden-dnssec-stripped, QNAME minimization, riduzione risposte e disattivazione log query/risposte. DNSSEC richiede un trust anchor valido.');
+    echo iptm_view_link('dnsaudit','Verifica DNS e privacy');iptm_view_end();
 }
 
-/** RethinkDNS-inspired LAN client flow visibility, no app attribution. */
 function pg_device_insights(): void {
-    echo '<div class=hero><h2>Attività dispositivi · connessioni</h2><p>Come il monitor di rete RethinkDNS, ma per i client visti dal router: panoramica delle connessioni tracciate, senza leggere payload o attribuire traffico alle app Android.</p></div>';
-    [$rc,$out,$err]=priv('device-insights');
-    $j=$rc===0?json_decode($out,true):null;
-    if(!is_array($j) || empty($j['ok'])) {echo '<div class="msg warn">Non è possibile leggere la tabella conntrack o i vicini IP. Verifica conntrack e ip neigh sul gateway. Nessun dato inventato.</div>';return;}
-    echo '<div class=card><h3>Connessioni tracciate</h3><p class=mut>Origine dati: '.h($j['source']??'').'; dispositivi riconosciuti: '.(int)($j['neighbours']??0).'; flussi associati: '.(int)($j['connections']??0).'.'.(!empty($j['partial'])?' Campione parziale: lettura limitata a 1 MB.':'').'</p>';
-    echo '<table><thead><tr><th>Client IPv4</th><th>MAC</th><th>Flussi</th><th>TCP/UDP</th><th>DNS/DoT/HTTPS</th></tr></thead><tbody>';
-    foreach(array_slice($j['devices']??[],0,40) as $d) {
-      if(!is_array($d))continue;
-      echo '<tr><td>'.iptm_ip_html((string)($d['ip']??'')).'</td><td>'.h((string)($d['mac']??'')).'</td><td>'.(int)($d['connections']??0).'</td><td>'.(int)($d['tcp']??0).'/'.(int)($d['udp']??0).'</td><td>'.(int)($d['dns']??0).'/'.(int)($d['dot']??0).'/'.(int)($d['https']??0).'</td></tr>';
-    }
-    echo '</tbody></table><p class=mut>Questi numeri descrivono connessioni, non byte, richieste DNS o applicazioni. Il traffico fra client della stessa LAN che non attraversa DietPi potrebbe non essere visibile. I blocchi per MAC si impostano in Zone di rete.</p></div>';
+    $j=iptm_view_probe('device-insights');
+    iptm_view_start('Connessioni per dispositivo','Statistiche dei flussi visti dal router, non byte, richieste DNS o applicazioni. Il traffico L2 può non essere osservabile.');
+    if(empty($j['ok'])) {iptm_view_error('Conntrack o inventario IP non disponibile.');iptm_view_end();return;}
+    echo '<p>Fonte: '.iptm_view_text($j['source']??null).' · '.(int)($j['neighbours']??0).' dispositivi · '.(int)($j['connections']??0).' flussi.</p>';
+    if(!empty($j['partial'])) echo '<p class="msg warn">Campione parziale: lettura limitata a 1 MB.</p>';
+    $devices=iptm_view_rows($j['devices']??[]);
+    echo '<div class="iptm-table-scroll" role="region" aria-label="Connessioni tracciate" tabindex="0"><table><caption>Connessioni tracciate</caption><thead><tr><th scope="col">Client IPv4</th><th scope="col">MAC</th><th scope="col">Flussi</th><th scope="col">TCP/UDP/Altro</th><th scope="col">DNS/DoT/HTTPS</th></tr></thead><tbody>';
+    foreach(array_slice($devices,0,40) as $d)echo '<tr><td>'.iptm_ip_html((string)($d['ip']??'')).'</td><td>'.iptm_view_text($d['mac']??null).'</td><td>'.(int)($d['connections']??0).'</td><td>'.(int)($d['tcp']??0).'/'.(int)($d['udp']??0).'/'.(int)($d['other_protocol']??0).'</td><td>'.(int)($d['dns']??0).'/'.(int)($d['dot']??0).'/'.(int)($d['https']??0).'</td></tr>';
+    if(!$devices)echo '<tr><td colspan="5">Nessun dispositivo restituito.</td></tr>';echo '</tbody></table></div>';
+    if(count($devices)>40)echo '<p class="mut">Mostrati 40 dispositivi su '.count($devices).'.</p>';
+    echo iptm_view_link('zones','Gestisci le zone');iptm_view_end();
 }
 
-
-/** DNSCrypt pinned resolver failover and non-mutating TLS/DPI planning. */
 function pg_dns_guard(): void {
     $admin = ($_SESSION['role']??'viewer')==='admin';
     [$rc,$out,$err]=priv('dns-guard',null,['status']);
     $state=$rc===0?json_decode($out,true):null;
-    $state=is_array($state)?($state['result']??[]):[];
+    $guardVerified=is_array($state)&&!empty($state['ok'])&&is_array($state['result']??null);
+    $state=$guardVerified?$state['result']:[];
     $recommended=(array)($state['recommended_presets']??[]);
     if(!empty($state['obsolete_doh_option'])) {
         echo '<div class="card"><h3>DNSCrypt: parametro non compatibile con la versione installata</h3>';
@@ -61,12 +62,13 @@ function pg_dns_guard(): void {
     $ready=$_SESSION['dns_guard_ready']??null;
     $canApply=$admin && is_array($ready) && (int)($ready['until']??0)>=time();
     echo '<div class=hero><h2>DNS e TLS · resilienza e privacy</h2><p>Scegli la catena DNS, controlla i servizi e prepara le impostazioni con un unico wizard. Le funzioni avanzate sono raccolte sotto, senza modifiche automatiche.</p></div>';
+    if(!$guardVerified)echo '<p class="msg warn">Diagnostica avanzata non disponibile: '.h(substr(trim($err?:$out),0,350)).'. Nessun servizio viene considerato assente.</p>';
     pg_dns_tls_wizard($state);
     [$z2rc,$z2out]=priv('zapret2',null,['status']);
     $z2=$z2rc===0?json_decode($z2out,true):null;
     if(!is_array($z2) || empty($z2['ok']))$z2=[];
     $z2state=empty($z2['ok'])?'stato non verificabile (helper/permessi)':(!empty($z2['installed'])?'installato (IPTM)':(!empty($z2['external_detected'])?'rilevato esternamente (non gestito)':'non rilevato'));
-    echo '<details class="card iptm-dns-fold" id="dns-components"><summary><b>Dettagli componenti rilevati</b> · DNSCrypt, Suricata e Zapret</summary><div class="iptm-dns-fold-content"><p>DNSCrypt-proxy: <b>'.(!empty($state['dnscrypt_installed'])?'installato':'non rilevato').'</b> · Suricata: <b>'.(!empty($state['suricata_installed'])?'installato':'non rilevato').'</b> · Zapret2/nfqws2: <b>'.h($z2state).'</b> · Zapret classico/nfqws: <b>'.(!empty($state['anti_dpi_installed'])?'rilevato':'non rilevato').'</b></p>';
+    echo '<details class="card iptm-dns-fold" id="dns-components"><summary><b>Dettagli componenti rilevati</b> · DNSCrypt, Suricata e Zapret</summary><div class="iptm-dns-fold-content"><p>DNSCrypt-proxy: <b>'.(!$guardVerified?'non verificato':(!empty($state['dnscrypt_installed'])?'installato':'non rilevato')).'</b> · Suricata: <b>'.(!$guardVerified?'non verificato':(!empty($state['suricata_installed'])?'installato':'non rilevato')).'</b> · Zapret2/nfqws2: <b>'.h($z2state).'</b> · Zapret classico/nfqws: <b>'.(!$guardVerified?'non verificato':(!empty($state['anti_dpi_installed'])?'rilevato':'non rilevato')).'</b></p>';
     echo '<p class=mut>Stato IPTM: <b>'.(!empty($state['configured_by_iptm'])?'profilo DNSCrypt gestito presente':'profilo non ancora attivato').'</b>. Pi-hole, Unbound e le loro porte non vengono modificati. Per l’attivazione serve DNSCrypt-proxy installato e già attivo.</p>';
     echo '<p class=mut>Proposta: '.h($recommended['primary_name']??'Quad9').' + '.h($recommended['secondary_name']??'RESTENA').'. Fonte: <a href="'.h($recommended['source']??'https://github.com/DNSCrypt/dnscrypt-resolvers').'" target="_blank" rel="noopener noreferrer">catalogo ufficiale DNSCrypt</a>. I pin possono cambiare; la raggiungibilità sarà verificata durante l’applicazione. Le dichiarazioni di privacy dei fornitori non costituiscono certificazione no-log.</p></div></details>';
     // Root-owned independent systemd rollback, not a PHP-session countdown.

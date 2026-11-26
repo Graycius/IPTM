@@ -18,7 +18,7 @@ function pg_health(): void {
             $cc = $c6['counts'] ?? [];
             echo '<p role="status"><strong>Rilevati:</strong> '.(int)($cc['ok']??0).' OK · '.(int)($cc['warn']??0).' da verificare · '.(int)($cc['info']??0).' informativi.</p>';
             echo '<div class="iptm-table-scroll"><table><thead><tr><th scope="col">Area</th><th scope="col">Controllo</th><th scope="col">Stato</th><th scope="col">Esito</th></tr></thead><tbody>';
-            foreach (array_slice((array)($c6['checks']??[]),0,25) as $row) {
+            foreach (array_slice(iptm_view_rows($c6['checks']??[]),0,25) as $row) {
                 $st=(string)($row['status']??'info');
                 $label=$st==='ok'?'OK':($st==='warn'?'Verificare':'Informazione');
                 $style=$st==='ok'?'b-ACCEPT':($st==='warn'?'b-DROP':'b-jump');
@@ -32,12 +32,12 @@ function pg_health(): void {
     [$preRc, $preOut, $preErr] = priv('maintenance', null, ['preflight']);
     $pre = $preRc === 0 ? json_decode($preOut, true) : null;
     echo '<div class=card><h3>Preflight sistema (sola lettura)</h3>';
-    if (is_array($pre) && !empty($pre['checks'])) {
+    if (is_array($pre) && iptm_view_rows($pre['checks']??[])) {
         $counts = $pre['counts'] ?? [];
         echo '<p>OK: '.(int)($counts['ok']??0).' · Da verificare: '.(int)($counts['warn']??0)
             .' · Errori: '.(int)($counts['error']??0).'. Nessuna configurazione modificata.</p>';
         echo '<details><summary>Apri tutti i controlli e le spiegazioni</summary><table><tr><th>Controllo</th><th>Stato</th><th>Dettaglio / soluzione</th></tr>';
-        foreach (array_slice($pre['checks'], 0, 100) as $c) {
+        foreach (array_slice(iptm_view_rows($pre['checks']), 0, 100) as $c) {
             $lev = (string)($c['status'] ?? 'warn');
             echo '<tr><td>'.h($c['name']??'').'</td><td>'.h(strtoupper($lev)).'</td><td>'.h($c['detail']??'').'</td></tr>';
         }

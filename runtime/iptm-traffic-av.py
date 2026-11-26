@@ -33,7 +33,8 @@ def load_policy():
         return ([],[],set())
     try:
         policy=json.loads(path.read_text())
-        if policy.get('version')!=1 or policy.get('mode')!='explicit-local':return ([],[],set())
+        if not isinstance(policy,dict) or type(policy.get('version')) is not int or policy['version']!=1 or policy.get('mode')!='explicit-local':return ([],[],set())
+        if not all(isinstance(policy.get(k),list) for k in ('clients','hosts','ports')) or not all(type(x) is int for x in policy['ports']) or not all(isinstance(x,str) for x in policy['hosts']+policy['clients']):return ([],[],set())
         clients=[ipaddress.ip_address(x) for x in policy['clients']]
         if any(x.version!=4 or not x.is_private or x.is_loopback for x in clients):return ([],[],set())
         hosts=[str(x).lower() for x in policy['hosts']]
@@ -90,15 +91,16 @@ def scan_clamd(content: bytes, socket_path: str = CLAMD_SOCKET) -> tuple[str, st
                 if not ch:
                     break
                 ans.extend(ch)
-                if b'\0' in ch or b'\n' in ch:
+                if b'\0' in ch:
                     break
-            result = bytes(ans).split(b'\0')[0].decode('utf-8', 'replace').strip()
+            if b'\0' not in ans:return ('error','risposta antivirus incompleta')
+            result = bytes(ans).split(b'\0')[0].decode('utf-8', 'strict').strip()
         if result.endswith(' FOUND'):
             return ('infected', result[:300])
         if result.endswith(' OK'):
             return ('clean', 'OK')
         return ('error', 'risposta antivirus inattesa')
-    except (OSError, TimeoutError):
+    except (OSError, TimeoutError, UnicodeError):
         return ('error', 'servizio antivirus non disponibile')
 
 

@@ -33,7 +33,7 @@ function sem_model(array $M): array {   // forma normale: stesso comportamento =
     ksort($o); return $o;
 }
 function model_delta(string $a, string $b): array {   // [regole aggiunte, regole rimosse] fra due testi
-    $f = function ($t) { $c = []; foreach (sem_model(parse_rules($t)) as $tb => $x) foreach ($x['rules'] as $ch => $l) foreach ($l as $k) { $k2 = "$tb|$ch|$k"; $c[$k2] = ($c[$k2] ?? 0) + 1; } return $c; };
+    $f = function ($t) { $c = []; foreach (sem_model(parse_rules($t)) as $tb => $x) { foreach($x['pol'] as $ch=>$pol) if($pol!=='ACCEPT')$c["$tb|$ch|policy:$pol"]=1; foreach ($x['rules'] as $ch => $l) foreach ($l as $k) { $k2 = "$tb|$ch|$k"; $c[$k2] = ($c[$k2] ?? 0) + 1; } } return $c; };
     $A = $f($a); $B = $f($b); $ad = 0; $rm = 0; foreach ($B as $k => $n) $ad += max(0, $n - ($A[$k] ?? 0)); foreach ($A as $k => $n) $rm += max(0, $n - ($B[$k] ?? 0)); return [$ad, $rm];
 }
 function delta_msg(string $a, string $b): string { [$ad, $rm] = model_delta($a, $b); return ($ad || $rm) ? "ℹ Variazioni nella bozza: +$ad / −$rm regole." : 'ℹ Nessuna variazione effettiva delle regole.'; }
@@ -220,6 +220,11 @@ function apply_preflight(string $txt): array {   // controlli prima di caricare:
     $me = preg_replace('/^::ffff:/', '', $_SERVER['REMOTE_ADDR'] ?? ''); $srv = $_SERVER['SERVER_ADDR'] ?? ($loc[0] ?? ''); $port = (string)($_SERVER['SERVER_PORT'] ?? '80');
     if (v_ok('ip', $me) && $me !== '' && v_ok('ip', $srv) && $srv !== '' && !str_starts_with($me, '127.')) {
         $ok = false; $note = [];
+        $ingress=[];
+        foreach (sys_ifaces() as $iface=>$addresses) foreach ($addresses as $cidr)
+            if (iptm_scope_within_lan($me,$cidr)) $ingress[$iface]=true;
+        if (count($ingress)===1) $ifs=array_keys($ingress);
+        else $w[]='Ingresso della sessione web non univoco: mantenere il rollback automatico durante la prova.';
         foreach ($ifs ?: [''] as $i) { $r = trace_packet($M, ['flow' => 'local', 'in' => $i, 'out' => '', 'src' => $me, 'dst' => $srv, 'proto' => 'tcp', 'sport' => '50000', 'dport' => $port, 'state' => 'NEW', 'local_ips' => $loc, 'local_ip' => $srv]); if ($r['verdict'] === 'ACCEPT') { $ok = true; break; } $note[] = $r['where']; }
         if (!$ok) $block = "Con queste regole il tuo indirizzo ($me) non potrebbe più raggiungere questa pagina (porta $port): scarta " . ($note[0] ?? '') . ". Abilita «Anti-lockout» in Sicurezza o aggiungi una regola per la tua rete.";
     }

@@ -94,20 +94,19 @@ def secure_dir(p,create=False):
 
 def atomic(p,blob,mode):
     secure_dir(p.parent,True)
-    fd,name=tempfile.mkstemp(prefix='.iptm-',dir=p.parent)
-    try:
-        with os.fdopen(fd,'wb') as f:
-            os.fchmod(f.fileno(),mode);f.write(blob);f.flush();os.fsync(f.fileno())
-        if p.is_symlink():fail('File simbolico non autorizzato')
-        os.replace(name,p)
-    finally:
-        if os.path.exists(name):os.unlink(name)
+    from command_transport import durable_replace
+    durable_replace(p,blob,mode=mode)
+
 
 def read_config():
     if not secure_dir(CONF_DIR):return None
+    if CONF.is_symlink():fail('Config Zapret simbolica')
     if not CONF.exists():return None
     if CONF.is_symlink() or not CONF.is_file() or CONF.stat().st_uid!=0 or CONF.stat().st_mode&0o077:fail('Config Zapret non protetta')
-    data=json.loads(CONF.read_text())
+    with CONF.open('rb') as stream:
+        raw=stream.read(20*1024*1024+1)
+    if len(raw)>20*1024*1024:fail('Config Zapret troppo grande')
+    data=json.loads(raw)
     return validate(data)
 
 def validate(data):
@@ -256,7 +255,12 @@ def main():
         return install({'url':candidate['url'],'sha256':candidate['sha256'] or None}, allow_no_digest=True)
     return install(payload)
 
+def coordinated_main():
+    from command_transport import driver_admission
+    with driver_admission('zapret_manager',sys.argv[1:]):
+        return main()
+
 if __name__=='__main__':
-    try:print(json.dumps(main(),ensure_ascii=False))
+    try:print(json.dumps(coordinated_main(),ensure_ascii=False))
     except (ZapretError,OSError,ValueError,subprocess.TimeoutExpired,urllib.error.URLError,tarfile.TarError,KeyError,TypeError) as e:
         print(json.dumps({'ok':False,'error':str(e)},ensure_ascii=False));sys.exit(1)

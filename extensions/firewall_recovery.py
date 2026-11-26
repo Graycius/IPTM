@@ -5,6 +5,8 @@ Never mutates live iptables or IPSet. Caller must run iptables-restore --test
 on the exact returned bytes. Unknown dependencies remain fatal.
 """
 from __future__ import annotations
+
+from command_transport import capture, OutputLimitError
 import json,os,re,shlex,subprocess,sys
 
 MAX_BYTES=2097152
@@ -36,18 +38,20 @@ def normalized(snapshot: bytes, installed:set[str], fam:str):
             result.append(line);continue
         try:parts=shlex.split(stripped,comments=False,posix=True)
         except ValueError as exc:raise RecoveryError('Regola IPSet non interpretabile') from exc
-        targets=[];missing=[]
+        targets=[];missing=[];negated=False
         for i,w in enumerate(parts):
             if w=='--match-set':
                 if i+2>=len(parts):raise RecoveryError('Opzioni IPSet incomplete')
                 name=parts[i+1]
-                if name not in installed:missing.append(name)
-            if w=='-j' and i+1<len(parts):targets.append(parts[i+1])
+                if name not in installed:
+                    missing.append(name)
+                    if i and parts[i-1]=='!':negated=True
+            if w in ('-j','--jump','-g','--goto') and i+1<len(parts):targets.append(parts[i+1] if w in ('-j','--jump') else 'goto:'+parts[i+1])
         if not missing:
             result.append(line);continue
         # Do not weaken allow/jump/mangle/NAT rules. Only skip direct DROP to a
         # set which presently has no entries because the whole set disappeared.
-        if (table!='*filter' or targets!=['DROP'] or
+        if (table!='*filter' or targets!=['DROP'] or negated or
             not all(PATTERNS[fam].fullmatch(m) for m in missing)):
             raise RecoveryError('IPSet mancante non riconciliabile: '+', '.join(missing[:4]))
         removed.update(missing)
@@ -58,8 +62,7 @@ def normalized(snapshot: bytes, installed:set[str], fam:str):
 
 
 def inventory():
-    try:r=subprocess.run(['ipset','list','-name'],capture_output=True,text=True,
-                         timeout=8,stdin=subprocess.DEVNULL)
+    try:r=capture(['ipset','list','-name'],timeout=8,stdout_limit=700000)
     except (OSError,subprocess.TimeoutExpired) as exc:raise RecoveryError('Inventario IPSet indisponibile') from exc
     if r.returncode:raise RecoveryError('Inventario IPSet non verificabile')
     names=r.stdout.splitlines()

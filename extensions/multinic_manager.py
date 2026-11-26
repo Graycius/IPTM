@@ -7,6 +7,9 @@ those require a separately audited, watchdog-protected console transaction.
 """
 from __future__ import annotations
 
+import contextlib
+from command_transport import capture, OutputLimitError
+
 import fcntl
 import ipaddress
 import json
@@ -25,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fabric_manager import FabricError, validate_fabric, plan_fabric
 from traffic_fabric import propose as propose_traffic
 
-VERSION = '5.30.23'
+VERSION = '6.0.8'
 CONFIG_DIR = Path('/etc/iptables-manager')
 PROFILE_PATH = CONFIG_DIR / 'multinic-draft.json'
 IF_RX = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,14}$')
@@ -51,7 +54,7 @@ def command(argv: list[str], timeout: float = 2.0) -> str:
     if not shutil.which(argv[0]):
         return ''
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+        r = capture(argv, timeout=timeout, stdout_limit=65536)
         return r.stdout[:65536] if r.returncode == 0 else ''
     except (OSError, subprocess.TimeoutExpired):
         return ''
@@ -142,7 +145,7 @@ def inventory(*, sys_base: Path = Path('/sys/class/net'), data: dict | None = No
 
 
 def _integer(value: Any, label: str, lo: int, hi: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).isdigit():
+    if isinstance(value, bool) or not isinstance(value, (int, str)) or not re.fullmatch(r'[0-9]{1,12}',str(value)):
         raise ValidationError(f'{label}: numero intero richiesto')
     n = int(value)
     if not lo <= n <= hi:
@@ -152,6 +155,7 @@ def _integer(value: Any, label: str, lo: int, hi: int) -> int:
 
 def _ipv4_address(value: str, label: str) -> str:
     try:
+        if not isinstance(value,str):raise ValueError()
         addr = ipaddress.ip_address(value)
         if addr.version != 4 or addr.is_multicast or addr.is_unspecified or addr.is_loopback:
             raise ValueError()
@@ -369,58 +373,49 @@ def read_profile(path: Path = PROFILE_PATH) -> dict | None:
         return None
 
 
+def profile_for_mutation(path):
+    from command_transport import read_private_json
+    try: doc=read_private_json(path,owner=os.geteuid())
+    except (OSError,ValueError) as exc:raise ValidationError('Profilo esistente non leggibile o non protetto') from exc
+    if doc is not None and doc.get('schema')!=1:raise ValidationError('Schema profilo esistente non valido')
+    return doc
+
+
+@contextlib.contextmanager
+def profile_lock(path):
+    from command_transport import domain_lock
+    with domain_lock(path.parent/'.multinic.lock',owner=os.geteuid()):
+        yield
+
+
 def save_profile(profile: dict, path: Path = PROFILE_PATH) -> dict:
-    """Write a root-owned, versioned DRAFT atomically. No networking commands."""
-    if path.is_symlink():
-        raise ValidationError('Percorso bozza non sicuro')
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if (path.parent.is_symlink() or path.parent.stat().st_uid != os.geteuid()
-            or path.parent.stat().st_mode & 0o022):
-        raise ValidationError('Directory configurazione non sicura: permessi o proprietario errati')
-    lock_path = path.parent / '.multinic.lock'
-    with open(lock_path, 'a+', encoding='utf-8') as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        current = read_profile(path)
+    """Write a versioned DRAFT atomically. No networking commands."""
+    if path.is_symlink():raise ValidationError('Percorso bozza non sicuro')
+    path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    if path.parent.is_symlink() or path.parent.stat().st_uid!=os.geteuid() or path.parent.stat().st_mode&0o022:
+        raise ValidationError('Directory configurazione non sicura')
+    from command_transport import durable_replace
+    with profile_lock(path):
+        current=profile_for_mutation(path)
         if current:
-            backup = path.with_suffix('.previous.json')
-            if backup.is_symlink():
-                raise ValidationError('Percorso backup non sicuro')
-            tmp_prev = path.parent / ('.multinic-prev-' + str(os.getpid()))
-            try:
-                tmp_prev.write_text(json.dumps(current, ensure_ascii=False), encoding='utf-8')
-                os.chmod(tmp_prev, 0o600)
-                os.replace(tmp_prev, backup)
-            finally:
-                tmp_prev.unlink(missing_ok=True)
-        doc = {'schema': 1, 'version': VERSION, 'created': int(time.time()), 'profile': profile,
-               'status': 'draft', 'applied': False}
-        fd, temp = tempfile.mkstemp(prefix='.multinic-', dir=path.parent)
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as file:
-                json.dump(doc, file, ensure_ascii=False, sort_keys=True)
-                file.flush()
-                os.fsync(file.fileno())
-            os.chmod(temp, 0o600)
-            os.replace(temp, path)
-        finally:
-            if os.path.exists(temp):
-                os.unlink(temp)
+            durable_replace(path.with_suffix('.previous.json'),json.dumps(current,ensure_ascii=False,allow_nan=False).encode(),owner=os.geteuid())
+        doc={'schema':1,'version':VERSION,'created':int(time.time()),'profile':profile,'status':'draft','applied':False}
+        durable_replace(path,json.dumps(doc,ensure_ascii=False,sort_keys=True,allow_nan=False).encode(),owner=os.geteuid())
     return doc
 
 
 def clear_profile(path: Path = PROFILE_PATH) -> dict:
-    if path.is_symlink() or path.parent.is_symlink():
-        raise ValidationError('Percorso bozza non sicuro')
-    if not path.parent.is_dir():
-        return {'ok': True, 'cleared': True, 'applied': False}
-    if path.parent.stat().st_uid != os.geteuid() or path.parent.stat().st_mode & 0o022:
-        raise ValidationError('Directory configurazione non sicura')
-    with open(path.parent / '.multinic.lock', 'a+', encoding='utf-8') as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        path.unlink(missing_ok=True)
-    return {'ok': True, 'cleared': True, 'applied': False}
-
-
+    if path.is_symlink() or path.parent.is_symlink():raise ValidationError('Percorso bozza non sicuro')
+    if not path.parent.is_dir():return {'ok':True,'cleared':True,'applied':False}
+    if path.parent.stat().st_uid!=os.geteuid() or path.parent.stat().st_mode&0o022:raise ValidationError('Directory configurazione non sicura')
+    with profile_lock(path):
+        # Delete only a regular existing profile that passes the standard reader.
+        if profile_for_mutation(path) is not None:
+            path.unlink()
+            fd=os.open(path.parent,os.O_DIRECTORY|os.O_NOFOLLOW|os.O_RDONLY)
+            try:os.fsync(fd)
+            finally:os.close(fd)
+    return {'ok':True,'cleared':True,'applied':False}
 
 
 def legacy_wan_status() -> dict:
@@ -446,12 +441,10 @@ def retire_legacy_wan() -> dict:
     if not shutil.which('systemctl'):
         raise ValidationError('systemd non disponibile')
     unit = ['iptm-wanfo.timer', 'iptm-wanfo.service']
-    proc = subprocess.run(['systemctl', 'disable', '--now', *unit], timeout=20,
-                          capture_output=True, text=True, check=False)
+    proc = capture(['systemctl', 'disable', '--now', *unit], timeout=20, stdout_limit=1048576, stderr_limit=262144)
     if proc.returncode:
         # A system may not have these units; still stop timer if it exists.
-        retry = subprocess.run(['systemctl', 'disable', '--now', 'iptm-wanfo.timer'],
-                               timeout=20, capture_output=True, text=True, check=False)
+        retry = capture(['systemctl', 'disable', '--now', 'iptm-wanfo.timer'], timeout=20, stdout_limit=1048576, stderr_limit=262144)
         if retry.returncode and 'does not exist' not in (retry.stderr + proc.stderr):
             raise ValidationError('Impossibile disabilitare timer legacy: ' + retry.stderr[:200])
     return {'ok': True, 'legacy_retired': True, 'routes_modified': False,
@@ -487,9 +480,14 @@ def run_cli(argv: list[str], *, live: dict | None = None, path: Path = PROFILE_P
     return result
 
 
+def coordinated_main(args):
+    from command_transport import driver_admission
+    with driver_admission('multinic_manager',args):
+        return run_cli(args)
+
 if __name__ == '__main__':
     try:
-        print(json.dumps(run_cli(sys.argv[1:]), ensure_ascii=False, separators=(',', ':')))
+        print(json.dumps(coordinated_main(sys.argv[1:]), ensure_ascii=False, separators=(',', ':')))
     except (ValidationError, OSError) as exc:
         print(json.dumps({'ok': False, 'error': str(exc)}, ensure_ascii=False))
         sys.exit(2)

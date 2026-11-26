@@ -8,6 +8,8 @@ Encryption on the same host does not defend against root compromise.
 from __future__ import annotations
 import base64, fcntl, json, os, pathlib, secrets, shutil, subprocess, sys, tempfile
 
+from command_transport import capture
+
 STORE = pathlib.Path('/etc/iptables-manager-secrets')
 KEY = STORE/'storage.key'
 SECRET = STORE/'pihole-password.gpg'
@@ -21,7 +23,7 @@ def ensure_root():
 def safe_regular(p, mode_private=True):
     if p.is_symlink() or not p.is_file():raise SecretError('File segreto non regolare')
     st=p.stat()
-    if st.st_uid!=0 or (st.st_mode & (0o077 if mode_private else 0o022)):
+    if st.st_uid!=0 or st.st_nlink!=1 or (st.st_mode & (0o077 if mode_private else 0o022)):
         raise SecretError('Permessi file segreto non sicuri')
 
 def ensure_store(create=False):
@@ -54,7 +56,7 @@ def gpg_crypt(mode,blob):
         if mode=='encrypt':base+=['--cipher-algo','AES256','--symmetric','--output','-']
         elif mode=='decrypt':base+=['--decrypt','--output','-']
         else:raise SecretError('Operazione crittografica non valida')
-        proc=subprocess.run(base,input=blob,pass_fds=(fd,),stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=25)
+        proc=capture(base, timeout=25, input_data=blob, pass_fds=(fd,), text=False, stdout_limit=8192, stderr_limit=262144)
         if proc.returncode or len(proc.stdout)>8192:raise SecretError('Cifratura o decrittazione fallita')
         return proc.stdout
     finally:os.close(fd)
@@ -84,16 +86,8 @@ def write_password(pw):
         raise SecretError('Password Pi-hole non valida (8-256 caratteri, senza newline)')
     create_key()
     encrypted=gpg_crypt('encrypt',pw.encode('utf-8'))
-    tmpfd,tmp=tempfile.mkstemp(prefix='.pihole-',dir=STORE)
-    try:
-        with os.fdopen(tmpfd,'wb') as f:
-            os.fchmod(f.fileno(),0o600);f.write(encrypted);f.flush();os.fsync(f.fileno())
-        os.replace(tmp,SECRET)
-        dfd=os.open(STORE,os.O_RDONLY|os.O_DIRECTORY)
-        try:os.fsync(dfd)
-        finally:os.close(dfd)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    from command_transport import durable_replace
+    durable_replace(SECRET,encrypted)
     return {'ok':True,'stored':True}
 
 def run():
@@ -102,23 +96,28 @@ def run():
     if action=='status':return status()
     if action not in ('save','clear'):raise SecretError('Uso: save|clear|status')
     ensure_store(create=True)
-    fd=os.open(LOCK,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
-    try:
-        with os.fdopen(fd,'rb+') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX)
-            if action=='clear':
-                if SECRET.exists() or SECRET.is_symlink():safe_regular(SECRET);SECRET.unlink()
-                return {'ok':True,'stored':False}
-            raw=sys.stdin.buffer.read(2048)
-            if len(raw)>2047:raise SecretError('Input password eccessivo')
-            payload=json.loads(raw)
-            if not isinstance(payload,dict) or set(payload)!={'password'}:raise SecretError('Payload non valido')
-            return write_password(payload['password'])
-    finally:pass
+    from command_transport import domain_lock
+    with domain_lock(LOCK):
+        if action=='clear':
+            if SECRET.exists() or SECRET.is_symlink():
+                safe_regular(SECRET)
+                from command_transport import durable_unlink
+                durable_unlink(SECRET)
+            return {'ok':True,'stored':False}
+        raw=sys.stdin.buffer.read(2048)
+        if len(raw)>2047:raise SecretError('Input password eccessivo')
+        payload=json.loads(raw)
+        if not isinstance(payload,dict) or set(payload)!={'password'}:raise SecretError('Payload non valido')
+        return write_password(payload['password'])
+
+def coordinated_main():
+    from command_transport import driver_admission
+    with driver_admission('pihole_credentials',sys.argv[1:]):
+        return run()
 
 if __name__=='__main__':
     try:
-        print(json.dumps(run()))
+        print(json.dumps(coordinated_main()))
     except (SecretError,ValueError,OSError,subprocess.TimeoutExpired) as exc:
         # Never echo credential values or raw GPG process output.
         print(json.dumps({'ok':False,'error':str(exc)}));sys.exit(1)

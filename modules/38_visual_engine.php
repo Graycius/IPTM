@@ -3,7 +3,7 @@
  * No live probes, network requests, framework, or JavaScript needed to see data.
  */
 function iptm_visual_escape($value): string {
-    return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    return htmlspecialchars(is_scalar($value)?(string)$value:'—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 function iptm_visual_number(float $v): string {
     if (!is_finite($v)) return '—';
@@ -26,6 +26,7 @@ function iptm_visual_text_short(string $s, int $limit): string {
     return substr($s, 0, max(0, $limit - 3)) . '...';
 }
 function iptm_visual_rows(array $source, string $type, int $limit): array {
+    $limit=max(1,min(1000,$limit));
     $rows = [];
     foreach ($source as $r) {
         if (!is_array($r) || !isset($r['value']) || !is_numeric($r['value'])) continue;
@@ -33,7 +34,7 @@ function iptm_visual_rows(array $source, string $type, int $limit): array {
         if (!is_finite($n)) continue;
         if ($type === 'donut' || $type === 'hbar') { if ($n <= 0) continue; }
         else $n = max(0, $n);
-        $rows[] = ['label' => substr((string)($r['label'] ?? '—'), 0, 512), 'value' => $n, 'color' => $r['color'] ?? null];
+        $rows[] = ['label' => substr(is_scalar($r['label']??null)?(string)$r['label']:'—', 0, 512), 'value' => $n, 'color' => $r['color'] ?? null];
     }
     if ($type === 'line') return array_slice($rows, -$limit);
     return array_slice($rows, 0, $limit);

@@ -100,13 +100,33 @@ function iptm_recovery_prepare(string $snapshot, string $family): array {
     if($testRc!==0)return [1,'','Preflight delle vecchie regole fallito: '.herr($out.$testErr)];
     return [0,$prepared,$err];
 }
+
+function iptm_release_apply_lock($lock): void {
+    if (is_resource($lock)) {
+        @flock($lock, LOCK_UN);
+        @fclose($lock);
+    }
+}
+/** Strict form validation; missing field remains compatible with older clients. */
+function iptm_trial_seconds($raw = null): int {
+    if ($raw === null) return max(30, min(600, ROLLBACK_SECS));
+    if ((!is_int($raw) && !is_string($raw)) || !preg_match('/^[0-9]{1,3}$/D', (string)$raw) || (int)$raw < 30 || (int)$raw > 600)
+        throw new RuntimeException('Timeout non valido: indicare da 30 a 600 secondi. Nessuna regola applicata.');
+    return (int)$raw;
+}
+function iptm_trial_timeout_field(string $family): string {
+    $id = 'iptm-trial-secs-'.$family;
+    return '<label class="iptm-trial-timeout" for="'.$id.'">Tempo per confermare (secondi)<input id="'.$id.'" name="secs" type="number" min="30" max="600" step="1" value="'.iptm_trial_seconds().'" required></label>';
+}
 function do_apply(int $secs, string $fam = '4', bool $force = false, bool $confirmDnsGuardRemoval = false): string {
+    if (!in_array($fam,['4','6'],true)) return 'Famiglia firewall non valida.';
     $GLOBALS['apply_notes'] = [];
     $GLOBALS['_iptm_post_stage']='firewall:locking';
     // Serialize applies before reading pending/draft; competing POSTs must not race
     // while replacing the live kernel rules and sharing the rollback timer.
     $applyLock = @fopen(DATA_DIR . '/apply.lock', 'c');
     if (!$applyLock || !@flock($applyLock, LOCK_EX | LOCK_NB)) return 'Altra applicazione firewall in corso; riprova.';
+    try {
     $sx = $fam === '6' ? '6' : '';
     // A queued concurrent request can change draft.rules after the page was
     // loaded and before this apply lock was obtained. The expected SHA-256 is
@@ -125,11 +145,22 @@ function do_apply(int $secs, string $fam = '4', bool $force = false, bool $confi
     // IPv6 is enabled: there would be no IPv6 isolation rules in the draft.
     // This guard is mandatory, including with the 'force' checkbox.
     if ($fam === '4' && ($ipv6Risk = iptm_mac_ipv6_guard()) !== '') return $ipv6Risk;
-    $txt = $fam === '6' ? v6_get() : $onDiskDraft; // immutable snapshot already revision-checked
+    if ($fam === '6') {
+        $expected6 = $GLOBALS['_v6_read_sha'] ?? null;
+        $onDisk6 = v6_get();
+        if (!is_string($expected6) || !hash_equals($expected6,hash('sha256',$onDisk6)))
+            return 'La bozza IPv6 è cambiata o non è verificabile: applicazione annullata, ricarica.';
+    }
+    $txt = $fam === '6' ? $onDisk6 : $onDiskDraft; // immutable snapshot already revision-checked
     if ($fam === '4' && !$confirmDnsGuardRemoval) {
         try {$removed=iptm_dns_guard_losses(rules_live(),$txt);}
         catch(RuntimeException $ex){return 'Confronto protezioni DNS non disponibile: '.$ex->getMessage();}
         if($removed)return 'Protezione DNS/DoT su disco mancante dalla bozza: '.implode(', ',$removed).'. Ripristina in Setup oppure conferma espressamente la rimozione nella pagina Applica. Nessuna regola live modificata.';
+    }
+    if ($fam === '4') {
+        $cfg = S_get(); $cfgNotes = []; $safeCfg = iptm_safe_settings($cfg,$cfgNotes);
+        if (!empty($safeCfg['lockout_on']) && !empty($safeCfg['lan_nets']) && !iptm_management_nets($safeCfg))
+            return 'Rete amministrativa non univoca: impostare Reti amministrative in Sicurezza e rigenerare la bozza. Regole live invariate.';
     }
     if ($fam === '4' && ($bad = iptm_reject_unsafe_rules($txt)) !== '') return $bad;
     if ($fam === '4' && ($iotIssues = iptm_iot_rules_diagnose($txt)))
@@ -222,9 +253,11 @@ function do_apply(int $secs, string $fam = '4', bool $force = false, bool $confi
     // systemd-run leaves the administrator locked out without a rollback.
     if (!atomic_data_write($rb, $live, 0600) || !atomic_data_write($ap, $txt, 0600))
         return 'Impossibile salvare il rollback: nessuna regola caricata.';
+    $trialSettings = $fam === '4' ? @file_get_contents(DATA_DIR . '/settings.json') : false;
+    $trialSettingsHash = is_string($trialSettings) ? hash('sha256',$trialSettings) : '';
     $txid = bin2hex(random_bytes(16)); // identificativo monotematico per il timer indipendente
     $pendingData = json_encode(['until' => time() + $secs, 'secs' => $secs, 'fam' => $fam,
-                                'txid' => $txid, 'status' => 'pending']);
+                                'txid' => $txid, 'status' => 'pending', 'health_ok' => false, 'settings_hash' => $trialSettingsHash, 'rules_hash' => hash('sha256',$txt)]);
     if (!is_string($pendingData) || !atomic_data_write($pf, $pendingData, 0600))
         return 'Impossibile registrare il rollback automatico: nessuna regola caricata.';
     $GLOBALS['_iptm_post_stage']='firewall:watchdog';
@@ -258,21 +291,84 @@ function do_apply(int $secs, string $fam = '4', bool $force = false, bool $confi
         $GLOBALS['apply_notes'][] = ['err', 'POST-APPLY NON COMPLETATO: servizi e script devono essere verificati. Codice ' . $postCode . '. ' . herr($po . "\n" . $postErr)];
     elseif (trim($po) !== '') $GLOBALS['apply_notes'][] = ['ok', "Servizi post-applicazione:\n" . trim($po)];
     [$testCode, $st, $testErr] = priv('selftest');
-    $bad = array_values(array_filter(explode("\n", trim($st)), fn($l) => str_starts_with($l, 'FAIL')));
+    $bad = array_values(array_filter(explode("\n", trim($st)), fn($l) => str_starts_with(trim($l), 'FAIL')));
     if ($testCode !== 0 || $bad)
         $GLOBALS['apply_notes'][] = ['err', "Test GATEWAY incompleto:\n" . implode("\n", $bad) . ' ' . herr($testErr)];
     else
         $GLOBALS['apply_notes'][] = ['ok', 'Test GATEWAY completato.'];
-    // Applied only to the kernel. Keep the independent watchdog and pending
-    // transaction intact until an administrator verifies SSH/LAN and explicitly
-    // confirms through the dedicated, CSRF-protected UI action. Never silently
-    // write experimental rules to rules.v4 here.
-    $GLOBALS['apply_notes'][] = ['err', 'Regole in PROVA: verifica una nuova sessione SSH, accesso web, DNS e VPN, poi premi «Conferma e salva» entro la scadenza. Se non confermi, il watchdog ripristina le vecchie regole.'];
+    // A separate browser request must confirm a healthy trial. Never confirm
+    // under the apply lock or merely because a gateway probe succeeds.
+    if ($postCode !== 0 || str_contains($po, 'FAIL') || $testCode !== 0 || $bad)
+        return 'Test post-applicazione fallito: conferma bloccata, rollback automatico attivo.';
+    $record = json_decode($pendingData, true);
+    if (time() >= (int)$record['until']) return 'Prova scaduta: rollback automatico attivo.';
+    [$runtimeRc,$runtimeText,$runtimeErr]=priv('save'.$sx);
+    if($runtimeRc!==0 || !preg_match('/^\*filter\s*$/m',$runtimeText)) return 'Snapshot runtime dopo la prova non disponibile: watchdog attivo.';
+    $record['runtime_hash']=iptm_runtime_fingerprint($runtimeText);
+    $record['health_ok'] = true;
+    if (!atomic_data_write($pf, json_encode($record), 0600))
+        return 'Impossibile registrare esito dei test: rollback automatico attivo.';
+    $GLOBALS['apply_notes'][] = ['ok', 'Prova attiva: verifica SSH, DNS e LAN da un altro collegamento, poi conferma.'];
     return '';
+    } finally {
+        iptm_release_apply_lock($applyLock);
+    }
+}
+/** Fingerprint ordered iptables-save statements; ignore only comments/timestamps and counters. */
+function iptm_runtime_fingerprint(string $text): string {
+    $lines=[];
+    foreach(preg_split('/\r?\n/',$text) as $raw) {
+        $line=trim($raw); if($line==='' || str_starts_with($line,'#')) continue;
+        if(preg_match('/^:/',$line)) $line=preg_replace('/\[[0-9]+:[0-9]+\]$/','[0:0]',$line);
+        $line=preg_replace('/^\[[0-9]+:[0-9]+\]\s+/','',$line);
+        $lines[]=$line;
+    }
+    return hash('sha256',implode("\n",$lines));
+}
+/** Single staging path for portable import and wizard. Caller holds apply.lock. */
+/** Stage ordinary settings/restore through the same nonblocking transaction gate as the wizard. */
+function iptm_stage_settings(array $settings,string $draft4): void {
+    $lock=@fopen(DATA_DIR.'/apply.lock','c');
+    if(!$lock||!@flock($lock,LOCK_EX|LOCK_NB)){if(is_resource($lock))fclose($lock);throw new RuntimeException('Altra transazione in corso.');}
+    try {iptm_stage_configuration($settings,$draft4);} finally {iptm_release_apply_lock($lock);}
+}
+function iptm_stage_configuration(array $settings,string $draft4,?string $draft6=null): void {
+    if(is_file(DATA_DIR.'/pending.json'))throw new RuntimeException('Transazione firewall pendente.');
+    if(trim($draft4)==='')throw new RuntimeException('Bozza IPv4 vuota.');
+    foreach(['4'=>$draft4,'6'=>$draft6] as $family=>$draft){
+        if($draft===null||($family===6&&trim($draft)===''))continue;
+        [$rc,$out,$err]=priv($family===6?'test6':'test',$draft);
+        if($rc!==0)throw new RuntimeException('Test bozza IPv'.$family.' fallito: '.herr($out.$err));
+    }
+    $observed=$GLOBALS['_draft_read_sha']??null;
+    $has6=$draft6!==null&&trim($draft6)!=='';
+    $observed6=$has6?v6_expected():null;
+    $settingsObserved=$GLOBALS['_settings_read_sha']??null;
+    $old=S_get();$old4=get_draft();$old6=$has6?v6_get():null;
+    if(is_string($settingsObserved)&&isset($GLOBALS['_settings_read_sha'])&&!hash_equals($settingsObserved,$GLOBALS['_settings_read_sha']))throw new RuntimeException('Impostazioni modificate durante la preparazione.');
+    if($has6&&is_string($observed6)&&!hash_equals($observed6,hash('sha256',$old6)))throw new RuntimeException('Bozza IPv6 modificata durante la preparazione.');
+    if(is_string($observed)&&!hash_equals($observed,hash('sha256',$old4)))throw new RuntimeException('Bozza IPv4 modificata durante la preparazione.');
+    if(is_file(DATA_DIR.'/settings.json')&&settings_snapshot('stage-profile')===null)throw new RuntimeException('Backup impostazioni non riuscito.');
+    if(!atomic_data_write(DATA_DIR.'/backups/rules.v4.'.gmdate('Ymd-His').'.'.bin2hex(random_bytes(4)),$old4,0600))throw new RuntimeException('Backup bozza non riuscito.');
+    if($has6&&!atomic_data_write(DATA_DIR.'/backups/rules.v6.'.gmdate('Ymd-His').'.'.bin2hex(random_bytes(4)),$old6,0600))throw new RuntimeException('Backup bozza IPv6 non riuscito.');
+    $done=[];
+    try{
+        S_put($settings);$done[]='settings';
+        if(!put_draft($draft4))throw new RuntimeException('Scrittura bozza IPv4 fallita');$done[]='4';
+        if($draft6!==null&&trim($draft6)!==''){if(!v6_put($draft6))throw new RuntimeException('Scrittura bozza IPv6 fallita');$done[]='6';}
+    }catch(Throwable $failure){
+        $issues=[];foreach(array_reverse($done) as $part){try{
+            if($part==='settings')S_put($old);
+            elseif($part==='4'){if(!put_draft($old4))$issues[]='IPv4';}
+            elseif($part==='6'){if(!v6_put($old6, true))$issues[]='IPv6';}
+        }catch(Throwable $ignored){$issues[]=$part;}}
+        throw new RuntimeException($failure->getMessage().($issues?' — ripristino incompleto: '.implode(', ',$issues):' — scritture parziali compensate'));
+    }
 }
 function confirm_pending(): string {
     $applyLock = @fopen(DATA_DIR . '/apply.lock', 'c');
     if (!$applyLock || !@flock($applyLock, LOCK_EX | LOCK_NB)) return 'Applicazione firewall ancora in corso: attendi prima di confermare.';
+    try {
     $p = pending();
     if (!$p) return 'Nessuna applicazione in attesa (forse è già scaduta e annullata).';
     // A late confirmation can race the independent watchdog; never promote an
@@ -285,7 +381,8 @@ function confirm_pending(): string {
     $sx = $fam === '6' ? '6' : '';
     // A failed health check is not safe to confirm, even if the browser stayed
     // connected. Leave the independent rollback watchdog armed.
-    if (!empty(S_get()['continuity_priority'])) {
+    if (($p['health_ok'] ?? false) !== true) return 'Prova non validata: ripristina e ripeti i test.';
+    {
         [$healthCode, $healthOut, $healthErr] = priv('selftest');
         $failed = array_filter(explode("\n", trim((string)$healthOut)),
             fn($line) => str_starts_with(trim($line), 'FAIL'));
@@ -295,6 +392,11 @@ function confirm_pending(): string {
     }
     $txt = @file_get_contents(DATA_DIR . "/applied$sx.rules");
     if (!is_string($txt) || trim($txt) === '') return 'Snapshot delle regole applicate assente: watchdog ancora attivo.';
+    if (!is_string($p['rules_hash'] ?? null) || !preg_match('/^[a-f0-9]{64}$/D',$p['rules_hash']) || !hash_equals($p['rules_hash'],hash('sha256',$txt))) return 'Snapshot modificato durante la prova: conferma negata, watchdog attivo.';
+    [$runtimeCode,$runtimeRules,$runtimeErr]=priv('save'.$sx);
+    if($runtimeCode!==0 || trim((string)$runtimeRules)==='') return 'Runtime non verificabile: watchdog attivo. '.herr($runtimeErr);
+    if(!is_string($p['runtime_hash']??null) || !hash_equals($p['runtime_hash'],iptm_runtime_fingerprint($runtimeRules))) return 'Le regole runtime sono cambiate durante la prova o manca il nuovo snapshot: conferma negata; watchdog attivo.';
+    if (time() >= (int)$p['until']) return 'Prova scaduta durante i test: rollback attivo.';
     [$c, $e] = write_live($txt, $fam);
     if ($c) return 'Regole attive ma NON salvate su file; watchdog ancora attivo: ' . $e;
     [$cc, $co, $ce] = priv('rollback-cancel', null, isset($p['txid']) ? [(string)$p['txid']] : []);
@@ -323,14 +425,19 @@ function confirm_pending(): string {
         // between the last read and successful firewall confirmation.
         iptm_draft_remove_if_same($txt,'4');
         priv('ipset-persist');
-        @copy(DATA_DIR . '/settings.json', DATA_DIR . '/last-good.json');
-        @file_put_contents(DATA_DIR . '/last-good.time', (string)time());
+        $currentSettings = @file_get_contents(DATA_DIR . '/settings.json');
+        if (is_string($currentSettings) && !empty($p['settings_hash']) && hash_equals((string)$p['settings_hash'],hash('sha256',$currentSettings))) {
+            if (atomic_data_write(DATA_DIR . '/last-good.json',$currentSettings,0600))
+                atomic_data_write(DATA_DIR . '/last-good.time',(string)time(),0600);
+        }
     } else iptm_draft_remove_if_same($txt,'6');
     return '';
+    } finally { iptm_release_apply_lock($applyLock); }
 }
 function revert_pending(): string {
     $applyLock = @fopen(DATA_DIR . '/apply.lock', 'c');
     if (!$applyLock || !@flock($applyLock, LOCK_EX | LOCK_NB)) { return 'Applicazione firewall ancora in corso: riprova.'; }
+    try {
     $p = pending(); if (!$p) return 'Nessuna applicazione in attesa.';
     if (!empty($p['invalid'])) return 'Stato pendente danneggiato: usare il recupero da console, senza cancellare il file.';
     $sx = ($p['fam'] ?? '4') === '6' ? '6' : '';
@@ -354,8 +461,9 @@ function revert_pending(): string {
         return 'Regole ripristinate, ma pending.json non può essere chiuso: verificare i permessi da console.';
     priv('post');
     return '';
+    } finally { iptm_release_apply_lock($applyLock); }
 }
-function v6_def(): array { return ['on' => 0, 'mode' => 'host', 'lan_if' => '', 'wan_if' => '', 'lan_prefix' => 'fe80::/10', 'icmp' => 1, 'dhcp6' => 1, 'ssh' => 1, 'ssh_port' => 22, 'ports' => '', 'log' => 0, 'crowdsec' => 0, 'cs_sets' => '', 'bogon' => 1, 'ssh_rl' => 1, 'invalid' => 1, 'rpfilter' => 0, 'dot_block' => 0, 'wg_on' => 0, 'wg_if' => 'wg0', 'wg_port' => 51820, 'wg_input' => 1, 'wg_lan' => 1]; }
+function v6_def(): array { return ['on' => 0, 'mode' => 'host', 'lan_if' => '', 'wan_if' => '', 'lan_prefix' => 'fe80::/10', 'icmp' => 1, 'dhcp6' => 1, 'ssh' => 1, 'ssh_port' => 22, 'ports' => '', 'log' => 0, 'crowdsec' => 0, 'cs_sets' => '', 'bogon' => 1, 'ssh_rl' => 1, 'invalid' => 1, 'rpfilter' => 0, 'dot_block' => 0, 'wg_on' => 0, 'wg_if' => 'wg0', 'wg_prefix' => '', 'wg_port' => 51820, 'wg_input' => 0, 'wg_lan' => 1]; }
 function v6_get(): string {
     $f = DATA_DIR . '/draft6.rules';
     if (is_file($f)) { $s = @file_get_contents($f); if (!is_string($s)) throw new RuntimeException('Bozza IPv6 non leggibile'); }
@@ -372,7 +480,7 @@ function v6_expected(): ?string {
     }
     return $GLOBALS['_v6_read_sha'] ?? null;
 }
-function v6_put(string $t): bool {
+function v6_put(string $t, bool $compensating=false): bool {
     if (!is_dir(DATA_DIR) && !@mkdir(DATA_DIR, 0700, true) && !is_dir(DATA_DIR)) return false;
     $lock = @fopen(DATA_DIR . '/draft6.lock', 'c');
     if (!$lock || !@flock($lock, LOCK_EX)) throw new RuntimeException('Lock bozza IPv6 non disponibile');
@@ -381,7 +489,7 @@ function v6_put(string $t): bool {
         $cur = @file_get_contents($f);
         if (!is_string($cur) && is_file($f)) return false;
         if (!is_string($cur)) { [$rc, $out] = priv('cat6'); $cur = $rc === 0 ? $out : ''; }
-        $expected = v6_expected();
+        $expected = $compensating ? ($GLOBALS['_v6_read_sha'] ?? null) : v6_expected();
         if ($expected !== null && !hash_equals($expected, hash('sha256', $cur)))
             throw new RuntimeException('Conflitto IPv6: bozza modificata da un’altra richiesta. Ricarica la pagina.');
         if (!atomic_data_write($f, $t, 0600)) return false;
@@ -409,42 +517,69 @@ function v6_prefixes_ok(string $v): bool {
     foreach (explode(',', $v) as $p) {
         [$a, $m] = array_pad(explode('/', $p, 2), 2, null);
         if (!filter_var($a, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) return false;
-        if ($m !== null && (!preg_match('/^(0|[1-9]\d{0,2})$/', $m) || (int)$m > 128)) return false;
+        if ($m !== null && (!preg_match('/^(0|[1-9]\d{0,2})$/D', $m) || (int)$m > 128)) return false;
     }
     return true;
 }
 function v6_gen(array $V): string {
-    $L = ['# Generato da iptables-manager (IPv6)', '*filter', ':INPUT DROP [0:0]', ':FORWARD DROP [0:0]', ':OUTPUT ACCEPT [0:0]', '-A INPUT -i lo -j ACCEPT', '-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT', '-A INPUT -m conntrack --ctstate INVALID -j DROP', '-A INPUT ! -i lo -s ::1 -j DROP'];
-    if (!empty($V['crowdsec'])) foreach (array_filter(explode(',', (string)$V['cs_sets'])) as $x) if (($iv6 = ipset_inventory())['ok'] ? isset($iv6['sets'][$x]) : true) foreach (['INPUT', 'FORWARD'] as $c) $L[] = "-A $c -m set --match-set $x src -j DROP";   // solo set diretti indicati a mano ed esistenti; gli agganci li gestisce il bouncer
-    if ($V['icmp']) {   // ICMPv6 secondo RFC 4890: neighbor discovery solo con hop limit 255, MLD dai link-local, errori ed echo con limite
-        foreach ([133, 134, 135, 136, 137] as $t) $L[] = "-A INPUT -p ipv6-icmp --icmpv6-type $t -m hl --hl-eq 255 -j ACCEPT";
-        foreach ([130, 131, 132, 143] as $t) $L[] = "-A INPUT -s fe80::/10 -p ipv6-icmp --icmpv6-type $t -j ACCEPT";
-        $L[] = '-A INPUT -p ipv6-icmp --icmpv6-type echo-request -m limit --limit 10/sec --limit-burst 20 -j ACCEPT';
-        $L[] = '-A INPUT -p ipv6-icmp -m limit --limit 100/sec --limit-burst 200 -j ACCEPT';
+    $V = array_replace(v6_def(),$V);
+    $lan = (string)$V['lan_if']; $wan = (string)$V['wan_if'];
+    foreach ([$lan,$wan,(string)$V['wg_if']] as $iface) if ($iface !== '' && !v_ok('if',$iface)) throw new RuntimeException('Interfaccia IPv6 non valida');
+    if (!v6_prefixes_ok((string)$V['lan_prefix']) || !v_ok('port',(string)$V['ssh_port']) || !v_ok('ports',(string)$V['ports'])) throw new RuntimeException('Prefissi o porte IPv6 non validi');
+    $L = ['# Generato da iptables-manager (IPv6)', '*filter', ':INPUT DROP [0:0]', ':FORWARD DROP [0:0]', ':OUTPUT ACCEPT [0:0]', '-A INPUT -i lo -j ACCEPT'];
+    foreach (['INPUT','FORWARD'] as $c) { $L[] = "-A $c -m conntrack --ctstate INVALID -j DROP"; $L[] = "-A $c ! -i lo -s ::1 -j DROP"; }
+    // NDP on the local link; router advertisements only on the upstream.
+    foreach ([135,136] as $type) $L[] = "-A INPUT -p ipv6-icmp --icmpv6-type $type -m hl --hl-eq 255 -j ACCEPT";
+    if ($lan !== '' && $V['mode'] === 'router') $L[] = "-A INPUT -i $lan -p ipv6-icmp --icmpv6-type 133 -m hl --hl-eq 255 -j ACCEPT";
+    $ra = $wan !== '' ? $wan : ($V['mode'] === 'host' ? $lan : '');
+    if ($ra !== '') $L[] = "-A INPUT -i $ra -s fe80::/10 -p ipv6-icmp --icmpv6-type 134 -m hl --hl-eq 255 -j ACCEPT";
+    if (!empty($V['bogon']) && $wan !== '' && $wan !== $lan) foreach (['INPUT','FORWARD'] as $c) foreach (['fc00::/7','2001:db8::/32','::/128'] as $n) $L[] = "-A $c -i $wan -s $n -j DROP";
+    if (!empty($V['crowdsec'])) foreach (array_filter(explode(',', (string)$V['cs_sets'])) as $x) if (v_ok('setlist',$x) && (($iv6 = ipset_inventory())['ok'] ? isset($iv6['sets'][$x]) : true)) foreach (['INPUT','FORWARD'] as $c) $L[] = "-A $c -m set --match-set $x src -j DROP";
+    if (!empty($V['dot_block'])) foreach (['tcp','udp'] as $proto) $L[] = "-A FORWARD -p $proto --dport 853 -j REJECT --reject-with icmp6-port-unreachable";
+    foreach (['INPUT','FORWARD'] as $c) {
+        // Essential ICMPv6 error messages (PMTU and routing) must work even when optional echo is off.
+        foreach ([1,2,3,4] as $type) $L[] = "-A $c -p ipv6-icmp --icmpv6-type $type -j ACCEPT";
+        if ($V['icmp']) {
+            if ($c === 'INPUT') {
+                $L[] = "-A $c -p ipv6-icmp --icmpv6-type echo-request -m limit --limit 10/sec --limit-burst 20 -j ACCEPT";
+                $L[] = "-A $c -p ipv6-icmp --icmpv6-type echo-request -j DROP";
+            }
+        } else $L[] = "-A $c -p ipv6-icmp --icmpv6-type echo-request -j DROP";
+        $L[] = "-A $c -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT";
     }
-    if ($V['dhcp6']) $L[] = '-A INPUT -p udp --dport 546 -d fe80::/10 -j ACCEPT';
-    if (!empty($V['bogon']) && $V['wan_if'] !== '') foreach (['INPUT', 'FORWARD'] as $c) foreach (['fc00::/7', '2001:db8::/32', '::/128'] as $n) $L[] = "-A $c -i {$V['wan_if']} -s $n -j DROP";
-    if (!empty($V['wg_on']) && v_ok('if', (string)($V['wg_if'] ?? '')) && v_ok('port', (string)($V['wg_port'] ?? ''))) {
-        $wgIf6 = $V['wg_if'];
-        $wgWan = ($V['wan_if'] ?? '') !== '' ? '-i ' . $V['wan_if'] . ' ' : '';
-        $L[] = "-A INPUT {$wgWan}-p udp --dport {$V['wg_port']} -j ACCEPT";
-        if (!empty($V['wg_input'])) $L[] = "-A INPUT -i $wgIf6 -j ACCEPT";
-        if (!empty($V['wg_lan'])) { $L[] = "-A FORWARD -i $wgIf6 -j ACCEPT"; $L[] = "-A FORWARD -o $wgIf6 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"; }
+    if ($V['icmp']) foreach ([130,131,132,143] as $type) $L[] = "-A INPUT -s fe80::/10 -p ipv6-icmp --icmpv6-type $type -m hl --hl-eq 1 -j ACCEPT";
+    if ($V['dhcp6'] && $ra !== '') $L[] = "-A INPUT -i $ra -p udp --sport 547 --dport 546 -j ACCEPT";
+    if (!empty($V['wg_on']) && v_ok('if',(string)$V['wg_if']) && v_ok('port',(string)$V['wg_port']) && $wan !== '') {
+        $wg = $V['wg_if'];
+        $L[] = "-A INPUT -i $wan -p udp --dport {$V['wg_port']} -j ACCEPT";
+        // No unscoped IPv6 tunnel grants: explicit peer prefix required.
+        $peer = (string)($V['wg_prefix']??'');
+        if ($peer !== '' && v6_prefixes_ok($peer)) foreach (explode(',',$peer) as $src) {
+            if (str_ends_with($src,'/0')) continue;
+            if (!empty($V['wg_input'])) $L[] = "-A INPUT -i $wg -s $src -j ACCEPT";
+            if (!empty($V['wg_lan']) && $lan !== '') foreach (explode(',',$V['lan_prefix']) as $dst) if (!str_ends_with($dst,'/0')) $L[] = "-A FORWARD -i $wg -o $lan -s $src -d $dst -j ACCEPT";
+            if (!empty($V['wg_lan']) && $V['mode'] === 'router' && $wan !== $wg) $L[] = "-A FORWARD -i $wg -o $wan -s $src -j ACCEPT";
+        }
     }
-    if (!empty($V['ssh_rl']) && $V['ssh']) { $b = "-A INPUT -p tcp --dport {$V['ssh_port']} -m conntrack --ctstate NEW -m recent --name IPTM6-SSH"; $L[] = "$b --update --seconds 60 --hitcount 5 -j DROP"; $L[] = "$b --set"; }
-    $pre = array_values(array_filter(explode(',', $V['lan_prefix'])));
-    foreach ($pre as $p) { if ($V['ssh']) $L[] = "-A INPUT -s $p -p tcp --dport {$V['ssh_port']} -j ACCEPT"; if ($V['ports'] !== '') $L[] = "-A INPUT -s $p -p tcp " . port_opt($V['ports']) . ' -j ACCEPT'; }
-    if (!empty($V['invalid'])) { $L[] = '-A INPUT -m conntrack --ctstate INVALID -j DROP'; }
-    $L[] = '-A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT'; $L[] = '-A FORWARD -m conntrack --ctstate INVALID -j DROP';
-    if (!empty($V['dot_block'])) {
-        $L[] = '-A FORWARD -p tcp --dport 853 -j REJECT --reject-with icmp6-port-unreachable';
-        $L[] = '-A FORWARD -p udp --dport 853 -j REJECT --reject-with icmp6-port-unreachable';
+    if ($lan !== '' && ($lan !== $wan || $V['mode'] === 'host')) foreach (explode(',',$V['lan_prefix']) as $src) {
+        if (str_ends_with($src,'/0')) continue;
+        if ($V['ssh']) {
+            $base = "-A INPUT -i $lan -s $src -p tcp --dport {$V['ssh_port']} -m conntrack --ctstate NEW --syn";
+            if ($V['ssh_rl']) { $L[] = "$base -m recent --name IPTM6-SSH --update --seconds 60 --hitcount 5 -j DROP"; $L[] = "$base -m recent --name IPTM6-SSH --set -j ACCEPT"; }
+            else $L[] = "$base -j ACCEPT";
+        }
+        if ($V['ports'] !== '') foreach (explode(',',$V['ports']) as $port) {
+            [$lo,$hi] = array_pad(explode(':',$port,2),2,null); $lo=(int)$lo; $hi=$hi===null?$lo:(int)$hi;
+            $ssh=(int)$V['ssh_port']; $ranges=[[$lo,$hi]];
+            if ($V['ssh'] && $V['ssh_rl'] && $lo<=$ssh && $ssh<=$hi) $ranges=[[$lo,$ssh-1],[$ssh+1,$hi]];
+            foreach ($ranges as [$a,$b]) if ($a<=$b) $L[] = "-A INPUT -i $lan -s $src -p tcp --dport ".($a===$b?(string)$a:$a.':'.$b).' -j ACCEPT';
+        }
     }
-    if ($V['icmp']) $L[] = '-A FORWARD -p ipv6-icmp -m limit --limit 100/sec --limit-burst 200 -j ACCEPT';
-    if ($V['mode'] === 'router' && $V['lan_if'] !== '' && $V['wan_if'] !== '') $L[] = "-A FORWARD -i {$V['lan_if']} -o {$V['wan_if']} -j ACCEPT";
-    if ($V['log']) foreach (['INPUT', 'FORWARD'] as $c) $L[] = "-A $c -m limit --limit 10/min -j LOG --log-prefix \"IPT6-DROP: \" --log-level 4";
-    $L[] = 'COMMIT'; return implode("\n", $L) . "\n";
+    if ($V['mode'] === 'router' && $lan !== '' && $wan !== '' && $lan !== $wan) foreach (explode(',',$V['lan_prefix']) as $src) if (!str_ends_with($src,'/0')) $L[] = "-A FORWARD -i $lan -o $wan -s $src -j ACCEPT";
+    if ($V['log']) foreach (['INPUT','FORWARD'] as $c) $L[] = "-A $c -m limit --limit 10/min -j LOG --log-prefix \"IPT6-DROP: \" --log-level 4";
+    $L[] = 'COMMIT'; return implode("\n",$L)."\n";
 }
+
 const ZSVC = ['dns' => ['DNS locale', 'tcp,udp', '53', ''], 'dhcp' => ['Server DHCP', 'udp', '67,68', '', true], 'smb' => ['Condivisione file Windows (SMB)', 'tcp', '139,445', ''], 'nfs' => ['NFS', 'tcp,udp', '2049', ''],
     'mqtt' => ['MQTT', 'tcp', '1883,8883', ''], 'hass' => ['Home Assistant', 'tcp', '8123', ''], 'plex' => ['Plex', 'tcp', '32400', ''], 'ntp' => ['Server orario (NTP)', 'udp', '123', ''],
     'snmp' => ['SNMP', 'udp', '161', ''], 'mdns' => ['mDNS / Bonjour', 'udp', '5353', '224.0.0.251'], 'ssdp' => ['UPnP / SSDP', 'udp', '1900', '239.255.255.250']];
@@ -458,38 +593,26 @@ function zero_skeleton(): string {
 function minimal_settings(array $keep = []): array {
     $S = S_def();
     // topologia / identità di rete
-    foreach (['wan_if', 'lan_nets', 'masq_ifs', 'single_nic', 'nat_masq', 'mss', 'dns_redirect', 'dns_ip', 'dot_block',
-              'wg_on', 'wg_port', 'wg_input', 'wg_lan', 'wg_net', 'drop_chain'] as $k) {
+    foreach (['wan_if', 'lan_if', 'lan_ingress_map', 'external_ifs', 'wan_rfc1918_spoof', 'lan_nets', 'mgmt_nets', 'ui_nets', 'mgmt_ports', 'ssh_acc', 'ssh_nets', 'ssh_acc_port', 'ssh_conn', 'ssh_hits', 'ssh_secs', 'guest_on', 'guest_nets', 'guest_ports', 'guest_allow', 'iso_on', 'iso_nets', 'iot_policies', 'masq_ifs', 'single_nic', 'nat_masq', 'mss', 'dns_redirect', 'dns_ip', 'dot_block',
+              'wg_on', 'wg_if', 'wg_port', 'wg_input', 'wg_lan', 'wg_net', 'wg_internet', 'wg_local_tcp', 'wg_local_udp', 'wg_fwd_nets', 'wg_fwd_tcp', 'wg_fwd_udp', 'wg_lan_to_vpn', 'drop_chain'] as $k) {
         if (array_key_exists($k, $keep) && $keep[$k] !== '' && $keep[$k] !== null) $S[$k] = $keep[$k];
     }
     // nucleo sempre attivo: SPI, anti-spoof, invalid, drop finale
     foreach (['spi', 'antispoof', 'invalid', 'final_drop', 'icmp_limit'] as $o) $S[$o] = 1;
-    // anti-lockout: LAN può sempre raggiungere gestione
     $lan = trim((string)($S['lan_nets'] ?? ''));
-    $S['lockout_on'] = $lan !== '' ? 1 : 0;
-    $S['mgmt_ports'] = '22,80,443,8089,8489';
-    // servizi minimi in ingresso dalla LAN
-    $row = fn($name, $proto, $ports, $src = '') => ['on' => 1, 'name' => $name, 'iif' => '', 'src' => $src, 'dst' => '', 'proto' => $proto, 'ports' => $ports, 'ct' => '', 'act' => 'ACCEPT', 'after' => 0];
-    $S['svc_in'] = [];
-    if ($lan !== '') {
-        $S['svc_in'][] = $row('Gestione web', 'tcp', '80,443', $lan);
-        $S['svc_in'][] = $row('SSH dalla LAN', 'tcp', '22', $lan);
-    } else {
-        // senza LAN nota: accetta gestione da ovunque (meglio che restare chiusi fuori)
-        $S['svc_in'][] = $row('Gestione web', 'tcp', '80,443', '');
-        $S['svc_in'][] = $row('SSH', 'tcp', '22', '');
-    }
-    // WireGuard: se era attivo, riapri la porta
-    if (!empty($S['wg_on'])) {
-        $p = (int)($S['wg_port'] ?: 51820); if ($p < 1 || $p > 65535) $p = 51820; $S['wg_port'] = $p;
-        $S['svc_in'][] = $row('WireGuard', 'udp', (string)$p, '');
-        $S['wg_input'] = 1;
-    }
+    $mgmt = iptm_management_nets($S);
+    if (!$mgmt || empty($S['mgmt_ports'])) throw new RuntimeException('Reset minimo annullato: configurare reti e porte amministrative valide prima di proseguire. Nessuna apertura globale.');
+    $S['mgmt_nets'] = implode(',', $mgmt);
+    $S['lockout_on'] = 1;
+    $S['svc_in'] = []; // gestione e WireGuard generati dai rispettivi moduli
     // router: NAT se già configurato
     if (!empty($S['nat_masq']) && trim((string)($S['masq_ifs'] ?? $S['wan_if'] ?? '')) === '' && ($S['wan_if'] ?? '') !== '') {
         $S['masq_ifs'] = $S['wan_if'];
     }
     if (!empty($S['nat_masq'])) $S['mss'] = 1;
+    // Con NAT attivo i client LAN devono poter uscire: SPI mette FORWARD in DROP e senza
+    // lan_out_fwd il MASQUERADE conservato resterebbe inutile (LAN senza Internet dopo il reset).
+    if (!empty($S['nat_masq']) && $lan !== '') $S['lan_out_fwd'] = 1;
     // nessuna lista, portscan, stealth, tarpit, custom_opts
     $S['custom_opts'] = [];
     $S['fwd'] = [];
@@ -497,12 +620,22 @@ function minimal_settings(array $keep = []): array {
     return $S;
 }
 
+function iptm_validate_wizard_answers(array $answers): void {
+    $choices=['mode'=>['host','router','single'],'level'=>['base','standard'],'vpn'=>['none','wireguard','openvpn'],'base'=>['keep','zero'],'logging'=>['none','drops','all'],'recovery'=>['yes','no']];
+    foreach($choices as $key=>$options)if(isset($answers[$key])&&(!is_string($answers[$key])||!in_array($answers[$key],$options,true)))throw new RuntimeException('Scelta wizard non valida: '.$key);
+    foreach(['ssh_from','svcs','lists'] as $key){if(!isset($answers[$key]))continue;if(!is_array($answers[$key])||count($answers[$key])>100)throw new RuntimeException('Lista wizard non valida: '.$key);foreach($answers[$key] as $value)if(!is_string($value)||strlen($value)>100)throw new RuntimeException('Voce wizard non valida: '.$key);}
+    if(isset($answers['fwd'])){if(!is_array($answers['fwd'])||count($answers['fwd'])>100)throw new RuntimeException('Port forwarding non valido');foreach($answers['fwd'] as $row){if(!is_array($row))throw new RuntimeException('Riga port forwarding non valida');foreach($row as $value)if(!is_string($value)||strlen($value)>100)throw new RuntimeException('Campo port forwarding non valido');}}
+    foreach($answers as $key=>$value)if(!in_array($key,['ssh_from','svcs','lists','fwd'],true)&&(!is_scalar($value)||strlen((string)$value)>4096))throw new RuntimeException('Campo wizard non valido: '.$key);
+    if(!empty($answers['dns_local'])&&!in_array($answers['dns_local'],['0','no','false'],true)&&!filter_var($answers['dns_ip']??'',FILTER_VALIDATE_IP,FILTER_FLAG_IPV4))throw new RuntimeException('DNS locale: indirizzo IPv4 obbligatorio.');
+}
 function zero_build(array $A): array {
+    iptm_validate_wizard_answers($A);
     $S = S_def(); $w = []; $g = fn($k, $d = '') => trim((string)($A[$k] ?? $d)); $yes = fn($k) => !empty($A[$k]) && !in_array($A[$k], ['no', '0', 'false'], true);
     $mode = in_array($g('mode'), ['router', 'single', 'host'], true) ? $g('mode') : 'host'; $routing = $mode !== 'host';
     $wan = v_ok('if', $g('wan_if')) ? $g('wan_if') : ''; $lan = ($g('lan_nets') !== '' && v_ok('nets', $g('lan_nets'))) ? $g('lan_nets') : '';
     $S['wan_if'] = $wan; $S['lan_nets'] = $lan; $S['single_nic'] = $mode === 'single' ? 1 : 0;
-    if ($lan === '') $w[] = 'Nessuna rete LAN valida: i servizi non saranno limitati a una rete e potresti perdere l\'accesso.';
+    if ($lan === '' || !iptm_vpn_networks($lan)) throw new RuntimeException('Indicare almeno una subnet LAN IPv4 specifica: nessuna bozza modificata.');
+    if ($routing && ($wan==='' || $wan==='lo')) throw new RuntimeException('Interfaccia WAN obbligatoria in modalità gateway.');
     $lvl = in_array($g('level'), ['base', 'standard'], true) ? $g('level') : 'standard';
     foreach (['spi', 'antispoof', 'invalid', 'final_drop'] as $o) $S[$o] = 1;
     if ($lvl !== 'base') foreach (['icmp_limit', 'igmp_accept', 'dos', 'closeports'] as $o) $S[$o] = 1;
@@ -547,16 +680,20 @@ function zero_build(array $A): array {
     if ($routing && in_array('wan', $from, true)) { $S['svc_in'][] = $row('SSH da Internet', 'tcp', $sp); if (wan_ready($S)) { $S['ssh_limit'] = 1; $S['ssh_port'] = (int)$sp; } else $w[] = 'SSH da Internet: definisci la WAN per attivare il limite anti brute-force.'; }
     foreach ((array)($A['svcs'] ?? []) as $id) if (isset(ZSVC[$id])) { [$n, $pp, $ports, $dst] = ZSVC[$id]; $any = !empty(ZSVC[$id][4]); foreach (explode(',', $pp) as $pr) $S['svc_in'][] = $row($n, $pr, $ports, ($dst === '' && !$any) ? $lan : '', $dst); }
     foreach (preg_split('/[\s;]+/', $g('custom_ports'), -1, PREG_SPLIT_NO_EMPTY) as $c) if (preg_match('/^(tcp|udp):(.+)$/', $c, $m) && v_ok('ports', $m[2])) $S['svc_in'][] = $row('Servizio ' . $c, $m[1], $m[2], $lan);
-    if ($vpn !== 'none') { $S['svc_in'][] = $row(($vpn === 'wireguard' ? 'WireGuard' : 'OpenVPN') . ' (ingresso)', 'udp', $vport); if ($vif !== '') { $S['svc_in'][] = $row('Traffico dalla VPN', '', '', '', '', $vif, 1); } }
+    if ($vpn !== 'none') {
+        if (!$vif || $vif==='lo' || !iptm_vpn_networks($vnet) || !v_ok('port',$g('vpn_port')) || $g('vpn_port')==='') throw new RuntimeException('Parametri VPN non validi.');
+        $S['svc_in'][] = $row(($vpn === 'wireguard' ? 'WireGuard' : 'OpenVPN') . ' (ingresso)', 'udp', $vport);
+        $w[]='VPN: accesso ai servizi soltanto se autorizzato; configura inoltro e destinazioni nella pagina VPN.';
+    }
     if ($yes('docker')) { $S['svc_in'][] = $row('Container Docker', '', '', '172.16.0.0/12', '', '', 1); $S['cs_docker'] = 1; }
     if ($yes('crowdsec')) $S['crowdsec'] = 1;
     if ($routing) {
         foreach (array_filter(explode(',', $lan)) as $n) $S['svc_fwd'][] = ['on' => 1, 'name' => cut40('LAN → Internet ' . $n), 'iif' => '', 'oif' => $wan, 'src' => $n, 'dst' => '', 'proto' => '', 'ports' => '', 'ct' => '', 'act' => 'ACCEPT'];
-        if ($vif !== '') { $S['svc_fwd'][] = ['on' => 1, 'name' => 'VPN → rete', 'iif' => $vif, 'oif' => '', 'src' => '', 'dst' => '', 'proto' => '', 'ports' => '', 'ct' => '', 'act' => 'ACCEPT']; $S['svc_fwd'][] = ['on' => 1, 'name' => 'Rete → VPN', 'iif' => '', 'oif' => $vif, 'src' => '', 'dst' => '', 'proto' => '', 'ports' => '', 'ct' => '', 'act' => 'ACCEPT']; }
+        // Inoltro VPN non implicito: configurare destinazioni e servizi esplicitamente.
         if ($yes('docker')) $S['svc_fwd'][] = ['on' => 1, 'name' => 'Risposte verso Docker', 'iif' => '', 'oif' => '', 'src' => '', 'dst' => '172.16.0.0/12', 'proto' => '', 'ports' => '', 'ct' => 'RELATED,ESTABLISHED', 'act' => 'ACCEPT'];
         foreach ((array)($A['fwd'] ?? []) as $f) {
             if (!is_array($f)) continue; $x = ['on' => 1, 'name' => trim((string)($f['name'] ?? '')), 'proto' => in_array($f['proto'] ?? '', ['tcp', 'udp', 'both'], true) ? $f['proto'] : 'both', 'src' => '', 'eport' => trim((string)($f['eport'] ?? '')), 'ip' => trim((string)($f['ip'] ?? '')), 'tport' => trim((string)($f['tport'] ?? ''))];
-            if ($x['eport'] !== '' && preg_match('/^\d{1,5}(:\d{1,5})?$/', $x['eport']) && v_ok('name', $x['name']) && $x['ip'] !== '' && v_ok('ip', $x['ip']) && v_ok('port', $x['tport'])) $S['fwd'][] = $x; else $w[] = 'Port forward ignorato: «' . $x['name'] . '»';
+            if ($x['eport'] !== '' && preg_match('/^\d{1,5}(:\d{1,5})?$/D', $x['eport']) && v_ok('name', $x['name']) && $x['ip'] !== '' && v_ok('ip', $x['ip']) && v_ok('port', $x['tport'])) $S['fwd'][] = $x; else $w[] = 'Port forward ignorato: «' . $x['name'] . '»';
         }
     }
     foreach ((array)($A['lists'] ?? []) as $id) if (isset(BL_PRESETS[$id])) $S['blocklists'][] = ['on' => 1, 'id' => $id, 'name' => BL_PRESETS[$id][0], 'url' => BL_PRESETS[$id][1], 'dir' => 'in'];

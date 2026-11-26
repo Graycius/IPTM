@@ -21,6 +21,29 @@ import tempfile
 import zipfile
 import fcntl
 
+# Shared primitives. Recovery takes only its domain lock, never software admission.
+def shared_transport():
+    import importlib.util
+    from pathlib import Path
+    source=Path(__file__).resolve()
+    if source.parent.name == 'runtime':
+        module=source.parent.parent/'extensions'/'command_transport.py'
+    else:
+        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/command_transport.py')
+    if not module.is_file() or module.is_symlink():
+        raise OSError('Trasporto IPTM assente o non sicuro')
+    cached=getattr(shared_transport,'_module',None)
+    if cached is None:
+        spec=importlib.util.spec_from_file_location('_iptm_runtime_transport',module)
+        cached=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cached)
+        shared_transport._module=cached
+    return cached
+
+def iptm_capture(argv, **options):
+    return shared_transport().capture(argv, **options)
+
+
 ROOTS = ('/etc/pihole', '/etc/dnsmasq.d', '/etc/unbound', '/etc/dnscrypt-proxy',
          '/etc/systemd/system/pihole-FTL.service.d', '/etc/systemd/system/unbound.service.d',
          '/etc/systemd/system/dnscrypt-proxy.service.d',
@@ -79,7 +102,7 @@ def safe_source(path):
         if parent.exists() and parent.is_symlink(): raise ValueError('symlink non consentito: '+path)
     if not target.exists():return None
     st=target.lstat()
-    if not stat.S_ISREG(st.st_mode):raise ValueError('file di configurazione non regolare: '+path)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1:raise ValueError('file di configurazione non regolare o hardlink: '+path)
     if st.st_size>MAX_FILE:raise ValueError('configurazione troppo grande: '+path)
     return target
 
@@ -175,7 +198,7 @@ def openpgp_run(action, source, target, secret):
                   '--s2k-digest-algo','SHA256','--s2k-count','1048576',str(source)]
         else:cmd+=['--decrypt',str(source)]
         try:
-            r=subprocess.run(cmd,input=secret,capture_output=True,timeout=240)
+            r=iptm_capture(cmd, timeout=240, input_data=secret, text=False, stdout_limit=1048576, stderr_limit=262144)
         except subprocess.TimeoutExpired as ex:raise ValueError('GnuPG non ha completato la cifratura in tempo') from ex
         if r.returncode:
             raise ValueError('Cifratura/decrittazione OpenPGP non riuscita: verifica passphrase e integrità')
@@ -245,10 +268,10 @@ def read_bundle(stream):
             if name not in z.NameToInfo:raise ValueError('file mancante dal ZIP: '+path)
             info=z.getinfo(name)
             size=item.get('size');mode=item.get('mode',0o600)
-            if not isinstance(size,int) or size<0 or size>MAX_FILE or size!=info.file_size or not isinstance(mode,int) or mode<0 or mode>0o777 or mode&0o022:
+            if type(size) is not int or size<0 or size>MAX_FILE or size!=info.file_size or type(mode) is not int or mode<0 or mode>0o777 or mode&0o022:
                 raise ValueError('dimensione o permessi non ammessi nel manifest')
-            if stat.S_IFMT(info.external_attr>>16)==stat.S_IFLNK:
-                raise ValueError('symlink non consentiti nel bundle')
+            if stat.S_IFMT(info.external_attr>>16) not in (0,stat.S_IFREG):
+                raise ValueError('file non regolari non consentiti nel bundle')
             total+=size
             if total>MAX_TOTAL:raise ValueError('contenuto oltre 256 MiB')
             digest=hashlib.sha256();actual=0
@@ -259,7 +282,7 @@ def read_bundle(stream):
                     digest.update(chunk)
             if actual!=size or not re.fullmatch('[a-f0-9]{64}',str(item.get('sha256',''))) or digest.hexdigest()!=item['sha256']:
                 raise ValueError('checksum non valido: '+path)
-            if bool(item.get('sqlite')) != (path=='/etc/pihole/gravity.db'):
+            if type(item.get('sqlite')) is not bool or item['sqlite'] != (path=='/etc/pihole/gravity.db'):
                 raise ValueError('tipo SQLite non valido')
             result.append((path,info,mode))
         if set(names)!={'manifest.json',*('files'+p for p,_,_ in result)}:
@@ -287,7 +310,7 @@ def ensure_not_running_gravity(files):
     if not shutil.which('systemctl'):
         raise ValueError('Non posso verificare FTL: ripristino gravity.db bloccato')
     try:
-        p=subprocess.run(['systemctl','is-active','--quiet','pihole-FTL'],capture_output=True,timeout=5)
+        p=iptm_capture(['systemctl', 'is-active', '--quiet', 'pihole-FTL'], timeout=5, text=False, stdout_limit=1048576, stderr_limit=262144)
     except (OSError,subprocess.TimeoutExpired):
         raise ValueError('Stato FTL non verificabile: ripristino gravity.db bloccato')
     if p.returncode == 0:
@@ -297,7 +320,7 @@ def ensure_not_running_gravity(files):
     # Some administrators run FTL outside systemd; check for such processes too.
     if shutil.which('pgrep'):
         try:
-            proc=subprocess.run(['pgrep','-x','pihole-FTL'],capture_output=True,timeout=5)
+            proc=iptm_capture(['pgrep', '-x', 'pihole-FTL'], timeout=5, text=False, stdout_limit=1048576, stderr_limit=262144)
         except (OSError,subprocess.TimeoutExpired):
             raise ValueError('Processi FTL non verificabili: ripristino gravity.db bloccato')
         if proc.returncode == 0:raise ValueError('Processo pihole-FTL attivo: arrestarlo prima del ripristino')
@@ -308,19 +331,13 @@ def ensure_not_running_gravity(files):
 
 def atomic_journal(path, payload):
     """Durable state transition; never depend on a partial JSON write."""
-    path = Path(path)
-    fd,tmp = tempfile.mkstemp(dir=str(path.parent), prefix='.dns-journal-')
-    try:
-        with os.fdopen(fd,'w',encoding='utf-8') as out:
-            json.dump(payload,out,sort_keys=True,separators=(',',':'))
-            out.flush();os.fsync(out.fileno())
-        os.chmod(tmp,0o600)
-        os.replace(tmp,path)
-        fd_dir=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
-        try:os.fsync(fd_dir)
-        finally:os.close(fd_dir)
-    finally:
-        if os.path.lexists(tmp):os.unlink(tmp)
+    shared_transport().durable_json(Path(path),payload)
+
+
+def dns_import_lock():
+    path=disk('/run/lock/iptm-dns-import.lock')
+    if TEST_ROOT:path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    return path
 
 
 def incomplete_dns_restores():
@@ -332,11 +349,11 @@ def incomplete_dns_restores():
         if folder.is_symlink() or not folder.is_dir():
             raise ValueError('directory backup DNS non affidabile: '+str(folder))
         journal=folder/'restore-journal.json'
-        if not journal.exists():continue
+        if not journal.exists() and not journal.is_symlink():continue
         if journal.is_symlink() or not journal.is_file():
             raise ValueError('journal DNS non regolare: '+str(journal))
         try:
-            j=json.loads(journal.read_text(encoding='utf-8'))
+            j=shared_transport().read_private_json(journal,limit=1024*1024)
             state=j['state']
         except (OSError,ValueError,KeyError,TypeError):
             raise ValueError('journal DNS non leggibile: '+str(journal))
@@ -356,6 +373,7 @@ def _atomic_restore_file(source,dest):
         st=source.stat()
         os.chown(name,st.st_uid,st.st_gid)
         os.chmod(name,stat.S_IMODE(st.st_mode) & ~0o022)
+        with open(name,'rb') as stream:os.fsync(stream.fileno())
         os.replace(name,dest)
         dir_fd=os.open(dest.parent,os.O_RDONLY|os.O_DIRECTORY)
         try:os.fsync(dir_fd)
@@ -368,9 +386,7 @@ def recover(ack):
     """Explicit, idempotent recovery of interrupted bundle restores."""
     if os.geteuid()!=0:raise ValueError('recupero DNS solo root')
     if ack!='RIPRISTINA DNS':raise ValueError('conferma esplicita RIPRISTINA DNS richiesta')
-    lock=disk(DATA/'dns-import.lock');lock.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
-    with lock.open('a+b') as fd:
-        fcntl.flock(fd.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+    with shared_transport().domain_lock(dns_import_lock(),nonblocking=True):
         operations=incomplete_dns_restores()
         # Preflight across the entire recovery batch before touching files.
         plans=[]
@@ -386,7 +402,7 @@ def recover(ack):
                 if not dest.parent.is_dir() or dest.parent.is_symlink():raise ValueError('directory target DNS non sicura: '+path)
                 safe_source(path) # rifiuta symlink nel target e nei suoi genitori
                 if entry['existed']:
-                    if backup.is_symlink() or not backup.is_file():raise ValueError('backup DNS mancante: '+path)
+                    if backup.is_symlink() or not backup.is_file() or backup.stat().st_nlink!=1:raise ValueError('backup DNS mancante o non regolare: '+path)
                     if backup.stat().st_size>MAX_FILE:raise ValueError('backup DNS troppo grande: '+path)
                 # A file absent before import may only be removed if it still
                 # contains exactly the version installed by that import.
@@ -440,9 +456,7 @@ def _apply_validated(files,z):
                     with z.open(info,'r') as source:tomllib.loads(source.read(MAX_FILE+1).decode('utf-8'))
                 except (UnicodeError,ValueError) as e:raise ValueError('TOML non valido '+path+': '+str(e)[:70])
     backup_root=disk(DATA/'backups' / ('dns-import-'+dt.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+str(os.getpid())+'-'+os.urandom(4).hex()))
-    lock=disk(DATA/'dns-import.lock');lock.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
-    with lock.open('a+b') as fd:
-        fcntl.flock(fd.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+    with shared_transport().transaction_gate(gate=disk('/run/iptm-software-update.lock'),domain=dns_import_lock()):
         if incomplete_dns_restores():
             raise ValueError('Ripristino DNS precedente incompleto: usare dns-bundle recover da console prima di un nuovo import')
         for path,_,mode in files:
@@ -459,6 +473,16 @@ def _apply_validated(files,z):
                     backup=backup_root / path.lstrip('/')
                     backup.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
                     shutil.copy2(dest,backup,follow_symlinks=False)
+                    metadata=dest.stat()
+                    os.chown(backup,metadata.st_uid,metadata.st_gid)
+                    os.chmod(backup,stat.S_IMODE(metadata.st_mode)&~0o022)
+                    with backup.open('rb') as stream:os.fsync(stream.fileno())
+                    # Persist the backup and all newly created directory entries.
+                    for folder in (backup.parent,*backup.parent.parents):
+                        if folder==backup_root.parent.parent:break
+                        fd_dir=shared_transport().open_directory(folder)
+                        try:os.fsync(fd_dir)
+                        finally:os.close(fd_dir)
                 old.append((path,existed))
             journal_files=[]
             for path,info,_ in files:
@@ -473,6 +497,10 @@ def _apply_validated(files,z):
             journal={'files':journal_files,
                      'state':'prepared','created':dt.datetime.now(dt.timezone.utc).isoformat()}
             atomic_journal(backup_root/'restore-journal.json',journal)
+            for folder in (backup_root.parent,backup_root.parent.parent):
+                fd_dir=shared_transport().open_directory(folder)
+                try:os.fsync(fd_dir)
+                finally:os.close(fd_dir)
             for path,info,mode in files:
                 dest=disk(path)
                 fd2,temp_name=tempfile.mkstemp(dir=str(dest.parent),prefix='.iptm-dns-')
@@ -485,27 +513,34 @@ def _apply_validated(files,z):
                         os.chown(temp_name,st.st_uid,st.st_gid)
                         os.chmod(temp_name,stat.S_IMODE(st.st_mode) & ~0o022)
                     else:os.chmod(temp_name,mode & ~0o022)
+                    with open(temp_name,'rb') as stream:os.fsync(stream.fileno())
                     os.replace(temp_name,dest)
+                    changed.append(path)  # rename succeeded even if next fsync fails
                     # Persist directory rename before advertising the next step.
                     dir_fd=os.open(dest.parent,os.O_RDONLY|os.O_DIRECTORY)
                     try:os.fsync(dir_fd)
                     finally:os.close(dir_fd)
-                    changed.append(path)
                 finally:
                     if os.path.lexists(temp_name):os.unlink(temp_name)
             journal['state']='completed'
             atomic_journal(backup_root/'restore-journal.json',journal)
-            rotate_dns_import_backups(backup_root)
             return {'ok':True,'restored':len(changed),'backup':str(backup_root),
                     'notes':'File ripristinati; servizi NON riavviati. Eseguire verifiche Unbound/DNSCrypt/Pi-hole e riavviare in finestra di manutenzione.'}
         except BaseException:
             failures=[]
             for path,existed in reversed(old):
+                if path not in changed:continue
                 try:
                     dest=disk(path);bak=backup_root/path.lstrip('/')
-                    if existed and bak.is_file():_atomic_restore_file(bak,dest)
-                    elif not existed and path in changed:dest.unlink(missing_ok=True)
-                except OSError as exc:failures.append(path+': '+str(exc))
+                    if existed:
+                        if not bak.is_file() or bak.is_symlink():raise ValueError('backup mancante o non regolare')
+                        _atomic_restore_file(bak,dest)
+                    else:
+                        dest.unlink(missing_ok=True)
+                        fd_dir=shared_transport().open_directory(dest.parent)
+                        try:os.fsync(fd_dir)
+                        finally:os.close(fd_dir)
+                except (OSError,ValueError) as exc:failures.append(path+': '+str(exc))
             if 'journal' in locals() and not failures:
                 journal['state']='recovered'
                 atomic_journal(backup_root/'restore-journal.json',journal)
@@ -514,28 +549,6 @@ def _apply_validated(files,z):
             if failures:raise ValueError('Rollback DNS parziale: usare dns-bundle recover; '+', '.join(failures)[:160])
             raise
 
-
-def rotate_dns_import_backups(backup_root, keep=10):
-    """Keep the last 10 completed imports. Recovery-pending and symlinks are never deleted."""
-    parent=backup_root.parent
-    if parent.is_symlink() or not parent.is_dir(): return 0
-    candidates=[]
-    for path in parent.glob('dns-import-*'):
-        if path.is_symlink() or not path.is_dir(): continue
-        j=path/'restore-journal.json'
-        if j.is_symlink() or not j.is_file():continue
-        try:
-            state=json.loads(j.read_text('utf-8')).get('state')
-            if state not in ('completed','recovered'): continue
-            st=path.stat()
-            candidates.append((st.st_mtime_ns,path.name,st.st_ino,path))
-        except (ValueError,OSError,UnicodeError):continue
-    candidates.sort(reverse=True)
-    for _,_,ino,path in candidates[keep:]:
-        try:
-            if path.lstat().st_ino==ino and not path.is_symlink():shutil.rmtree(path)
-        except OSError:pass
-    return len(candidates[keep:])
 
 def main():
     ap=argparse.ArgumentParser()

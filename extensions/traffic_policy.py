@@ -13,7 +13,7 @@ def validate(payload):
     ips=payload.get('clients',[]);hosts=payload.get('hosts',[]);ports=payload.get('ports',[])
     if not isinstance(ips,list) or not 1<=len(ips)<=32 or not isinstance(hosts,list) or not 1<=len(hosts)<=32:
         raise ValueError('Seleziona almeno un client e un dominio, max 32 ciascuno')
-    if not isinstance(ports,list) or not ports or not set(ports).issubset({80,443}):
+    if not isinstance(ports,list) or not ports or any(type(p) is not int or p not in (80,443) for p in ports):
         raise ValueError('Seleziona HTTP 80, HTTPS 443 o entrambi')
     clean_ips=[]
     for ip in ips:

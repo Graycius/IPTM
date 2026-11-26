@@ -5,6 +5,8 @@ DNSCrypt fallback and certificate-pinned DoH stamps are implemented here.
 SNI/anti-DPI are policy previews for integration with an independently verified
 Suricata IPS or zapret installation, NOT an inline packet interception engine.
 """
+
+from command_transport import capture, durable_replace, durable_unlink
 import base64
 import fcntl
 import ipaddress
@@ -21,7 +23,7 @@ import time
 import secrets
 from datetime import datetime, timezone
 
-VERSION='5.30.23'
+VERSION='6.0.8'
 CONFIG_CANDIDATES=(Path('/etc/dnscrypt-proxy/dnscrypt-proxy.toml'),Path('/etc/dnscrypt-proxy.toml'))
 BACKUP=Path('/var/lib/iptables-manager/backups/dns-guard')
 EVE=Path('/var/log/suricata/eve.json')
@@ -216,7 +218,7 @@ def file_is_safe(path):
     if par.is_symlink() or (par.stat().st_mode&0o022):fail('Directory dnscrypt scrivibile da altri')
 
 def run_checked(command,timeout=25):
-    p=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=timeout)
+    p=capture(command,timeout=timeout)
     if p.returncode:fail(' '.join(command[:2])+' fallito: '+(p.stderr or p.stdout)[-300:])
     return p.stdout
 
@@ -234,28 +236,15 @@ def validate_candidate(binary,filepath):
     run_checked([binary,'-check','-config',str(filepath)],timeout=30)
 
 def write_atomic_secure(path, payload, metadata):
-    fd,name=tempfile.mkstemp(prefix='.iptm-dns-',dir=str(path.parent))
-    try:
-        with os.fdopen(fd,'wb') as f:
-            os.fchown(f.fileno(),metadata.st_uid,metadata.st_gid)
-            os.fchmod(f.fileno(),stat.S_IMODE(metadata.st_mode))
-            f.write(payload);f.flush();os.fsync(f.fileno())
-        os.replace(name,path)
-        directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
-        try:os.fsync(directory)
-        finally:os.close(directory)
-    finally:
-        if os.path.exists(name):os.unlink(name)
+    from command_transport import durable_replace
+    durable_replace(path,payload,mode=stat.S_IMODE(metadata.st_mode),owner=metadata.st_uid,group=metadata.st_gid)
 
 
 def pending_read():
-    if PENDING.is_symlink():fail('Stato DNS transazione non sicuro')
-    if not PENDING.exists():return None
-    st=PENDING.stat()
-    if not stat.S_ISREG(st.st_mode) or st.st_uid!=0 or st.st_mode&0o077 or st.st_size>4096:
-        fail('Stato DNS transazione non protetto')
-    try: data=json.loads(PENDING.read_text())
-    except (ValueError,UnicodeError): fail('Stato DNS transazione illeggibile')
+    from command_transport import read_private_json
+    try:data=read_private_json(PENDING,limit=4096)
+    except (OSError,ValueError,UnicodeError):fail('Stato DNS transazione non protetto o illeggibile')
+    if data is None:return None
     if not isinstance(data,dict) or not re.fullmatch('[a-f0-9]{32}',str(data.get('txid',''))):
         fail('Stato DNS transazione incoerente')
     if data.get('config') not in [str(x) for x in CONFIG_CANDIDATES]:fail('Path DNS non autorizzato')
@@ -267,17 +256,9 @@ def pending_read():
 
 
 def pending_write(data):
-    # Do not follow a symlink created by an unprivileged process.
+    from command_transport import durable_replace
     if PENDING.exists() or PENDING.is_symlink():fail('Esiste una transazione DNS non confermata')
-    fd,name=tempfile.mkstemp(prefix='.dns-pending-',dir=str(BACKUP))
-    try:
-        with os.fdopen(fd,'wb') as f:
-            os.fchmod(f.fileno(),0o600)
-            f.write(json.dumps(data,sort_keys=True,separators=(',',':')).encode())
-            f.flush();os.fsync(f.fileno())
-        os.replace(name,PENDING)
-    finally:
-        if os.path.exists(name):os.unlink(name)
+    durable_replace(PENDING,json.dumps(data,sort_keys=True,separators=(',',':')).encode(),create_only=True)
 
 
 def timer_unit(txid): return 'iptm-dns-guard-'+txid
@@ -310,7 +291,7 @@ def dns_transaction(mode,txid=None):
         if backup.is_symlink() or not backup.is_file() or backup.stat().st_uid!=0 or backup.stat().st_mode&0o077:
             fail('Boot recovery: snapshot DNS mancante o non sicuro')
         write_atomic_secure(cfg,backup.read_bytes(),cfg.stat())
-        PENDING.unlink()
+        durable_unlink(PENDING)
         # Do not call systemctl or perform DNS queries from an early boot unit.
         # dnscrypt-proxy starts afterward with the restored configuration.
         return {'changed':True,'state':'reverted','reason':'boot-recover'}
@@ -325,7 +306,7 @@ def dns_transaction(mode,txid=None):
         # already scheduled watchdog harmless even if this process is killed
         # between the unlink and stopping the timer. The reverse order could
         # strand a pending transaction with no functional watchdog.
-        PENDING.unlink()
+        durable_unlink(PENDING)
         timer_cancel(data['txid'])
         return {'changed':False,'state':'confirmed'}
     if mode=='watchdog' and time.time()<data['until']:
@@ -338,7 +319,7 @@ def dns_transaction(mode,txid=None):
     meta=cfg.stat()
     write_atomic_secure(cfg,backup.read_bytes(),meta)
     run_checked(['systemctl','restart','dnscrypt-proxy'],30)
-    PENDING.unlink()
+    durable_unlink(PENDING)
     if mode!='watchdog': timer_cancel(data['txid'])
     return {'changed':True,'state':'reverted','reason':mode}
 
@@ -356,7 +337,7 @@ def apply(plan):
     if not binary:fail('dnscrypt-proxy non installato')
     cfg=locate_config();file_is_safe(cfg)
     cfg_stat=cfg.stat()
-    if shutil.which('systemctl') is None or subprocess.run(['systemctl','is-active','--quiet','dnscrypt-proxy'],timeout=8,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode!=0:
+    if shutil.which('systemctl') is None or capture(['systemctl', 'is-active', '--quiet', 'dnscrypt-proxy'], timeout=8, text=False, stdout_limit=1048576, stderr_limit=262144).returncode!=0:
         fail('Il servizio dnscrypt-proxy non risulta attivo: nessuna modifica')
     for item in (plan['primary'],plan['secondary']):probe_stamp(item)
     if pending_read():fail('Modifica DNS precedente non confermata: completa o ripristina prima')
@@ -368,8 +349,7 @@ def apply(plan):
         fail('Directory backup non sicura')
     BACKUP.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(BACKUP,0o700)
     backup=BACKUP/('dnscrypt.'+datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')+'.toml')
-    with backup.open('xb') as f:f.write(previous)
-    backup.chmod(0o600)
+    durable_replace(backup,previous,create_only=True)
     txid=secrets.token_hex(16)
     pending_write({'txid':txid,'config':str(cfg),'backup':backup.name,
                    'until':int(time.time())+ROLLBACK_SECONDS-5})
@@ -377,7 +357,7 @@ def apply(plan):
         timer_arm(txid)
     except BaseException:
         # Fail closed: cannot touch DNS without an independent rollback timer.
-        PENDING.unlink(missing_ok=True)
+        durable_unlink(PENDING)
         raise
     def write_atomic(blob): write_atomic_secure(cfg,blob,cfg_stat)
     try:
@@ -403,14 +383,11 @@ def apply(plan):
         try:
             write_atomic(previous)
             run_checked(['systemctl','restart','dnscrypt-proxy'],30)
-            PENDING.unlink()
+            durable_unlink(PENDING)
             timer_cancel(txid)
         except BaseException as restore_error:
             print('IPTM DNS rollback failed: '+type(restore_error).__name__,file=sys.stderr,flush=True)
         raise
-    candidates=sorted(BACKUP.glob('dnscrypt.*.toml'),key=lambda p:p.stat().st_mtime,reverse=True)
-    for stale in candidates[10:]:
-        if stale.is_file() and not stale.is_symlink():stale.unlink()
     return {'changed':True,'backup':str(backup),'resolver_count':2,'pinned_stamps_configured':True,
             'pending_confirmation':True,'rollback_seconds':ROLLBACK_SECONDS-5,
             'note':'DNSCrypt in prova; verifica LAN e conferma entro la scadenza oppure verrà ripristinato.'}
@@ -442,15 +419,13 @@ def compatibility_repair(apply_changes=False):
     if BACKUP.is_symlink() or BACKUP.stat().st_uid!=0 or BACKUP.stat().st_mode&0o077:
         fail('Directory backup DNSCrypt non protetta')
     backup=BACKUP/('dnscrypt.'+datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')+'.toml')
-    with backup.open('xb') as stream:
-        stream.write(raw);stream.flush();os.fsync(stream.fileno())
-    backup.chmod(0o600)
+    durable_replace(backup,raw,create_only=True)
     txid=secrets.token_hex(16)
     pending_write({'txid':txid,'config':str(cfg),'backup':backup.name,
                    'until':int(time.time())+ROLLBACK_SECONDS-5})
     try:timer_arm(txid)
     except BaseException:
-        PENDING.unlink(missing_ok=True);raise
+        durable_unlink(PENDING);raise
     metadata=cfg.stat()
     try:
         write_atomic_secure(cfg,replacement.encode('utf-8'),metadata)
@@ -460,7 +435,7 @@ def compatibility_repair(apply_changes=False):
         try:
             write_atomic_secure(cfg,raw,metadata)
             run_checked(['systemctl','restart','dnscrypt-proxy'],30)
-            PENDING.unlink(missing_ok=True);timer_cancel(txid)
+            durable_unlink(PENDING);timer_cancel(txid)
         except BaseException as restore_error:
             print('IPTM DNS rollback failed: '+type(restore_error).__name__,file=sys.stderr,flush=True)
         raise
@@ -526,11 +501,9 @@ def main():
     if (mode=='watchdog' and (len(sys.argv)!=3 or not re.fullmatch('[a-f0-9]{32}',sys.argv[2]))) or (mode!='watchdog' and len(sys.argv)!=2):
         fail('Argomenti DNS Guard non validi')
     if mode in ('confirm','revert','watchdog','recover-boot'):
-        fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC,0o600)
+        from command_transport import acquire_domain_lock
+        fd=acquire_domain_lock(LOCK)
         try:
-            owner=os.fstat(fd)
-            if owner.st_uid!=0 or (owner.st_mode&0o077):fail('Lock DNS Guard non sicuro')
-            fcntl.flock(fd,fcntl.LOCK_EX)
             return dns_transaction(mode,sys.argv[2] if mode=='watchdog' else None)
         finally:os.close(fd)
     if mode=='status':
@@ -539,9 +512,9 @@ def main():
         return result
     if mode=='events':return sni_events()
     if mode in ('compat-preview','compat-apply'):
-        fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC,0o600)
+        from command_transport import acquire_domain_lock
+        fd=acquire_domain_lock(LOCK)
         try:
-            fcntl.flock(fd,fcntl.LOCK_EX)
             return compatibility_repair(mode=='compat-apply')
         finally:os.close(fd)
     payload=json.load(sys.stdin)
@@ -554,15 +527,16 @@ def main():
                 'anti_dpi':dpi_preview(plan),'notes':['Il comando preview non modifica iptables né DNS.',
                 'Per bloccare SNI serve Suricata IPS inline correttamente configurato.',
                 'ECH/QUIC e TLS frammentato possono impedire visibilità SNI.']}
-    fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC,0o600)
+    from command_transport import acquire_domain_lock
+    fd=acquire_domain_lock(LOCK,nonblocking=True)
     try:
-        owner=os.fstat(fd)
-        if owner.st_uid!=0 or (owner.st_mode&0o077):fail('Lock DNS Guard non sicuro')
-        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
         return apply(plan)
     finally:os.close(fd)
 
 if __name__=='__main__':
-    try:print(json.dumps({'ok':True,'result':main()},ensure_ascii=False))
+    try:
+        from command_transport import driver_admission
+        with driver_admission('dns_tls_guard',sys.argv[1:]):
+            print(json.dumps({'ok':True,'result':main()},ensure_ascii=False))
     except (PolicyError,ValueError,OSError,subprocess.TimeoutExpired) as ex:
         print(json.dumps({'ok':False,'error':str(ex)},ensure_ascii=False));sys.exit(1)

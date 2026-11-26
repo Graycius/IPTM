@@ -16,10 +16,10 @@ function iptm_dns_wizard_capabilities(array $guardState=[]): array {
     // Reuse the existing cached privileged status; avoid a second slow sudo call on Atom N450.
     if(function_exists('dns_info')) {
         $info=dns_info();
-        if(is_array($info) && empty($info['error'])) {
+        if(is_array($info)) {
             foreach($info as $key=>$value) if(is_string($key) && is_scalar($value) && strlen((string)$value)<4096)
                 $pairs[$key]=(string)$value;
-            $verified=isset($pairs['pihole_installed']);
+            $verified=empty($info['error']) && in_array($pairs['pihole_installed']??null,['yes','no'],true);
         }
     } else {
         [$rc,$out]=run([BIN_SUDO,'-n',HELPER,'dns-status'],null,14.0,16384);
@@ -32,7 +32,7 @@ function iptm_dns_wizard_capabilities(array $guardState=[]): array {
                         'dnscrypt_listener_safe','pihole_upstreams','unbound_dnscrypt_forward'],true))
                     $pairs[$key]=substr(trim($val),0,1024);
             }
-            $verified=isset($pairs['pihole_installed']);
+            $verified=in_array($pairs['pihole_installed']??null,['yes','no'],true);
         }
     }
     $settings=S_get();
@@ -40,7 +40,7 @@ function iptm_dns_wizard_capabilities(array $guardState=[]): array {
     $pihole=($pairs['pihole_installed']??'')==='yes';
     $unbound=($pairs['unbound_installed']??'')==='yes';
     $dnscrypt=($pairs['dnscrypt_installed']??'')==='yes'||!empty($guardState['dnscrypt_installed']);
-    $piReady=$pihole && ($pairs['pihole_active']??'')==='active';
+    $piReady=$verified && $pihole && ($pairs['pihole_active']??'')==='active';
     $ubReady=$unbound && ($pairs['unbound_active']??'')==='active' && ($pairs['unbound_check']??'')==='ok' && ($pairs['unbound_dnssec']??'')==='yes';
     $dcReady=$dnscrypt && ($pairs['dnscrypt_state']??'')==='active' && ($pairs['dnscrypt_check']??'')==='ok' && ($pairs['dnscrypt_listener_safe']??'')==='yes';
     $upstream=(string)($pairs['pihole_upstreams']??'');
@@ -72,6 +72,9 @@ function iptm_dns_wizard_capabilities(array $guardState=[]): array {
         'unbound'=>$unbound,'warnings'=>$warnings];
 }
 function iptm_dns_wizard_normalize(array $p): array {
+    foreach(['wizard_unbound','wizard_sni','wizard_dns_profile','wizard_antidpi'] as $key) {
+        if(array_key_exists($key,$p) && !is_string($p[$key]))throw new InvalidArgumentException('Campo DNS non valido: '.$key);
+    }
     $profile=(string)($p['wizard_unbound']??'balanced');
     if(!in_array($profile,['balanced','strict','compatible'],true))throw new InvalidArgumentException('Profilo Unbound non valido');
     $sni=(string)($p['wizard_sni']??'alert');

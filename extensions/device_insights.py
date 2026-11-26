@@ -7,8 +7,7 @@ No firewall modification, packet payload capture or persistent activity log.
 import collections
 import ipaddress
 import json
-import selectors
-import time
+from command_transport import capture, OutputLimitError
 import re
 import subprocess
 
@@ -16,78 +15,64 @@ MAX_DATA = 1_000_000
 MAX_ROWS = 3500
 
 
-def neighbours():
+def bounded_output(argv, limit, timeout):
+    """Partial stdout is explicitly labelled; all other consumers reject it."""
     try:
-        p = subprocess.run(['ip', '-j', '-4', 'neigh', 'show'], capture_output=True, text=True, timeout=3)
-        if p.returncode:
-            return {}
-        entries = json.loads(p.stdout[:200_000])
-        found = {}
-        for row in entries[:2048]:
-            ip = row.get('dst', '')
-            mac = row.get('lladdr', '').lower()
-            state = row.get('state', '')
-            if re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}', mac) and 'FAILED' not in str(state):
-                obj = ipaddress.ip_address(ip)
-                if obj.version == 4 and obj.is_private and not obj.is_loopback:
-                    found[str(obj)] = mac
-        return found
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return {}
-
-
-def kernel_data():
-    for source in ('/proc/net/nf_conntrack', '/proc/net/ip_conntrack'):
-        try:
-            with open(source, 'rb') as f:
-                data = f.read(MAX_DATA + 1)
-            if len(data) > MAX_DATA:
-                return 'truncated', data[:MAX_DATA].decode('ascii', 'replace')
-            return 'kernel', data.decode('ascii', 'replace')
-        except (OSError, PermissionError):
-            continue
-    # Some kernels expose conntrack through netlink only. Bound both time and
-    # output to avoid hanging a web worker on a damaged/overloaded kernel.
-    try:
-        proc = subprocess.Popen(['conntrack', '-L', '-f', 'ipv4'], stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        selector = selectors.DefaultSelector()
-        selector.register(proc.stdout, selectors.EVENT_READ)
-        chunks = []
-        total = 0
-        deadline = time.monotonic() + 3.0
-        try:
-            while time.monotonic() < deadline and total <= MAX_DATA:
-                events = selector.select(timeout=min(0.2, max(0.0, deadline - time.monotonic())))
-                if not events and proc.poll() is not None:
-                    break
-                for key, _ in events:
-                    block = key.fileobj.read1(min(16384, MAX_DATA + 1 - total))
-                    if not block:
-                        selector.unregister(key.fileobj)
-                        break
-                    chunks.append(block)
-                    total += len(block)
-                if total > MAX_DATA:
-                    break
-            data = b''.join(chunks)
-            if total > MAX_DATA:
-                return 'truncated', data[:MAX_DATA].decode('ascii', 'replace')
-            if proc.poll() is None:
-                # Differentiate an empty completed command from a timed out one.
-                return 'unavailable', ''
-            return ('netlink' if proc.returncode in (0, 1) else 'unavailable'), data.decode('ascii', 'replace')
-        finally:
-            selector.close()
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait(timeout=3)
-    except (OSError, subprocess.TimeoutExpired):
+        result = capture(argv, timeout=timeout, stdout_limit=limit,
+                         stderr_limit=65536, retain_prefix=True, encoding='utf-8',
+                         env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C'})
+        return ('ok', result.stdout) if result.returncode == 0 else ('unavailable', '')
+    except OutputLimitError as exc:
+        return ('truncated', exc.prefix.decode('utf-8','replace')) if exc.stream == 0 else ('unavailable','')
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return 'unavailable', ''
 
 
+def parse_neighbours(raw):
+    try:
+        entries=json.loads(raw)
+    except (ValueError,TypeError):
+        return {}
+    if not isinstance(entries,list):
+        return {}
+    found={}
+    for row in entries[:2048]:
+        if not isinstance(row,dict):
+            continue
+        ip,mac=row.get('dst'),row.get('lladdr')
+        if not isinstance(ip,str) or not isinstance(mac,str):
+            continue
+        if not re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}',mac.lower()) or 'FAILED' in str(row.get('state','')) or 'INCOMPLETE' in str(row.get('state','')):
+            continue
+        try:
+            obj=ipaddress.IPv4Address(ip)
+        except ValueError:
+            continue
+        if obj.is_private and not (obj.is_loopback or obj.is_unspecified or obj.is_multicast):
+            found[str(obj)]=mac.lower()
+    return found
+
+
+def neighbours():
+    state, raw=bounded_output(['ip','-j','-4','neigh','show'],200000,3)
+    return parse_neighbours(raw) if state=='ok' else {}
+
+
+def kernel_data():
+    for source in ('/proc/net/nf_conntrack','/proc/net/ip_conntrack'):
+        try:
+            with open(source,'rb') as f:
+                data=f.read(MAX_DATA+1)
+            state='truncated' if len(data)>MAX_DATA else 'kernel'
+            return state,data[:MAX_DATA].decode('ascii','replace')
+        except OSError:
+            continue
+    state,raw=bounded_output(['conntrack','-L','-f','ipv4'],MAX_DATA,3)
+    return ('netlink' if state=='ok' else state),raw
+
+
 def analyze(raw, mapping):
-    totals = collections.defaultdict(lambda: {'connections': 0, 'tcp': 0, 'udp': 0,
+    totals = collections.defaultdict(lambda: {'connections': 0, 'tcp': 0, 'udp': 0, 'other_protocol': 0,
                                                'dns': 0, 'dot': 0, 'https': 0, 'other': 0})
     seen = 0
     for line in raw.splitlines()[:MAX_ROWS]:
@@ -108,11 +93,11 @@ def analyze(raw, mapping):
             continue
         item = totals[client]
         item['connections'] += 1
-        item[proto] += 1
+        item[proto if proto != 'other' else 'other_protocol'] += 1
         item['dns' if port == 53 else 'dot' if port == 853 else 'https' if port == 443 else 'other'] += 1
         seen += 1
     return [{'ip': ip, 'mac': mapping[ip], **stat} for ip, stat in sorted(
-        totals.items(), key=lambda item: -item[1]['connections'])[:40]], seen
+        totals.items(), key=lambda item: (-item[1]['connections'], ipaddress.ip_address(item[0])))[:40]], seen
 
 
 def main():
@@ -121,7 +106,7 @@ def main():
     devices, connections = analyze(raw, mapping)
     print(json.dumps({'ok': status in ('kernel', 'netlink', 'truncated'), 'source': status,
                       'neighbours': len(mapping), 'connections': connections,
-                      'devices': devices, 'partial': status == 'truncated',
+                      'devices': devices, 'partial': status == 'truncated' or len(raw.splitlines()) > MAX_ROWS,
                       'note': 'Solo connessioni tracciate e IP presenti in ip neigh. Nessuna attribuzione alle app Android. HTTPS non viene decifrato.'}))
 
 

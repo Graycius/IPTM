@@ -7,6 +7,7 @@ Never flushes unrelated firewall tables or touches distribution packages.
 """
 from __future__ import annotations
 import json
+import importlib.util
 import os
 import pathlib
 import pwd
@@ -14,6 +15,8 @@ import re
 import shutil
 import subprocess
 import sys
+
+from command_transport import capture
 
 BASE = pathlib.Path('/var/lib/iptm-cache-proxy')
 REDIRECT = BASE / 'redirect.json'
@@ -46,13 +49,7 @@ class RetireError(ValueError):
 
 def execute(*argv, timeout=20, check=True):
     try:
-        r = subprocess.run(
-            list(argv),
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=timeout,
-        )
+        r = capture(list(argv), timeout=timeout, stdout_limit=1048576, stderr_limit=262144)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RetireError('Comando non eseguibile: ' + str(exc)[:160]) from exc
     if check and r.returncode:
@@ -72,10 +69,10 @@ def _safe_stat(path: pathlib.Path):
 
 
 def owned_file(path: pathlib.Path, marker: str) -> bool:
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return False
     st = _safe_stat(path)
-    if (not path.is_file() or st.st_uid != 0 or (st.st_mode & 0o022) or
+    if (not path.is_file() or st.st_uid != 0 or st.st_nlink != 1 or (st.st_mode & 0o022) or
             st.st_size > MAX_FILE):
         raise RetireError('File non attribuibile a IPTM: ' + str(path))
     try:
@@ -99,7 +96,7 @@ def safe_dir(path: pathlib.Path) -> None:
             uid_ok.add(pwd.getpwnam('proxy').pw_uid)
         except KeyError:
             pass
-    if st.st_uid not in uid_ok or (st.st_mode & 0o022):
+    if not path.is_dir() or st.st_uid not in uid_ok or (st.st_mode & 0o022):
         raise RetireError('Directory non sicura: ' + str(path))
     try:
         entries = list(path.iterdir())
@@ -231,9 +228,38 @@ def retire(old_version: str) -> dict:
     }
 
 
+def staged_preflight(old_version: str) -> dict:
+    """Compatibility hook invoked by the 5.30.29 updater before its journal.
+
+    In this context no service, qdisc, NAT or configuration may be changed.
+    Use the new preflight to catch pending transactions missed by the old code.
+    Explicit console invocation outside staging retains the legacy cleanup.
+    """
+    if not VERSION_RE.fullmatch(old_version):
+        raise RetireError('Versione precedente non valida')
+    stage = pathlib.Path(__file__).resolve().parent.parent
+    worker = stage / 'extensions/native_update.py'
+    loader = stage / 'loader/iptables-manager.php'
+    if any(p.is_symlink() or not p.is_file() or p.stat().st_uid != 0 or p.stat().st_mode & 0o022 for p in (worker,loader)):
+        raise RetireError('Staging non protetto')
+    match = re.search(r"APP_VERSION\s*=\s*'([0-9.]+)'", loader.read_text())
+    if not match:
+        raise RetireError('Versione target non disponibile')
+    spec = importlib.util.spec_from_file_location('iptm_staged_native',worker)
+    native = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(native)
+    try:
+        native.preflight_network_transactions(match.group(1))
+    except (native.UpdateError,OSError,ValueError) as exc:
+        raise RetireError(str(exc)) from exc
+    return {'ok':True,'retired':False,'reason':'preflight compatibile; nessuna modifica di rete prima del commit'}
+
+
 def main(args: list[str]) -> dict:
     if len(args) != 2 or args[0] != 'apply':
         raise RetireError('Uso: apply <versione-precedente>')
+    if pathlib.Path(__file__).resolve().parent.parent.name.startswith('.native-stage-'):
+        return staged_preflight(args[1])
     return retire(args[1])
 
 

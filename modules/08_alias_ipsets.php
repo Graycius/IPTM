@@ -7,14 +7,16 @@ const GEO_NAMES = ['CN' => 'Cina', 'RU' => 'Russia', 'KP' => 'Corea del Nord', '
 function alias_map(array $S): array {
     $nets = []; $ports = [];
     foreach ($S['aliases'] ?? [] as $a) {
+        if (!is_array($a) || !is_string($a['name'] ?? null) || !preg_match('/^[A-Za-z][A-Za-z0-9_-]{1,24}$/D',$a['name']) || !is_string($a['items'] ?? null)) continue;
         $it = preg_split('/[\s,;]+/', trim((string)$a['items']), -1, PREG_SPLIT_NO_EMPTY);
-        if ($it && !array_filter($it, fn($x) => !preg_match('/^\d{1,5}(:\d{1,5})?$/', $x))) $ports[$a['name']] = implode(',', $it);
-        else $nets[$a['name']] = array_values(array_filter($it, fn($x) => $x !== '' && v_ok('nets', $x) && !str_contains($x, ',')));
+        if (!$it) { $nets[$a['name']] = []; continue; }
+        if (v_ok('ports', implode(',', $it))) $ports[$a['name']] = implode(',', $it);
+        elseif (!array_filter($it, fn($x) => !v_ok('nets', $x) || str_contains($x, ','))) $nets[$a['name']] = array_values(array_unique($it));
     }
     return ['nets' => $nets, 'ports' => $ports];
 }
 function v_netal(string $v, array $S): bool {
-    if ($v === '' || v_ok('nets', $v)) return true; if (!preg_match('/^@([A-Za-z][A-Za-z0-9_-]{1,24})$/', $v, $m)) return false;
+    if ($v === '' || v_ok('nets', $v)) return true; if (!preg_match('/^@([A-Za-z][A-Za-z0-9_-]{1,24})$/D', $v, $m)) return false;
     return isset(alias_map($S)['nets'][$m[1]]);
 }
 function list_sets(array $S): array {   // set ipset dinamici scaricati dall'helper
@@ -23,8 +25,8 @@ function list_sets(array $S): array {   // set ipset dinamici scaricati dall'hel
 }
 function fq_parse(string $t): array {   // righe "nome azione host1 host2": nome [a-z0-9]{1,12}, azione block|allow
     $o = []; foreach (preg_split('/\R/', $t) as $l) { $x = preg_split('/[\s,;]+/', trim($l), -1, PREG_SPLIT_NO_EMPTY); if (count($x) < 3) continue;
-        [$id, $act] = [strtolower($x[0]), strtolower($x[1])]; $hosts = array_values(array_filter(array_slice($x, 2), fn($h) => (bool)preg_match('/^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/', $h)));
-        if (preg_match('/^[a-z0-9]{1,12}$/', $id) && in_array($act, ['block', 'allow'], true) && $hosts && !isset($o[$id])) $o[$id] = ['act' => $act, 'hosts' => $hosts]; }
+        [$id, $act] = [strtolower($x[0]), strtolower($x[1])]; $hosts = array_values(array_filter(array_slice($x, 2), fn($h) => (bool)preg_match('/^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/D', $h)));
+        if (preg_match('/^[a-z0-9]{1,12}$/D', $id) && in_array($act, ['block', 'allow'], true) && $hosts && !isset($o[$id])) $o[$id] = ['act' => $act, 'hosts' => $hosts]; }
     return $o;
 }
 function ipset_text(array $S): string {

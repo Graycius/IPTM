@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""IPTM 5.30.23: non-invasive diagnostics adapted from IPTM 6.11.3.
+"""IPTM 6.0.8: non-invasive diagnostics adapted from IPTM 6.11.3.
 
 Concepts adopted from IPTM6 acceptance, external_checks, suricata_inspect
 and legacy_audit. This is NOT the IPTM6 root worker and deliberately has no
 mutation APIs. The report is local evidence, not proof of LAN/WAN reachability.
 """
+
+from command_transport import capture, OutputLimitError
 import json
 import os
 import pathlib
@@ -23,14 +25,14 @@ PENDING={'pending','applying','persisting','partial','rollback-failed','recovery
 def cmd(argv,seconds=1.5):
     """Fixed binary and argument arrays only; no shell. No raw logs released."""
     try:
-        p=subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                         stderr=subprocess.DEVNULL, text=True,timeout=seconds)
+        p=capture(argv, timeout=seconds, stdout_limit=24000)
         return p.returncode,p.stdout[:24000]
     except (OSError, subprocess.TimeoutExpired):return None,''
 
 def service(unit):
-    rc,_=cmd(['/usr/bin/systemctl','is-active','--quiet',unit+'.service'],1.3)
-    return None if rc is None else rc==0
+    rc,out=cmd(['/usr/bin/systemctl','is-active',unit+'.service'],1.3)
+    state=out.strip()
+    return True if rc==0 and state=='active' else False if state in ('inactive','failed') else None
 
 def services_status(units):
     """One systemctl invocation instead of a sequential probe per service.
@@ -42,7 +44,7 @@ def services_status(units):
     lines=out.strip().splitlines()
     known={'active','inactive','failed','activating','deactivating','reloading','unknown'}
     if rc is not None and len(lines)==len(units) and all(x.strip() in known for x in lines):
-        return dict(zip(units,(x.strip()=='active' for x in lines)))
+        return dict(zip(units,(True if x.strip()=='active' else False if x.strip() in ('inactive','failed') else None for x in lines)))
     return {u:service(u) for u in units}
 
 def ipv6_disabled():
@@ -76,8 +78,10 @@ def udp_dns(port):
     packet=struct.pack('!HHHHHH',0x4C62,0x0100,1,0,0,0)+b'\x07example\x03org\x00'+struct.pack('!HH',1,1)
     sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
     try:
-        sock.settimeout(.35);sock.sendto(packet,('127.0.0.1',port));raw,_=sock.recvfrom(1024)
-        return len(raw)>=12 and raw[:2]==packet[:2] and bool(raw[2]&0x80)
+        import secrets
+        packet=secrets.token_bytes(2)+packet[2:]
+        sock.settimeout(.35);sock.connect(('127.0.0.1',port));sock.send(packet);raw=sock.recv(1024)
+        return len(raw)>=12 and raw[:2]==packet[:2] and bool(raw[2]&0x80) and not bool(raw[2]&0x02) and not (raw[3]&0x0f) and raw[4:6]==b'\x00\x01' and raw[12:len(packet)]==packet[12:]
     except OSError:return False
     finally:sock.close()
 

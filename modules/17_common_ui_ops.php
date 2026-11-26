@@ -1,5 +1,52 @@
 <?php
 
+/** Page view primitives. Data is escaped at the output boundary. Only explicit trusted HTML is composed by page handlers. */
+function iptm_view_text(mixed $v, string $fallback='Non disponibile'): string {
+    if (is_bool($v)) return $v?'Sì':'No';
+    if (is_scalar($v) && trim((string)$v)!=='') return htmlspecialchars((string)$v, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8');
+    return htmlspecialchars($fallback, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8');
+}
+function iptm_view_rows(mixed $v): array { return is_array($v)?array_values(array_filter($v,'is_array')):[]; }
+function iptm_view_json(mixed $v): string { return iptm_view_text(json_encode($v, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE),''); }
+function iptm_view_error(string $message): void { echo '<p role="alert" class="msg err">'.iptm_view_text($message).'</p>'; }
+function iptm_view_start(string $title,string $description=''): void { echo '<section class="card iptm-workspace"><header class="iptm-workspace-header"><h2>'.iptm_view_text($title).'</h2>'.($description!==''?'<p class="mut">'.iptm_view_text($description).'</p>':'').'</header>'; }
+function iptm_view_end(): void { echo '</section>'; }
+function iptm_view_link(string $route,string $label,array $params=[]): string { return '<a class="btn s" href="?'.h(http_build_query(['p'=>$route]+$params,'','&',PHP_QUERY_RFC3986)).'">'.iptm_view_text($label).'</a>'; }
+function iptm_view_form(string $route,string $action,array $fields=[],bool $upload=false): void {
+    echo '<form method="post" class="iptm-workspace-form"'.($upload?' enctype="multipart/form-data"':'').'>'.fh('p='.$route).'<input type="hidden" name="action" value="'.h($action).'">';
+    foreach($fields as $k=>$v) echo '<input type="hidden" name="'.h($k).'" value="'.h($v).'">';
+}
+function iptm_view_submit(string $label,string $style='g'): void { echo '<div class="iptm-workspace-actions"><button type="submit" class="'.h($style).'">'.iptm_view_text($label).'</button></div></form>'; }
+function iptm_view_table(array $headers,array $rows,string $caption): void {
+    echo '<div class="iptm-table-scroll" role="region" aria-label="'.h($caption).'" tabindex="0"><table><caption class="iptm-table-caption">'.iptm_view_text($caption).'</caption><thead><tr>';
+    foreach($headers as $head) echo '<th scope="col">'.iptm_view_text($head).'</th>';
+    echo '</tr></thead><tbody>';
+    $rows=iptm_view_rows($rows);
+    foreach($rows as $row) { echo '<tr>'; foreach(array_values($headers) as $i=>$_) echo '<td>'.iptm_view_text($row[$i]??null).'</td>'; echo '</tr>'; }
+    if(!$rows) echo '<tr><td colspan="'.count($headers).'">Nessun elemento restituito.</td></tr>';
+    echo '</tbody></table></div>';
+}
+function iptm_view_probe(string $command, array $args=[], ?string $input=null): array {
+    [$rc,$out,$err]=priv($command,$input,$args);
+    $j=$rc===0?json_decode($out,true):null;
+    if(!is_array($j)||($j['ok']??false)!==true) {
+        // A valid helper error is more useful than a serialized JSON envelope.
+        // Never display a successful response when ok is an arbitrary string.
+        $message=is_array($j)&&is_string($j['error']??null)?$j['error']:($err!==''?$err:$out);
+        return ['ok'=>false,'error'=>substr(herr($message),0,400)];
+    }
+    return $j;
+}
+
+/** Editable field primitives used by network policy workspaces. */
+function iptm_edit_text(string $name,string $label,mixed $value='',string $placeholder='',bool $multiline=false): string {
+    $value=is_scalar($value)?(string)$value:'';
+    $attr=' name="'.h($name).'" placeholder="'.h($placeholder).'" aria-label="'.h($label).'"';
+    return $multiline?'<textarea rows="3"'.$attr.'>'.h($value).'</textarea>':'<input type="text"'.$attr.' value="'.h($value).'">';
+}
+function iptm_edit_check(string $name,string $label,bool $checked=false,string $value='1'): string {
+    return '<label class="iptm-edit-check"><input type="checkbox" name="'.h($name).'" value="'.h($value).'"'.($checked?' checked':'').'> '.h($label).'</label>';
+}
 // ===================== FORM UI (shared) =====================
 function dd(string $label, string $ctl, string $help = ''): string {
     return '<div class="dd"><label>' . $label . '</label><div>' . $ctl . ($help ? '<small>' . $help . '</small>' : '') . '</div></div>';
@@ -17,11 +64,18 @@ function dd_in(array $S, string $k, string $label, string $ph = '', string $help
     return dd($label, '<input name="' . h($k) . '" value="' . h($S[$k] ?? '') . '" placeholder="' . h($ph) . '" style="max-width:' . $w . '" ' . $extra . '>', $help);
 }
 function s_form(string $sec, string $body, string $back, bool $partial = false): string {
-    return '<form method=post class="acc">' . fh($back) . '<input type=hidden name=action value=settings_save><input type=hidden name=sec value="' . h($sec) . '">'
-        . ($partial ? '<input type=hidden name=_partial value=1>' : '')
-        . $body
-        . '<p class="sticky iptm-simple-actions"><button class="g" name=apply value=1>Salva e applica</button> <button type=submit class="s">Salva per dopo</button><small class="mut">Salva le impostazioni; «Salva e applica» le attiva subito.</small></p></form>';
+    if (($_SESSION['role']??'viewer')!=='admin') {
+        return '<p class="msg warn" role="status">Consultazione: solo gli amministratori possono salvare.</p><fieldset disabled class="iptm-readonly-form">'.$body.'</fieldset>';
+    }
+    return '<form method="post" class="acc iptm-workspace-form">'.fh($back)
+        .'<input type="hidden" name="action" value="settings_save"><input type="hidden" name="sec" value="'.h($sec).'">'
+        .'<input type="hidden" name="_form_protocol" value="1">'
+        .($partial?'<input type="hidden" name="_partial" value="1">':'').$body
+        .'<div class="sticky iptm-simple-actions"><input type="hidden" name="_form_complete" value="1">'
+        .'<button type="submit" class="g">Salva nella bozza</button> <button type="submit" class="s" name="apply" value="1">Salva e prova con rollback</button>'
+        .'<small class="mut">Il primo pulsante non modifica le regole attive. La prova richiede conferma esplicita in Applica.</small></div></form>';
 }
+
 
 // ===================== MIGLIORAMENTI UX / OPS (badge, search, backup, history, checklist) =====================
 
@@ -289,10 +343,10 @@ function update_notice_seen_version(): string {
     // La directory dati può essere root-only: delega anche la lettura all'helper privilegiato.
     [$c, $o] = priv('notice-status');
     $v = $c === 0 ? trim($o) : '';
-    return $cached = (preg_match('/^\d+(?:\.\d+){1,3}$/', $v) ? $v : '');
+    return $cached = (preg_match('/^\d+(?:\.\d+){1,3}$/D', $v) ? $v : '');
 }
 function update_notice_mark_seen(string $version): bool {
-    if (!preg_match('/^\d+(?:\.\d+){1,3}$/', $version)) return false;
+    if (!preg_match('/^\d+(?:\.\d+){1,3}$/D', $version)) return false;
     // DATA_DIR può essere root-owned o personalizzata: scrittura atomica tramite helper privilegiato.
     [$c] = priv('notice-ack', null, [$version]);
     return $c === 0;

@@ -5,6 +5,7 @@ The rescue action can restore live IPv4 firewall rules; it never changes
 NetworkManager, interfaces, DHCP, routes or CAKE. Backups are root-only.
 """
 from __future__ import annotations
+from command_transport import capture
 import hashlib
 import subprocess
 import shutil
@@ -22,7 +23,7 @@ import resource
 
 from network_audit import MAX_FILE_BYTES, MAX_FILES, audit, validate_dhcp
 
-VERSION = '5.30.23'
+VERSION = '6.0.8'
 ROOT = Path('/')
 SNAPSHOTS = Path('/var/lib/iptm-network-guard/snapshots')
 ID_RE = re.compile(r'^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$')
@@ -35,7 +36,7 @@ class GuardError(ValueError):
 def _safe_relative(name: str) -> tuple[str, ...]:
     if not isinstance(name, str) or not name.startswith('/') or '\\' in name or '\x00' in name:
         raise GuardError('Percorso backup non valido')
-    parts = PurePosixPath(name[1:]).parts
+    parts = tuple(name[1:].split('/'))
     if not parts or any(p in ('', '..', '.') for p in parts):
         raise GuardError('Percorso backup non valido')
     return parts
@@ -53,7 +54,7 @@ def _safe_read(root: Path, absolute: str, *, max_bytes: int = MAX_FILE_BYTES) ->
         try:
             meta = os.fstat(file_fd)
             if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0 or
-                meta.st_size > max_bytes or meta.st_size < 0 or meta.st_mode & 0o002):
+                meta.st_size > max_bytes or meta.st_size < 0 or meta.st_mode & 0o022):
                 raise GuardError('File configurazione non idoneo al backup: '+absolute)
             with os.fdopen(os.dup(file_fd), 'rb') as handle:
                 raw = handle.read(max_bytes + 1)
@@ -240,7 +241,7 @@ RESCUE_ROOT = Path('/var/lib/iptm-network-guard/rescue')
 def _rescue_command(argv, data=None, *, runner=None):
     call = runner or subprocess.run
     try:
-        p=call(argv,input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+        p=capture(argv, input_data=data, text=False, timeout=18, stdout_limit=4*1024*1024) if runner is None else call(argv,input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                timeout=18,check=False)
     except (OSError,subprocess.TimeoutExpired) as exc:
         raise GuardError('Ripristino: comando non disponibile: '+argv[0]) from exc
@@ -320,9 +321,9 @@ def rescue_save(*, root=RESCUE_ROOT, runner=None):
     """
     _private_directory(root.parent)
     _private_directory(root)
-    fd=os.open(root/'lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    from command_transport import acquire_domain_lock
+    fd=acquire_domain_lock(root/'lock')
     try:
-        fcntl.flock(fd,fcntl.LOCK_EX)
         # Reserve room for new + old snapshots; do not overwrite on low disk.
         free=shutil.disk_usage(root).free
         if free < 3*(RESCUE_IPSET_MAX+RESCUE_IPTABLES_MAX):
@@ -387,9 +388,9 @@ def rescue_restore(*, root=RESCUE_ROOT, runner=None, interactive=True):
         else:os.close(fd)
     _private_directory(root,create=False)
     lock=root/'lock'
-    fd=os.open(lock,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    from command_transport import acquire_domain_lock
+    fd=acquire_domain_lock(lock)
     try:
-        fcntl.flock(fd,fcntl.LOCK_EX)
         # Read under the same lock used for snapshot rotation.
         meta,parts=rescue_read(root=root)
         if parts['ipsets.txt']:

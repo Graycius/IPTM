@@ -6,9 +6,13 @@ A separately supervised systemd watchdog restores unconfirmed trials.
 Deliberately does not estimate internet bandwidth from NIC link speed.
 """
 from __future__ import annotations
+
+from command_transport import durable_replace
+
+from command_transport import capture
 import fcntl, hashlib, json, os, pathlib, re, secrets, subprocess, sys, tempfile, time
 
-VERSION='5.30.23'
+VERSION='6.0.8'
 BASE=pathlib.Path('/var/lib/iptm-qos-engine')
 LOCK=BASE/'lock';STAGE=BASE/'stage.json';STATE=BASE/'active.json'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-watchdog.service')
@@ -32,7 +36,7 @@ DEFAULT={'fq_codel','pfifo_fast','noqueue','mq'}
 class QosError(Exception):pass
 
 def run(args,*,check=True,timeout=10):
-    try:r=subprocess.run(args,capture_output=True,text=True,stdin=subprocess.DEVNULL,timeout=timeout)
+    try:r=capture(args,timeout=timeout)
     except (OSError,subprocess.TimeoutExpired) as e:raise QosError('comando non disponibile: '+str(e)) from e
     if check and r.returncode:raise QosError((r.stderr or r.stdout)[-350:]+' ['+args[0]+']')
     return r
@@ -52,22 +56,15 @@ def guard_root():
     if s.st_uid or s.st_mode&0o077:raise QosError('directory non root:0700')
 
 def atom(path,obj):
-    fd,p=tempfile.mkstemp(dir=BASE,prefix='.qos-')
-    try:
-        with os.fdopen(fd,'w') as out:
-            os.fchmod(out.fileno(),0o600);json.dump(obj,out,sort_keys=True);out.flush();os.fsync(out.fileno())
-        os.replace(p,path)
-    finally:
-        if os.path.exists(p):os.unlink(p)
+    from command_transport import durable_json
+    durable_json(path,obj)
+
 
 def read(path):
-    if path.is_symlink():raise QosError('stato simbolico')
-    if not path.exists():return None
-    s=path.stat()
-    if not path.is_file() or s.st_uid or s.st_mode&0o077:raise QosError('stato non protetto')
-    v=json.loads(path.read_text())
-    if not isinstance(v,dict):raise QosError('stato JSON non valido')
-    return v
+    from command_transport import read_private_json
+    try:return read_private_json(path,limit=2097152)
+    except (OSError,ValueError,UnicodeError) as exc:raise QosError('Documento di stato non protetto o non valido: '+str(exc)) from exc
+
 
 def identity(iface):
     links=jcmd(['ip','-j','link','show','dev',iface])
@@ -180,7 +177,7 @@ def ifb_name(iface):
 
 def plan(raw):
     obj=validate(raw)
-    if (read(STATE) or {}).get('state') in ('pending','applying','rollback-failed','confirmed'):
+    if (read(STATE) or {}).get('state') in ('pending','applying','rollback-failed','rolling-back','confirmed'):
         raise QosError('profilo QoS attivo o in transazione')
     if run(['systemctl','is-active','iptm-sqm-calibrate.timer'],check=False).stdout.strip()=='active':
         raise QosError('timer SQM precedente attivo: disabilitarlo prima di migrare')
@@ -197,19 +194,14 @@ def plan(raw):
 
 def guard_install():
     previous=read(STATE)
-    if previous and previous.get('version') not in (None,VERSION) and previous.get('state') in ('applying','pending','confirmed','rollback-failed'):
+    if previous and previous.get('version') not in (None,VERSION) and previous.get('state') in ('applying','pending','confirmed','rollback-failed','rolling-back'):
         raise QosError('Watchdog della release precedente con QoS attivo: completare la migrazione dalla console prima di sostituirlo')
     if UNIT.is_symlink():raise QosError('systemd unit simbolica')
     if UNIT.exists() and 'Description=IPTM QoS independent rollback watchdog' not in UNIT.read_text():
         raise QosError('unità esistente non riconosciuta')
     if not pathlib.Path(SCRIPT).is_file():raise QosError('script release non installato: '+SCRIPT)
     unit=f'''[Unit]\nDescription=IPTM QoS independent rollback watchdog\nAfter=network.target\n[Service]\nType=simple\nExecStart=/usr/bin/python3 -B {SCRIPT} watchdog\nRestart=always\nRestartSec=2\nNoNewPrivileges=true\n[Install]\nWantedBy=multi-user.target\n'''
-    fd,p=tempfile.mkstemp(dir=UNIT.parent,prefix='.iptm-qos-')
-    try:
-        with os.fdopen(fd,'w') as out:out.write(unit);out.flush();os.fsync(out.fileno())
-        os.chmod(p,0o644);os.replace(p,UNIT)
-    finally:
-        if os.path.exists(p):os.unlink(p)
+    durable_replace(UNIT, unit.encode(), mode=0o644)
     run(['systemctl','daemon-reload'],timeout=20);run(['systemctl','enable',UNIT.name],timeout=20);
     run(['systemctl','restart',UNIT.name],timeout=20);
     if run(['systemctl','is-active',UNIT.name],check=False).stdout.strip()!='active':
@@ -270,52 +262,78 @@ def owned(state):
     index=link[0].get('ifindex') if link else None
     if index is not None and not state.get('ifb_ifindex'):
         raise QosError('proprietà IFB non dimostrata: rimozione automatica vietata')
-    if state.get('ifb_ifindex') and index!=state['ifb_ifindex']:
+    if index is not None and state.get('ifb_ifindex') and index!=state['ifb_ifindex']:
         raise QosError('IFB sostituita, rimozione automatica bloccata')
     roots=qroots(iface)
     if roots and roots[0].get('kind')=='cake' and roots[0].get('handle')!='5ca1:':
         raise QosError('root WAN acquisita da altro software')
     ifbr=qroots(ifb) if index is not None else []
-    if ifbr and ifbr[0].get('kind')=='cake' and ifbr[0].get('handle')!='5ca2:':
-        raise QosError('root IFB acquisita da altro software')
+    if ifbr:
+        if len(ifbr)!=1:raise QosError('root IFB ambigua')
+        q=ifbr[0]
+        if q.get('kind')=='cake':
+            if q.get('handle')!='5ca2:':raise QosError('root IFB acquisita da altro software')
+        elif q.get('kind') not in DEFAULT or q.get('handle') not in ('0:',None) or state.get('rollback_from',state.get('state'))!='applying':
+            raise QosError('root IFB esterna: rimozione vietata')
+
+def rollback_topology(state):
+    """Idempotent compensation: verify current ownership before each deletion.
+
+    A missing previously-owned object is already removed, not a conflict.
+    Persist progress so an interrupted rollback can resume without deleting
+    an independently installed ingress or a replacement interface.
+    """
+    iface,ifb=state['interface'],state['ifb']
+    owned(state)
+    ingress=[q for q in jcmd(['tc','-j','qdisc','show','dev',iface])
+             if q.get('kind') in ('ingress','clsact')]
+    if state.get('ingress_added'):
+        if ingress:
+            if len(ingress)!=1 or ingress[0].get('kind')!='ingress' or ingress[0].get('handle')!='ffff:':
+                raise QosError('ingress sostituito: rimozione vietata')
+            expected=int(state.get('ingress_policy_count',0))
+            if not ingress_filters_verified(iface,ifb,expected,partial=state.get('rollback_from')=='applying'):
+                raise QosError('ingress modificato da altro servizio')
+            run(['tc','qdisc','del','dev',iface,'ingress'])
+            if any(q.get('kind') in ('ingress','clsact') for q in jcmd(['tc','-j','qdisc','show','dev',iface])):
+                raise QosError('ingress ancora presente: IFB conservata')
+        state['ingress_added']=False;atom(STATE,state)
+    elif ingress:
+        # Unknown ingress could refer to the IFB. Do not destroy its target.
+        raise QosError('ingress non attribuibile a IPTM: rollback sospeso')
+    owned(state)
+    roots=qroots(iface)
+    if any(q.get('handle')=='5ca1:' for q in roots):
+        if len(roots)!=1 or roots[0].get('kind')!='cake':
+            raise QosError('handle WAN ora assegnato a qdisc esterna')
+        run(['tc','qdisc','del','dev',iface,'root'])
+        if any(q.get('handle')=='5ca1:' for q in qroots(iface)):
+            raise QosError('root CAKE ancora presente')
+    owned(state)
+    links=run(['ip','link','show','dev',ifb],check=False)
+    if links.returncode==0:
+        if not state.get('ifb_ifindex'):raise QosError('IFB non attribuibile a IPTM')
+        run(['ip','link','del','dev',ifb])
+        if run(['ip','link','show','dev',ifb],check=False).returncode==0:
+            raise QosError('IFB ancora presente dopo rimozione')
+    state['ifb_ifindex']=None;atom(STATE,state)
+
 
 def restore(state):
     if state.get('version')!=VERSION:raise QosError('stato di altra release')
     if (read(UNSHAPED) or {}).get('state')=='pending':
         raise QosError('Prova senza shaping in corso: attendere ripristino dei limiti CAKE')
+    if state.get('state')=='rolled-back':return {'ok':True,'state':'rolled-back','interface':state['interface']}
+    if state.get('state') not in ('applying','pending','confirmed','rollback-failed','rolling-back'):
+        raise QosError('stato non ripristinabile')
     if state.get('state')=='confirmed':validate_confirmed_state(state)
-    try:owned(state)
-    except QosError:
-        state['state']='rollback-failed';atom(STATE,state);raise
-    iface=state['interface'];ifb=state['ifb']
-    # Only delete ingress if IPTM added it and the filter still targets our IFB.
-    try:
-        if state.get('ingress_added'):
-            expected=int(state.get('ingress_policy_count',0))
-            if not ingress_filters_verified(iface,ifb,expected,partial=state.get('state')=='applying'):
-                raise QosError('ingress modificato da altro servizio')
-            removed=run(['tc','qdisc','del','dev',iface,'ingress'],check=False)
-            if removed.returncode:
-                raise QosError('rimozione ingress fallita: '+(removed.stderr or '')[-160:])
-            if any(q.get('kind') in ('ingress','clsact')
-                   for q in jcmd(['tc','-j','qdisc','show','dev',iface])):
-                raise QosError('ingress ancora presente: IFB conservata')
-        roots=qroots(iface)
-        if roots and roots[0].get('handle')=='5ca1:':
-            if roots[0].get('kind')!='cake':
-                raise QosError('handle WAN ora assegnato a qdisc esterna')
-            run(['tc','qdisc','del','dev',iface,'root'])
-        links=run(['ip','link','show','dev',ifb],check=False)
-        if links.returncode==0 and state.get('ifb_ifindex'):
-            run(['ip','link','del','dev',ifb])
-            if run(['ip','link','show','dev',ifb],check=False).returncode==0:
-                raise QosError('IFB ancora presente dopo rimozione')
-    except (QosError,OSError) as exc:
+    state.setdefault('rollback_from',state['state']);state['state']='rolling-back'
+    state['rollback_attempt_at']=time.time();atom(STATE,state)
+    try:rollback_topology(state)
+    except (QosError,OSError,ValueError,KeyError,TypeError,IndexError) as exc:
         state['state']='rollback-failed';state['rollback_error']=str(exc)[:240]
         atom(STATE,state);raise
-    state['state']='rolled-back';state['restored_at']=time.time();atom(STATE,state)
-    # QoS teardown never depends on systemd availability, but disable the
-    # adaptive timer best-effort to prevent a stale job after rollback.
+    state['state']='rolled-back';state['restored_at']=time.time();state.pop('rollback_error',None);atom(STATE,state)
     try:
         adaptive=read(ADAPT)
         if adaptive and adaptive.get('enabled'):
@@ -323,7 +341,7 @@ def restore(state):
             if ADAPT_TIMER.is_file() and not ADAPT_TIMER.is_symlink():
                 run(['systemctl','disable','--now',ADAPT_TIMER.name],check=False)
     except (QosError,OSError):pass
-    return {'ok':True,'state':'rolled-back','interface':iface}
+    return {'ok':True,'state':'rolled-back','interface':state['interface']}
 
 def ingress_policy(iface):
     """Load only verifiably owned DSCP rules, otherwise use plain IFB ingress.
@@ -393,32 +411,72 @@ def ingress_filters_verified(iface,ifb,expected,partial=False):
         if ifb not in detail or 'mirred' not in detail:return False
     return True
 
-def install_topology(obj):
-    """Apply only the fully-owned two-direction CAKE topology to default root.
+def topology_commands(obj, rules):
+    """Pure, ordered command plan shared by activation and boot restoration."""
+    iface,ifb=obj['interface'],obj['ifb']
+    if not NIC.fullmatch(iface) or not NIC.fullmatch(ifb) or iface==ifb or iface=='lo':
+        raise QosError('topologia non valida')
+    return [
+        ('ifb-create',['ip','link','add','dev',ifb,'type','ifb']),
+        ('ifb-up',['ip','link','set','dev',ifb,'up']),
+        ('down',['tc','qdisc','replace','dev',ifb,'root','handle','5ca2:','cake']+cake_opts(obj['down_mbit'],obj)),
+        ('up',['tc','qdisc','replace','dev',iface,'root','handle','5ca1:','cake']+cake_opts(obj['up_mbit'],obj)),
+        ('ingress',['tc','qdisc','add','dev',iface,'handle','ffff:','ingress']),
+        *[('filter',ingress_flower_args(iface,ifb,rule,n)) for n,rule in enumerate(rules)],
+        ('redirect',['tc','filter','add','dev',iface,'parent','ffff:','protocol','all','pref','500',
+                    'u32','match','u32','0','0','action','mirred','egress','redirect','dev',ifb]),
+    ]
 
-    The state file must already identify the new transaction and boot.
-    """
-    iface=obj['interface'];ifb=obj['ifb']
-    # Inspect the optional policy before any kernel mutation. Unknown ownership
-    # means no ingress DSCP filters, but CAKE/IFB still gets its catch-all.
+
+def verify_cake_roots(obj):
+    for dev,handle in ((obj['interface'],'5ca1:'),(obj['ifb'],'5ca2:')):
+        roots=qroots(dev)
+        if len(roots)!=1 or roots[0].get('kind')!='cake' or roots[0].get('handle')!=handle:
+            raise QosError('root CAKE non verificabile: '+dev)
+    return True
+
+
+def install_topology(obj):
+    iface,ifb=obj['interface'],obj['ifb']
     rules,policy_status=ingress_policy(iface)
+    commands=topology_commands(obj,rules) # validate all filters before mutation
     obj['ingress_policy_status']=policy_status
     obj['ingress_policy_count']=len(rules)
     atom(STATE,obj)
-    run(['ip','link','add','dev',ifb,'type','ifb'])
-    obj['ifb_ifindex']=identity(ifb)['ifindex'];atom(STATE,obj)
-    run(['ip','link','set','dev',ifb,'up'])
-    run(['tc','qdisc','replace','dev',ifb,'root','handle','5ca2:','cake']+cake_opts(obj['down_mbit'],obj))
-    run(['tc','qdisc','replace','dev',iface,'root','handle','5ca1:','cake']+cake_opts(obj['up_mbit'],obj))
-    run(['tc','qdisc','add','dev',iface,'handle','ffff:','ingress'])
-    obj['ingress_added']=True;atom(STATE,obj)
-    # Optional application-aware ingress classification must be installed
-    # before the catch-all; any unsupported tc action aborts the entire trial.
-    for n,rule in enumerate(rules):run(ingress_flower_args(iface,ifb,rule,n))
-    run(['tc','filter','add','dev',iface,'parent','ffff:','protocol','all','pref','500',
-         'u32','match','u32','0','0','action','mirred','egress','redirect','dev',ifb])
-    if qroots(iface)[0].get('handle')!='5ca1:' or qroots(ifb)[0].get('handle')!='5ca2:':
-        raise QosError('verifica CAKE root non superata')
+    for step,argv in commands:
+        # Bind all steps to the same interface identity. Revalidation does not
+        # replace kernel ownership checks below and never mutates the network.
+        current=identity(iface)
+        if current['ifindex']!=obj.get('ifindex') or current['mac']!=obj.get('mac'):
+            raise QosError('WAN sostituita durante installazione')
+        # Verify the actual identity and ownership again before each destructive claim.
+        if step in ('ifb-up','down','filter','redirect'):
+            if identity(ifb)['ifindex']!=obj.get('ifb_ifindex'):
+                raise QosError('IFB sostituita durante installazione')
+        if step=='down':
+            roots=qroots(ifb)
+            if len(roots)!=1 or roots[0].get('kind') not in DEFAULT or roots[0].get('handle') not in ('0:',None):
+                raise QosError('root IFB non libera')
+        # Recheck WAN immediately before claiming root/ingress.
+        if step=='up':
+            cur=inspect(iface)
+            if cur['ifindex']!=obj['ifindex'] or cur['mac']!=obj['mac']:
+                raise QosError('WAN sostituita durante installazione')
+            if cur['original_root']!=obj['original_root']:
+                raise QosError('root WAN cambiata dopo anteprima')
+            roots=qroots(iface)
+            if len(roots)!=1 or roots[0].get('handle') not in ('0:',None):
+                raise QosError('root WAN non predefinita')
+        if step=='ingress':
+            roots=qroots(iface)
+            if len(roots)!=1 or roots[0].get('handle')!='5ca1:' or roots[0].get('kind')!='cake':
+                raise QosError('root WAN non posseduta')
+            if any(q.get('kind') in ('ingress','clsact') for q in jcmd(['tc','-j','qdisc','show','dev',iface])):
+                raise QosError('ingress acquisito da altro servizio')
+        run(argv)
+        if step=='ifb-create':obj['ifb_ifindex']=identity(ifb)['ifindex'];atom(STATE,obj)
+        if step=='ingress':obj['ingress_added']=True;atom(STATE,obj)
+    verify_cake_roots(obj)
     if not ingress_filters_verified(iface,ifb,len(rules)):
         raise QosError('IFB redirect o filtri applicativi non verificati')
     return True
@@ -428,7 +486,7 @@ def activate(digest):
     obj=read(STAGE)
     if not obj or not HEX.fullmatch(digest) or obj.get('digest')!=digest or time.time()-obj.get('created',0)>600:
         raise QosError('piano non valido o scaduto')
-    if (read(STATE) or {}).get('state') in ('applying','pending','confirmed','rollback-failed'):
+    if (read(STATE) or {}).get('state') in ('applying','pending','confirmed','rollback-failed','rolling-back'):
         raise QosError('un altro profilo è già attivo')
     owner=foreign_qos_owner(obj['interface'])
     if owner.get('blocking'):raise QosError('Gestore QoS esterno riattivato: '+owner['reason'])
@@ -473,8 +531,7 @@ def confirm(token):
     if not obj or obj.get('token')!=token or obj.get('state')!='pending':raise QosError('nessuna prova da confermare')
     if time.time()>=obj['deadline']:return restore(obj)
     owned(obj)
-    if qroots(obj['interface'])[0].get('handle')!='5ca1:' or qroots(obj['ifb'])[0].get('handle')!='5ca2:':
-        raise QosError('stato CAKE non verificabile')
+    verify_cake_roots(obj)
     verified_ingress_for_state(obj)
     obj['state']='confirmed';obj['confirmed_at']=time.time();atom(STATE,obj)
     return {'ok':True,'state':'confirmed','interface':obj['interface']}
@@ -527,9 +584,8 @@ def resume_confirmed_after_boot(obj,boot_id):
 def watchdog():
     # Separate long-lived unit. Boot different => roll back all unconfirmed trials.
     while True:
-        fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
-        with os.fdopen(fd,'r+') as f:
-            fcntl.flock(f,fcntl.LOCK_EX)
+        from command_transport import domain_lock
+        with domain_lock(LOCK):
             obj=read(STATE)
             unshaped=read(UNSHAPED)
             if unshaped and unshaped.get('state')=='pending':
@@ -545,6 +601,9 @@ def watchdog():
                         print('IPTM CAKE unlimited recovery: '+str(exc),file=sys.stderr,flush=True)
             if obj and obj.get('state')=='confirmed':
                 resume_confirmed_after_boot(obj,pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+            if obj and obj.get('state') in ('rolling-back','rollback-failed') and time.time()-obj.get('rollback_attempt_at',0)>=30:
+                try:restore(obj)
+                except Exception as e:print('IPTM watchdog ripristino sospeso: '+str(e),file=sys.stderr,flush=True)
             if obj and obj.get('state') in ('applying','pending'):
                 expired=(time.time()>=obj.get('deadline',0) or
                          obj.get('boot_id')!=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip())
@@ -749,10 +808,9 @@ def speedtest_measurement():
                         'LANG':'C.UTF-8','LC_ALL':'C.UTF-8',
                         'XDG_CONFIG_HOME':'/root/.config'})
     try:
-        result=subprocess.run([str(executable),'--accept-license','--accept-gdpr',
+        result=capture([str(executable),'--accept-license','--accept-gdpr',
                                '--progress=no','--format=json'],
-                              capture_output=True,text=True,stdin=subprocess.DEVNULL,
-                              timeout=200,env=environment)
+                              timeout=200,env=environment,stdout_limit=256000,stderr_limit=262144)
     except (OSError,subprocess.TimeoutExpired) as exc:
         raise QosError('ookla:execution-failed: '+type(exc).__name__) from exc
     if result.returncode:
@@ -771,59 +829,46 @@ def speedtest_measurement():
     return {'download_mbit':round(dl,2),'upload_mbit':round(ul,2),'engine':'ookla'}
 
 
-def calibration_proposal(samples,old):
-    """Independently approve an improved and stable direction; preserve the other.
-
-    A stale, absent, noisy or lower result cannot reduce a previously approved
-    limit. A change is at most +10% per run (anti-noise); never over 10Gbit.
-    Automatic approval here persists the recommendation, *not* a new qdisc.
-    """
-    import math,statistics
-    if not samples:raise QosError('nessuna misura disponibile')
+def _direction_proposal(samples, field, previous):
+    """Pure decision: never lower approved rates from automatic measurements."""
+    import math, statistics
+    values=[]
     for sample in samples:
-        for key in ('download_mbit','upload_mbit'):
-            if key in sample:
-                try:value=float(sample[key])
-                except (TypeError,ValueError,OverflowError):raise QosError('misura non valida')
-                if not math.isfinite(value) or value<=0:raise QosError('misura nulla o non valida')
+        if not isinstance(sample,dict):raise QosError('campione non valido')
+        if field not in sample:continue
+        if isinstance(sample[field],bool):raise QosError('misura booleana non valida')
+        try:value=float(sample[field])
+        except (TypeError,ValueError,OverflowError):raise QosError('misura non valida')
+        if not math.isfinite(value) or value<=0:raise QosError('misura nulla o non valida')
+        if 1<=value<=10000:values.append(value)
+    old=previous if type(previous) is int and 1<=previous<=10000 else None
+    stable=len(values)>=2 and max(values)/min(values)<=1.20
+    quality={'count':len(values),'stable':stable};review=None
+    if not stable:return old,('kept-insufficient-data' if old is not None else 'not-approved'),quality,review
+    candidate=max(1,int(statistics.median(values)*0.92))
+    if old is None:return candidate,'approved-first-valid',quality,review
+    if candidate>old:return min(candidate,old+max(1,int(old*.10)),10000),'approved-improvement',quality,review
+    if candidate==old:return old,'kept-unchanged',quality,review
+    if candidate>=int(old*.75):return old,'review-decrease',quality,candidate
+    return old,'kept-large-decrease-requires-manual-check',quality,review
+
+
+def calibration_proposal(samples,old):
+    if not isinstance(samples,(list,tuple)) or not samples:raise QosError('nessuna misura disponibile')
+    if old is not None and not isinstance(old,dict):raise QosError('stato precedente non valido')
     previous=(old or {}).get('proposal') or {}
-    proposal={};decisions={};measurements={}
-    for direction in ('down','up'):
-        key=direction+'_mbit'
-        values=[]
-        for sample in samples:
-            try:value=float(sample['download_mbit' if direction=='down' else 'upload_mbit'])
-            except (KeyError,TypeError,ValueError,OverflowError):continue
-            if math.isfinite(value) and 1<=value<=10000:values.append(value)
-        old_value=previous.get(key)
-        old_value=old_value if type(old_value) is int and 1<=old_value<=10000 else None
-        stable=len(values)>=2 and max(values)/min(values)<=1.20
-        measurements[direction]={'count':len(values),'stable':stable}
-        if stable:
-            candidate=max(1,int(statistics.median(values)*0.92))
-            if old_value is None:
-                proposal[key]=candidate;decisions[direction]='approved-first-valid'
-            elif candidate>old_value:
-                proposal[key]=min(candidate,old_value+max(1,int(old_value*.10)),10000)
-                decisions[direction]='approved-improvement'
-            elif candidate<old_value and candidate>=int(old_value*.75):
-                # Credible reductions are suggestions, NOT automatically
-                # deployed. Significant drops may indicate an ISP bottleneck.
-                proposal[key]=candidate;decisions[direction]='review-decrease'
-            elif candidate<old_value:
-                proposal[key]=old_value;decisions[direction]='kept-large-decrease-requires-manual-check'
-            else:
-                proposal[key]=old_value;decisions[direction]='kept-unchanged'
-        elif old_value is not None:
-            proposal[key]=old_value;decisions[direction]='kept-insufficient-data'
-        else:
-            decisions[direction]='not-approved'
-    approved=[d for d,v in decisions.items() if v.startswith('approved')]
-    return {'proposal':proposal if len(proposal)==2 else None,
-            'direction_decisions':decisions,'quality':measurements,
-            'auto_approved':approved,'kept_previous':not bool(approved),
-            'reason':('Limiti migliori approvati per '+', '.join(approved) if approved
-                      else 'Nessun miglioramento bidirezionale attendibile; limiti conservati')}
+    if not isinstance(previous,dict):raise QosError('proposta precedente non valida')
+    proposal={};decisions={};quality={};review={}
+    for direction,field in (('down','download_mbit'),('up','upload_mbit')):
+        key=direction+'_mbit';value,decision,metrics,suggestion=_direction_proposal(samples,field,previous.get(key))
+        if value is not None:proposal[key]=value
+        if suggestion is not None:review[key]=suggestion
+        decisions[direction]=decision;quality[direction]=metrics
+    approved=[key for key,value in decisions.items() if value.startswith('approved')] if len(proposal)==2 else []
+    if len(proposal)!=2:
+        for key in decisions:
+            if decisions[key].startswith('approved'):decisions[key]='candidate-pending-other-direction'
+    return {'proposal':proposal if len(proposal)==2 else None,'direction_decisions':decisions,'quality':quality,'review_candidates':review,'auto_approved':approved,'kept_previous':not bool(approved),'reason':('Limiti migliori approvati per '+', '.join(approved) if approved else 'Nessun miglioramento attendibile; limiti conservati')}
 
 
 def calibration_worker():
@@ -864,14 +909,13 @@ def calibration_worker():
                 break
             try:samples.append(speedtest_measurement())
             except QosError as exc:errors.append(str(exc))
-        fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
-        with os.fdopen(fd,'r+') as f:
-            fcntl.flock(f,fcntl.LOCK_EX)
+        from command_transport import domain_lock
+        with domain_lock(LOCK):
             latest=read(CALIB)
             if not latest or latest.get('job_id')!=doc['job_id'] or latest.get('state')!='running':
                 raise QosError('job sostituito: risultati ignorati')
             old=read(CALIB_LOG)
-            if old and old.get('interface')!=doc['interface']:old=None
+            if old and (old.get('interface')!=doc['interface'] or old.get('ifindex') not in (None,doc['ifindex'])):old=None
             active=read(STATE)
             reason=None
             if doc.get('mode')=='cake-bandwidth-unlimited':
@@ -917,9 +961,8 @@ def calibration_worker():
             atom(CALIB,latest)
         return {'ok':True,'state':'completed','auto_approved':result.get('auto_approved',[])}
     except Exception as exc:
-        fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
-        with os.fdopen(fd,'r+') as f:
-            fcntl.flock(f,fcntl.LOCK_EX)
+        from command_transport import domain_lock
+        with domain_lock(LOCK):
             latest=read(CALIB)
             if doc.get('mode')=='cake-bandwidth-unlimited':
                 journal=read(UNSHAPED)
@@ -939,13 +982,7 @@ def auto_units_install():
         if path.is_symlink():raise QosError('unità auto-calibrazione simbolica')
         if path.exists() and 'Description=IPTM QoS hourly independent calibration' not in path.read_text():
             raise QosError('unità auto-calibrazione non verificata')
-        fd,tmp=tempfile.mkstemp(dir=path.parent,prefix='.iptm-auto-')
-        try:
-            with os.fdopen(fd,'w') as f:
-                os.fchmod(f.fileno(),0o644);f.write(contents);f.flush();os.fsync(f.fileno())
-            os.replace(tmp,path)
-        finally:
-            if os.path.exists(tmp):os.unlink(tmp)
+        durable_replace(path, contents.encode(), mode=0o644)
     run(['systemctl','daemon-reload'])
     run(['systemctl','enable','--now',AUTO_TIMER.name])
     if run(['systemctl','is-active',AUTO_TIMER.name],check=False).stdout.strip()!='active':
@@ -1042,13 +1079,7 @@ def adaptive_units_install():
         if path.is_symlink():raise QosError('unità adattiva simbolica')
         if path.exists() and 'Description=IPTM QoS adaptive RTT' not in path.read_text():
             raise QosError('unità adattiva non appartenente a IPTM')
-        fd,tmp=tempfile.mkstemp(dir=path.parent,prefix='.iptm-qos-adapt-')
-        try:
-            with os.fdopen(fd,'w') as f:
-                os.fchmod(f.fileno(),0o644);f.write(contents);f.flush();os.fsync(f.fileno())
-            os.replace(tmp,path)
-        finally:
-            if os.path.exists(tmp):os.unlink(tmp)
+        durable_replace(path, contents.encode(), mode=0o644)
     run(['systemctl','daemon-reload'])
     run(['systemctl','enable','--now',ADAPT_TIMER.name])
     if run(['systemctl','is-active',ADAPT_TIMER.name],check=False).stdout.strip()!='active':
@@ -1103,6 +1134,14 @@ def adapt_change_one(state,direction,rate):
     run(['tc','qdisc','change','dev',dev,'root','handle',handle,'cake']+cake_opts(rate,state))
 
 
+def recovery_rtt_reference(samples, rtt):
+    """Last 30 valid observations, robust lower quartile, no historical floor."""
+    valid=[float(x) for x in (samples if isinstance(samples,list) else []) if type(x) in (int,float) and 0<x<1000]
+    if type(rtt) not in (int,float) or not 0<rtt<1000: raise QosError('RTT non valido')
+    valid=(valid+[float(rtt)])[-30:]
+    ordered=sorted(valid)
+    return valid,ordered[(len(ordered)-1)//4]
+
 def adapt_tick():
     """Test one independent direction at a time; rollback on bad RTT or idle test.
 
@@ -1125,7 +1164,7 @@ def adapt_tick():
     boot_id=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     if cfg['boot_id']!=boot_id:
         cfg.update(boot_id=boot_id,up=state['up_mbit'],down=state['down_mbit'],
-                   baseline=None,high=0,low=0,samples=0,trial=None,counters=None)
+                   baseline=None,high=0,low=0,samples=0,trial=None,counters=None,rtt_window=[])
     if cfg['base_up']!=state['up_mbit'] or cfg['base_down']!=state['down_mbit']:
         raise QosError('limiti massimi variati: ricreare il regolatore')
     now=time.time();rtt=latency_measurement(state['interface'])
@@ -1155,7 +1194,7 @@ def adapt_tick():
         return {'ok':True,'changed':False,'trial':cfg['last_verification'],
                 'rtt_ms':rtt,'direction':direction}
     cfg['samples']=cfg.get('samples',0)+1
-    cfg['baseline']=min(cfg.get('baseline') or rtt,rtt)
+    cfg['rtt_window'],cfg['baseline']=recovery_rtt_reference(cfg.get('rtt_window'),rtt)
     direction=cfg.get('next_direction','down')
     cfg['next_direction']='up' if direction=='down' else 'down'
     base=cfg['base_'+direction]
@@ -1208,9 +1247,8 @@ def main(args):
         watchdog();return {'ok':True}
     # Calibrating takes minutes; do not hold the QoS state lock while measuring.
     if args==['calibrate-worker']:return calibration_worker()
-    fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
-    with os.fdopen(fd,'r+') as f:
-        fcntl.flock(f,fcntl.LOCK_EX)
+    from command_transport import domain_lock
+    with domain_lock(LOCK):
         if args==['status']:
             result=status();cfg=read(ADAPT)
             result['unshaped_calibration']=(read(UNSHAPED) or {}).get('state')=='pending'
@@ -1253,7 +1291,13 @@ def main(args):
             if not obj or obj.get('state')!='confirmed':raise QosError('nessun profilo confermato')
             return restore(obj)
         raise QosError('comando sconosciuto')
+def coordinated_main(args):
+    from command_transport import driver_admission
+    with driver_admission('qos_engine',args):
+        return main(args)
+
+
 if __name__=='__main__':
-    try:print(json.dumps(main(sys.argv[1:]),ensure_ascii=False))
+    try:print(json.dumps(coordinated_main(sys.argv[1:]),ensure_ascii=False))
     except (QosError,OSError,ValueError,KeyError,TypeError,IndexError) as exc:
         print(json.dumps({'ok':False,'error':str(exc)},ensure_ascii=False));sys.exit(1)

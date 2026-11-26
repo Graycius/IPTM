@@ -18,18 +18,9 @@ const setMenuOpen=open=>{
 if(bg&&side){bg.addEventListener('click',()=>setMenuOpen(bg.getAttribute('aria-expanded')!=='true'));if(backdrop)backdrop.addEventListener('click',()=>setMenuOpen(false));document.addEventListener('keydown',e=>{if(e.key==='Escape'&&bg.getAttribute('aria-expanded')==='true')setMenuOpen(false);});}
 // Chiudi il menu dopo una navigazione mobile e filtra le voci senza rimuoverle dal DOM.
 qa('#side a').forEach(a=>a.addEventListener('click',()=>{if(window.innerWidth<=860)setMenuOpen(false);}));
-// Network workflow navigation: only one open group, globally expandable advanced links.
-const ms=q('#ms'),nav=q('#primary-menu'),more=q('#iptm-nav-advanced');
+// One complete tree. Filtering expands matching groups without hiding routes permanently.
+const ms=q('#ms'),nav=q('#primary-menu');
 const normalize=v=>String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('it');
-let navAdvanced=false;try{navAdvanced=localStorage.getItem('iptm-all-functions')==='yes';}catch(_e){}
-function setAdvanced(on){
- navAdvanced=on;
- if(nav)nav.classList.toggle('show-extra',on);
- if(more){more.setAttribute('aria-expanded',String(on));more.innerHTML=on?'Solo funzioni principali <span aria-hidden="true">−</span>':'Tutte le funzioni <span aria-hidden="true">+</span>';}
- try{localStorage.setItem('iptm-all-functions',on?'yes':'no');}catch(_e){}
-}
-setAdvanced(navAdvanced);
-more?.addEventListener('click',()=>setAdvanced(!navAdvanced));
 const navGroups=qa('#primary-menu details.mg');
 /* Multiple groups may stay open: fewer clicks between network areas. */
 if(ms){
@@ -70,7 +61,7 @@ qa('form.acc').forEach(f=>{[...f.children].filter(e=>e.tagName==='H3').forEach(h
 // ================= CONFIGURAZIONE GUIDATA DA ZERO =================
 const Z=window.ZERO,root=q('#zero');if(!Z||!root)return;
 const B=q('#zbody'),P=q('#zprog'),ifs=Object.keys(Z.ifaces),priv=/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
-const A={mode:'single',wan_if:ifs[0]||'',lan_nets:Object.keys(Z.nets).filter(n=>priv.test(n)).slice(0,3).join(','),nat:'1',dns_local:'0',dns_ip:'',dot:'1',level:'standard',vpn:'none',vpn_if:'wg0',vpn_net:'10.8.0.0/24',vpn_port:'51820',gateway_ip:'',dhcp_server:'1',pihole_web:'1',pihole_ports:'8089,8489',recovery:'no',web_ports:'80,443,8089,8489',ssh_from:['lan'],ssh_port:'22',ssh_limit:'1',svcs:[],custom_ports:'',docker:'0',crowdsec:'0',fwd:[],lists:[],geo_codes:'',logging:'drops',v6:'0',base:'zero'};
+const A={mode:'single',wan_if:ifs[0]||'',lan_nets:Object.keys(Z.nets).filter(n=>priv.test(n)).slice(0,3).join(','),nat:'1',dns_local:'0',dns_ip:'',dot:'1',level:'standard',vpn:'none',vpn_if:'wg0',vpn_net:'10.8.0.0/24',vpn_port:'51820',gateway_ip:'',dhcp_server:'1',pihole_web:'1',pihole_ports:'8089,8489',recovery:'no',web_ports:'80,443,8089,8489',ssh_from:['lan'],ssh_port:'22',ssh_limit:'1',svcs:[],custom_ports:'',docker:'0',crowdsec:'0',fwd:[],lists:[],geo_codes:'',logging:'drops',v6:'0',base:'keep'};
 if(Z.pre)Object.keys(Z.pre).forEach(k=>{A[k]=Z.pre[k];});
 const R={nets:/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?(,\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?)*$/,ip:/^\d{1,3}(\.\d{1,3}){3}$/,port:/^\d{1,5}$/,ports:/^\d{1,5}(:\d{1,5})?(,\d{1,5}(:\d{1,5})?)*$/,ifn:/^[A-Za-z0-9_.+-]{1,15}$/,cc:/^([A-Za-z]{2})(,[A-Za-z]{2})*$/};
 const E=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
@@ -107,8 +98,8 @@ const Q=[
 let cur=0;
 const vis=()=>Q.map((x,i)=>[x,i]).filter(([x])=>x.show());
 function draw(){const v=vis(),pos=v.findIndex(([,i])=>i===cur),last=pos===v.length-1;P.innerHTML=`<div style="flex:1"><div class=mut style="font-size:13px">Domanda ${pos+1} di ${v.length}</div><div class=bar><i style="width:${Math.round((pos+1)*100/v.length)}%"></i></div></div>`;
- B.innerHTML=`${cur===0&&Z.pre_src?`<div class="msg ok">Campi precompilati dalla <b>${Z.pre_src}</b>. Controllali e modificali se serve.</div>`:''}<h2>${Q[cur].t}</h2><div id=zerr class="msg err" style="display:none"></div>${Q[cur].html()}${last?'':`<p style="margin-top:14px">${pos?'<button type=button class=s id=zb>← Indietro</button> ':''}<button type=button id=zn>Avanti →</button></p>`}`;
- if(last){const f=B.querySelector('form');if(f)f.onsubmit=()=>{q('#zans').value=JSON.stringify(A);return true;};B.insertAdjacentHTML('beforeend','<p><button type=button class=s id=zb>← Indietro</button></p>');}
+ B.innerHTML=`${cur===0&&Z.pre_src?`<div class="msg ok">Campi precompilati dalla <b>${E(Z.pre_src)}</b>. Controllali e modificali se serve.</div>`:''}<h2>${Q[cur].t}</h2><div id=zerr class="msg err" style="display:none"></div>${Q[cur].html()}${last?'':`<p style="margin-top:14px">${pos?'<button type=button class=s id=zb>← Indietro</button> ':''}<button type=button id=zn>Avanti →</button></p>`}`;
+ if(last){const f=B.querySelector('form');if(f)f.onsubmit=()=>{for(const [step,index] of vis()){const error=step.chk?step.chk():'';if(error){cur=index;draw();const box=q('#zerr');box.style.display='block';box.textContent=error;return false;}}q('#zans').value=JSON.stringify(A);const submit=f.querySelector('button');if(submit){submit.disabled=true;submit.textContent='Validazione in corso…';}return true;};B.insertAdjacentHTML('beforeend','<p><button type=button class=s id=zb>← Indietro</button></p>');}
  const nx=q('#zn'),bk=q('#zb');
  if(nx)nx.onclick=()=>{const e=Q[cur].chk?Q[cur].chk():'';if(e){const x=q('#zerr');x.style.display='block';x.textContent=e;return;}cur=v[pos+1][1];draw();};
  if(bk)bk.onclick=()=>{cur=v[pos-1][1];draw();};

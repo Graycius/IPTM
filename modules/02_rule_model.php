@@ -1,7 +1,7 @@
 <?php
 // ===================== MODELLO (parse / serializza) =====================
 function parse_rules(string $txt): array {
-    static $memo = []; $mk = md5($txt); if (isset($memo[$mk])) return $memo[$mk];
+    static $memo = []; $mk = hash('sha256',$txt); if (isset($memo[$mk])) return $memo[$mk];
     if (count($memo) > 8) array_shift($memo);
     return $memo[$mk] = parse_rules_raw($txt);
 }
@@ -10,12 +10,12 @@ function parse_rules_raw(string $txt): array {
     foreach (preg_split('/\r?\n/', $txt) as $ln) {
         $t = trim($ln);
         if ($cur === null) {
-            if (preg_match('/^\*(\w+)$/', $t, $m)) { if ($text) { $out[] = ['k' => 'text', 'lines' => $text]; $text = []; } $cur = ['k' => 'table', 'name' => $m[1], 'items' => []]; }
+            if (preg_match('/^\*(\w+)$/', $t, $m)) { if ($text) { $out[] = ['k' => 'text', 'lines' => $text]; $text = []; } $cur = ['k' => 'table', 'name' => $m[1], 'items' => [], 'closed' => false]; }
             else $text[] = $ln;
             continue;
         }
-        if ($t === 'COMMIT') { $out[] = $cur; $cur = null; continue; }
-        if (preg_match('/^:(\S+)\s+(\S+)/', $t, $m)) $cur['items'][] = ['t' => 'chain', 'n' => $m[1], 'p' => $m[2]];
+        if ($t === 'COMMIT') { $cur['closed'] = true; $out[] = $cur; $cur = null; continue; }
+        if (preg_match('/^:(\S+)\s+(\S+)\s+\[\d+:\d+\]$/D', $t, $m)) $cur['items'][] = ['t' => 'chain', 'n' => $m[1], 'p' => $m[2]];
         elseif (preg_match('/^(?:\[\d+:\d+\]\s*)?(-A\s.+)$/', $t, $m)) $cur['items'][] = ['t' => 'rule', 'r' => $m[1], 'on' => true];
         elseif (preg_match('/^#\s?(-A\s.+)$/', $t, $m)) $cur['items'][] = ['t' => 'rule', 'r' => $m[1], 'on' => false];
         else $cur['items'][] = ['t' => 'c', 'x' => $ln];

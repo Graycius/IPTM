@@ -9,8 +9,9 @@ import hashlib,json,os,pathlib,stat,sys,tempfile,time,urllib.error,urllib.parse,
 
 URL='https://raw.githubusercontent.com/serverless-dns/blocklists/main/config.json'
 CACHE=pathlib.Path('/var/cache/iptm-rethinkdns/catalog.json')
-USER_AGENT='IPTM-catalog-check/5.30.23'
+USER_AGENT='IPTM-catalog-check/6.0.8'
 MAX_AGE=24*3600
+MAX_CACHE=2*1024*1024
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
@@ -61,7 +62,7 @@ def parse_config(raw):
 
 def fetch_host_check(url):
     p=urllib.parse.urlsplit(url)
-    if p.scheme!='https' or p.hostname!='raw.githubusercontent.com' or p.port not in (None,443) or p.query or p.fragment or '\\' in url or '\n' in url:
+    if p.scheme!='https' or p.hostname!='raw.githubusercontent.com' or p.username is not None or p.password is not None or p.port not in (None,443) or not p.path.startswith('/') or p.query or p.fragment or any(ord(c)<33 or ord(c)==127 for c in url) or '\\' in url:
         raise ValueError('URL non consentito')
 
 def _secure_cache_directory(create=False):
@@ -85,15 +86,8 @@ def _secure_cache_directory(create=False):
 
 
 def _read_secure_file():
-    # O_NOFOLLOW and fstat protect against replacing the cache file with a symlink.
-    flags=os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_CLOEXEC',0)
-    try: fd=os.open(CACHE,flags)
-    except FileNotFoundError:return None
-    with os.fdopen(fd,'r',encoding='utf-8') as stream:
-        st=os.fstat(stream.fileno())
-        if not stat.S_ISREG(st.st_mode) or st.st_uid!=0 or (st.st_mode & 0o077) or st.st_size>200000:
-            raise ValueError('File cache RethinkDNS non sicuro')
-        return json.load(stream)
+    from command_transport import read_private_json
+    return read_private_json(CACHE,limit=MAX_CACHE)
 
 
 def cache_read():
@@ -104,7 +98,9 @@ def cache_read():
         return {'ok':True,'updated':0,'lists':[],'verified':0,'message':'Catalogo non ancora verificato: premi Aggiorna.'}
     if not isinstance(result,dict) or not isinstance(result.get('lists'),list):
         raise ValueError('Cache RethinkDNS corrotta: aggiorna il catalogo')
-    if time.time()-float(result.get('updated',0))>MAX_AGE:
+    updated=result.get('updated',0)
+    if type(updated) not in (int,float) or not 0<=updated<=time.time()+60:raise ValueError('Timestamp cache non valido')
+    if time.time()-updated>MAX_AGE:
         for item in result['lists']:
             if isinstance(item,dict):
                 item['state']='selectable';item['why']='Catalogo in cache: aggiorna per nuove fonti (selezionabile)' 
@@ -117,18 +113,10 @@ def cache_save(rows):
     # Refuse an existing symlink or untrusted cache, rather than touching it.
     _read_secure_file()
     result={'ok':True,'updated':int(time.time()),'source':URL,'lists':rows,'verified':0,'selectable':len(rows)}
-    temp=None
-    try:
-        with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',delete=False,dir=CACHE.parent,prefix='.rethink-',suffix='.tmp') as f:
-            os.fchmod(f.fileno(),0o600)
-            json.dump(result,f,ensure_ascii=False)
-            f.flush();os.fsync(f.fileno());temp=f.name
-        os.replace(temp,CACHE)
-        temp=None
-    finally:
-        if temp is not None:
-            try:os.unlink(temp)
-            except FileNotFoundError:pass
+    blob=json.dumps(result,ensure_ascii=False).encode('utf-8')
+    if len(blob)>MAX_CACHE:raise ValueError('Catalogo oltre il limite della cache; mantenuta la copia precedente')
+    from command_transport import durable_replace
+    durable_replace(CACHE,blob)
     return result
 
 def refresh():
@@ -141,7 +129,8 @@ def refresh():
 
 def get_importable(identifiers):
     result=cache_read()
-    catalogue={x['id']:x for x in result.get('lists',[]) if isinstance(x,dict) and isinstance(x.get('url'),str) and x.get('format') in ('hosts','domains')}
+    if not isinstance(identifiers,(list,tuple)) or not all(isinstance(x,str) for x in identifiers):raise ValueError('Identificatori non validi')
+    catalogue={x['id']:x for x in result.get('lists',[]) if isinstance(x,dict) and isinstance(x.get('url'),str) and x.get('id')=='rd'+hashlib.sha256(x['url'].encode('utf-8')).hexdigest()[:16] and x.get('format') in ('hosts','domains')}
     if any(x not in catalogue for x in identifiers):raise ValueError('Lista non presente nel catalogo ufficiale memorizzato')
     for x in identifiers: fetch_host_check(catalogue[x]['url'])
     return [(id,catalogue[id]['url']) for id in identifiers]

@@ -7,6 +7,8 @@ never reaches the journal or web interface.
 """
 from __future__ import annotations
 
+from command_transport import capture, OutputLimitError
+
 import json
 import re
 import pathlib
@@ -91,7 +93,7 @@ def _sample(method, down, up, idle, lat_down, lat_up):
 
 def _run(argv, timeout_seconds, runner: Callable = subprocess.run):
     try:
-        result = runner(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        result = capture(argv,timeout=timeout_seconds,stdout_limit=MAX_JSON_BYTES) if runner is subprocess.run else runner(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                         text=True, timeout=timeout_seconds, check=False)
     except subprocess.TimeoutExpired:
         return None, 'timeout'
@@ -175,7 +177,7 @@ def engine_check(which: Callable = shutil.which, runner: Callable = subprocess.r
         print('ookla=not-official-binary')
     else:
         try:
-            result = runner([path, '--version'], stdout=subprocess.PIPE,
+            result = capture([path, '--version'], timeout=5, stdout_limit=16384) if runner is subprocess.run else runner([path, '--version'], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, timeout=5, check=False)
             ok = result.returncode == 0 and 'ookla' in result.stdout.lower()
             print('ookla=ready' if ok else 'ookla=version-check-failed')
@@ -215,7 +217,7 @@ def main():
 # All mutating operations remain disabled until a separate guarded migration.
 def _tc_json(argv, runner=subprocess.run):
     try:
-        p = runner(['tc', '-j'] + argv, stdout=subprocess.PIPE,
+        p = capture(['tc','-j']+argv,timeout=4,stdout_limit=262144) if runner is subprocess.run else runner(['tc', '-j'] + argv, stdout=subprocess.PIPE,
                    stderr=subprocess.DEVNULL, text=True, timeout=4, check=False)
         if p.returncode or len(p.stdout)>262144: return None
         value=json.loads(p.stdout)

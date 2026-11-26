@@ -8,8 +8,9 @@ Only confirmed, fully verified IPTM CAKE/IFB topologies are transferable.
 No tc, iptables, NetworkManager or DNS configuration writes are performed here.
 """
 from __future__ import annotations
+from command_transport import capture
 import base64, fcntl, importlib.util, json, os, pathlib, re, subprocess, sys, tempfile, time
-VERSION='5.30.23'
+VERSION='6.0.8'
 ROOT=pathlib.Path('/usr/local/lib/iptables-manager')
 ENGINE=ROOT/f'web/releases/{VERSION}/extensions/qos_engine.py'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-watchdog.service')
@@ -27,7 +28,8 @@ COMPANIONS={
 class PostinstallError(Exception):pass
 
 def call(*args,timeout=20,check=True):
-    r=subprocess.run(args,capture_output=True,text=True,timeout=timeout,stdin=subprocess.DEVNULL)
+    try:r=capture(args,timeout=timeout,stdout_limit=1048576,stderr_limit=262144)
+    except (OSError,subprocess.TimeoutExpired) as exc:raise PostinstallError('Esito comando non verificabile: '+type(exc).__name__) from exc
     if check and r.returncode:raise PostinstallError(' '.join(args[:2])+': '+(r.stderr or r.stdout)[-500:])
     return r
 
@@ -37,15 +39,10 @@ def protected(path):
     if st.st_uid or st.st_mode&0o077:raise PostinstallError('Stato non protetto: '+str(path))
 
 def atomic(path,data,mode=0o600):
-    if path.is_symlink():raise PostinstallError('Symlink non autorizzato: '+str(path))
-    fd,tmp=tempfile.mkstemp(prefix='.iptm-handoff-',dir=path.parent)
-    try:
-        with os.fdopen(fd,'wb') as out:
-            os.fchmod(out.fileno(),mode);out.write(data);out.flush();os.fsync(out.fileno())
-        os.replace(tmp,path)
-        fd=os.open(path.parent,os.O_DIRECTORY);os.fsync(fd);os.close(fd)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    from command_transport import durable_replace
+    try: durable_replace(path,data,mode=mode)
+    except (OSError,ValueError) as exc: raise PostinstallError(str(exc)) from exc
+
 
 def owner():
     if not STATE.exists() and not STATE.is_symlink():return None
@@ -162,9 +159,8 @@ def handoff(previous):
             call('systemctl','start',adaptive_timer,check=False)
             raise
     LOCK.parent.mkdir(parents=True,exist_ok=True)
-    fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
-    with os.fdopen(fd,'r+') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX)
+    from command_transport import domain_lock
+    with domain_lock(LOCK):
         if STATE.read_bytes()!=old_bytes:
             if was_adaptive:call('systemctl','start',adaptive_timer,check=False)
             raise PostinstallError('Stato QoS modificato durante la migrazione')
@@ -261,12 +257,13 @@ def ensure():
     directory.mkdir(mode=0o700,parents=True,exist_ok=True)
     stat=directory.stat()
     if stat.st_uid or stat.st_mode&0o077:raise PostinstallError('Directory handoff non root:0700')
-    fd=os.open(directory/'postinstall.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
-    with os.fdopen(fd,'r+') as f:
-        fcntl.flock(f,fcntl.LOCK_EX)
+    from command_transport import domain_lock
+    with domain_lock(directory/'postinstall.lock'):
         cleanup=cleanup_postcommit()
         result=_ensure_locked()
         result['cleanup']=cleanup
+        from native_update import cleanup_after_legacy_commit
+        result['release_cleanup']=cleanup_after_legacy_commit(VERSION)
         result['retention']=ensure_retention()
         return result
 

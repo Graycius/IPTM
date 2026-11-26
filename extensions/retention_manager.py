@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IPTM 5.30.23: conservative retention of IPTM-owned completed artifacts.
+"""IPTM 6.0.8: conservative retention of IPTM-owned completed artifacts.
 
 CLI is root-only. Preview and run share the SAME selection function. No deletion of
 live files, user-named backups, journals, locks, pending transactions or external logs.
@@ -17,12 +17,15 @@ import subprocess
 import sys
 import time
 
+from command_transport import capture, open_directory, durable_json, transaction_gate, domain_lock
+
 DATA = Path('/var/lib/iptables-manager')
 DIAG = Path('/var/lib/iptm-diagnostics')
 SOURCES = Path('/var/lib/iptm-antidpi/sources')
 RECOVERY = Path('/var/lib/iptm-update-recovery')
 POLICY_NAME = 'retention-policy.json'
 REPORT_NAME = 'retention-last.json'
+STATE_ROOT = Path('/var/lib/iptm-retention')
 DEFAULTS = {'backup_days': 45, 'backup_keep': 10, 'report_days': 30,
             'report_keep': 15, 'stats_days': 30, 'max_backup_mib': 1024,
             'log_copies': 14}
@@ -52,18 +55,7 @@ CATEGORIES = (
 
 
 def safe_fd(path: Path):
-    """Walk path from / with O_NOFOLLOW at EACH segment (not just final)."""
-    if not path.is_absolute():raise ValueError('path non assoluto')
-    fd = os.open('/',os.O_RDONLY|os.O_DIRECTORY)
-    try:
-        for part in path.parts[1:]:
-            if part in ('.','..',''):raise ValueError('path ambiguo')
-            fd2=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
-            os.close(fd);fd=fd2
-        return fd
-    except (OSError, ValueError):
-        os.close(fd)
-        raise
+    return open_directory(path)
 
 
 def child_stat(fd,name):
@@ -76,38 +68,45 @@ def safe_json(path,limit=200000):
         try:
             st=child_stat(fd,path.name)
             if not stat.S_ISREG(st.st_mode) or st.st_size>limit:return {}
-            r=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=fd)
+            r=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
             try:
-                with os.fdopen(r,'rb') as stream: data=stream.read(limit+1)
+                with os.fdopen(r,'rb') as stream:
+                    current=os.fstat(stream.fileno())
+                    if not stat.S_ISREG(current.st_mode) or (current.st_dev,current.st_ino)!=(st.st_dev,st.st_ino) or current.st_size>limit:return {}
+                    data=stream.read(limit+1)
             except Exception:raise
-            return json.loads(data) if len(data)<=limit else {}
+            value=json.loads(data) if len(data)<=limit else {}
+            return value if isinstance(value,dict) else {}
         finally:os.close(fd)
     except (OSError,ValueError,TypeError):return {}
 
 
-def atomic_json(path,record):
-    root=path.parent
-    if root.is_symlink():raise ValueError('directory non sicura')
-    root.mkdir(mode=0o700,parents=True,exist_ok=True)
-    fd=safe_fd(root)
-    name='.retention-'+os.urandom(8).hex()+'.tmp'
+def state_root(data=DATA, *, create=False):
+    # Web data is deliberately www-data-owned. Administrative state is not.
+    root = STATE_ROOT if data == DATA else data / '.retention-state'
+    if create:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try: fd = open_directory(root)
+    except FileNotFoundError:
+        if create: raise
+        return root
     try:
-        flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW
-        w=os.open(name,flags,0o600,dir_fd=fd)
-        try:
-            blob=json.dumps(record,ensure_ascii=False,sort_keys=True).encode()
-            with os.fdopen(w,'wb') as stream:
-                stream.write(blob);stream.flush();os.fsync(stream.fileno())
-            os.replace(name,path.name,src_dir_fd=fd,dst_dir_fd=fd)
-            os.fsync(fd)
-        finally:
-            try:os.unlink(name,dir_fd=fd)
-            except FileNotFoundError:pass
-    finally:os.close(fd)
+        st = os.fstat(fd)
+        if st.st_uid != 0 or st.st_mode & 0o077:
+            raise ValueError('Directory stato retention non privata')
+    finally: os.close(fd)
+    return root
+
+
+def atomic_json(path,record):
+    durable_json(path,record,ensure_ascii=False)
 
 
 def load_policy(data=DATA):
-    row=safe_json(data/POLICY_NAME)
+    root=state_root(data)
+    target=root/POLICY_NAME
+    # Read the old policy only for migration; validated limits below still apply.
+    row=safe_json(target if target.exists() or target.is_symlink() else data/POLICY_NAME)
     if not isinstance(row,dict):row={}
     out=dict(DEFAULTS)
     for key,(low,high) in BOUNDS.items():
@@ -207,11 +206,15 @@ def directory_marker(fd,name,kind):
         sub=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
         try:
             try:
-                f=os.open('restore-journal.json',os.O_RDONLY|os.O_NOFOLLOW,dir_fd=sub)
-                with os.fdopen(f,'rb') as stream:blob=stream.read(131073)
+                f=os.open('restore-journal.json',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=sub)
+                with os.fdopen(f,'rb') as stream:
+                    st=os.fstat(stream.fileno())
+                    if not stat.S_ISREG(st.st_mode) or st.st_uid!=0 or st.st_nlink!=1 or st.st_mode&0o077 or st.st_size>131072:return False
+                    blob=stream.read(131073)
+                    if len(blob)>131072:return False
                 state=json.loads(blob).get('state')
                 return state in ('completed','recovered')
-            except (OSError,ValueError,TypeError):return False
+            except (OSError,ValueError,TypeError,AttributeError):return False
         finally:os.close(sub)
     if kind=='lynis':
         sub=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
@@ -245,7 +248,7 @@ def candidate_inventory(data=DATA,diag=DIAG,sources=SOURCES,rec=RECOVERY,now=Non
                 try:
                     st=child_stat(fd,name)
                     if kind=='file':
-                        if not stat.S_ISREG(st.st_mode):continue
+                        if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1:continue
                         size=st.st_size
                     else:
                         if not stat.S_ISDIR(st.st_mode) or not directory_marker(fd,name,kind):continue
@@ -297,16 +300,17 @@ def prune_one(row):
         if st.st_ino!=row['inode'] or abs(st.st_mtime-row['mtime'])>.001:
             return 'changed'
         if row['kind']=='file':
-            if not stat.S_ISREG(st.st_mode):return 'changed'
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1:return 'changed'
             os.unlink(path.name,dir_fd=fd)
         else:
-            if not stat.S_ISDIR(st.st_mode):return 'changed'
+            if not stat.S_ISDIR(st.st_mode) or not directory_marker(fd,path.name,row['kind']):return 'changed'
             sub=os.open(path.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
             try:
                 tree_size(sub)  # refuse symlinks, unusual entries and unbounded trees
                 delete_tree(sub)
             finally:os.close(sub)
             os.rmdir(path.name,dir_fd=fd)
+        os.fsync(fd)
         return 'deleted'
     finally:os.close(fd)
 
@@ -322,18 +326,8 @@ def logrotate_config(policy,data=DATA):
 
 
 def atomic_system_file(path,content):
-    fd=safe_fd(path.parent)
-    tmp='.iptm-retention-'+os.urandom(6).hex()
-    try:
-        if path.is_symlink():raise ValueError('unità/logrotate simbolica non consentita')
-        f=os.open(tmp,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o644,dir_fd=fd)
-        with os.fdopen(f,'w') as out:out.write(content);out.flush();os.fsync(out.fileno())
-        os.replace(tmp,path.name,src_dir_fd=fd,dst_dir_fd=fd)
-        os.fsync(fd)
-    finally:
-        try:os.unlink(tmp,dir_fd=fd)
-        except FileNotFoundError:pass
-        os.close(fd)
+    from command_transport import durable_replace
+    durable_replace(path,content.encode("utf-8"),mode=0o644)
 
 
 def install(release=None,data=DATA):
@@ -358,15 +352,15 @@ def install(release=None,data=DATA):
        '[Install]\nWantedBy=timers.target\n'))
     if Path('/usr/sbin/logrotate').is_file() or Path('/usr/bin/logrotate').is_file():
         atomic_system_file(Path('/etc/logrotate.d/iptm'),logrotate_config(policy,data))
-    r=subprocess.run(['/usr/bin/systemctl','daemon-reload'],capture_output=True,timeout=15)
+    r=capture(['/usr/bin/systemctl', 'daemon-reload'], timeout=15, text=False, stdout_limit=1048576, stderr_limit=262144)
     if r.returncode:raise ValueError('systemd daemon-reload fallito')
-    r=subprocess.run(['/usr/bin/systemctl','enable','--now','iptm-retention.timer'],capture_output=True,timeout=20)
+    r=capture(['/usr/bin/systemctl', 'enable', '--now', 'iptm-retention.timer'], timeout=20, text=False, stdout_limit=1048576, stderr_limit=262144)
     if r.returncode:raise ValueError('timer systemd non avviabile')
     return {'ok':True,'timer':'iptm-retention.timer','logrotate_present':bool(Path('/usr/sbin/logrotate').exists() or Path('/usr/bin/logrotate').exists())}
 
 
 def status(data=DATA):
-    row=safe_json(data/REPORT_NAME)
+    row=safe_json(state_root(data)/REPORT_NAME)
     return {'ok':True,'policy':load_policy(data),'last_run':row if isinstance(row,dict) else {},
             'scope':'Solo archivi IPTM. Journald/Pi-hole/Suricata/CrowdSec esclusi.'}
 
@@ -387,53 +381,52 @@ def preview(data=DATA,diag=DIAG,sources=SOURCES,rec=RECOVERY,now=None):
 def run(data=DATA,diag=DIAG,sources=SOURCES,rec=RECOVERY,now=None,rotate_logs=True):
     data.mkdir(parents=True,exist_ok=True)
     if data.is_symlink():raise ValueError('Directory IPTM non sicura')
-    fd=safe_fd(data)
+    root=state_root(data,create=True)
     try:
-        lock=os.open('retention.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600,dir_fd=fd)
-    finally:os.close(fd)
-    try:
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        with transaction_gate(domain=root/'retention.lock'):
+            return _run_locked(data,diag,sources,rec,now,rotate_logs,root)
     except BlockingIOError:
-        os.close(lock);return {'ok':False,'reason':'rotation-already-running'}
-    try:
-        inventory=candidate_inventory(data,diag,sources,rec,now)
-        deleted=0;reclaimed=0;errors=[]
-        for row in inventory['candidates']:
+        return {'ok':False,'reason':'rotation-or-software-transaction-busy'}
+
+
+def _run_locked(data,diag,sources,rec,now,rotate_logs,root):
+    if not (root/POLICY_NAME).exists() and not (root/POLICY_NAME).is_symlink():
+        atomic_json(root/POLICY_NAME,load_policy(data))
+    inventory=candidate_inventory(data,diag,sources,rec,now)
+    deleted=0;reclaimed=0;errors=[]
+    for row in inventory['candidates']:
+        try:
+            # Recheck live protection before EVERY deletion, not just at scan time.
+            if row['group']=='backup' and active_recovery(data,rec):
+                continue
+            current=protected_names(data,diag,sources)
+            if row['name'] in current.get(row['category'],set()):
+                continue
+            outcome=prune_one(row)
+            if outcome=='deleted':deleted+=1;reclaimed+=row['size']
+        except (OSError,ValueError) as exc:
+            errors.append(row['category']+': '+type(exc).__name__)
+    logs='not-available'
+    if rotate_logs and data==DATA:
+        exe='/usr/sbin/logrotate' if Path('/usr/sbin/logrotate').exists() else '/usr/bin/logrotate'
+        cfg=Path('/etc/logrotate.d/iptm')
+        if Path(exe).is_file() and cfg.is_file():
             try:
-                # Recheck live protection before EVERY deletion, not just at scan time.
-                if row['group']=='backup' and active_recovery(data,rec):
-                    continue
-                current=protected_names(data,diag,sources)
-                if row['name'] in current.get(row['category'],set()):
-                    continue
-                outcome=prune_one(row)
-                if outcome=='deleted':deleted+=1;reclaimed+=row['size']
-            except (OSError,ValueError) as exc:
-                errors.append(row['category']+': '+type(exc).__name__)
-        logs='not-available'
-        if rotate_logs and data==DATA:
-            exe='/usr/sbin/logrotate' if Path('/usr/sbin/logrotate').exists() else '/usr/bin/logrotate'
-            cfg=Path('/etc/logrotate.d/iptm')
-            if Path(exe).is_file() and cfg.is_file():
-                try:
-                    state_dir=Path('/var/lib/iptm-retention')
-                    if state_dir.is_symlink():raise ValueError('logrotate state directory symlink')
-                    state_dir.mkdir(mode=0o700,parents=True,exist_ok=True)
-                    if state_dir.stat().st_uid!=0 or state_dir.stat().st_mode&0o077:
-                        raise ValueError('logrotate state directory insecure')
-                    r=subprocess.run([exe,'-s','/var/lib/iptm-retention/logrotate.state',str(cfg)],
-                                     timeout=20,capture_output=True,stdin=subprocess.DEVNULL)
-                    logs='ok' if r.returncode==0 else 'error'
-                except (OSError,subprocess.TimeoutExpired,ValueError):logs='error'
-            if logs=='error':errors.append('logrotate: errore; controllare il journal timer')
-        out={'ok':not errors,'time':dt.datetime.now(dt.timezone.utc).isoformat(),
-             'deleted':deleted,'reclaimed_bytes':reclaimed,'errors':errors[:30],
-             'warnings':inventory['warnings'][:30],'logs':logs,
-             'note':'Solo backup e report IPTM completati; stato live invariato'}
-        atomic_json(data/REPORT_NAME,out)
-        return out
-    finally:
-        fcntl.flock(lock,fcntl.LOCK_UN);os.close(lock)
+                state_dir=Path('/var/lib/iptm-retention')
+                if state_dir.is_symlink():raise ValueError('logrotate state directory symlink')
+                state_dir.mkdir(mode=0o700,parents=True,exist_ok=True)
+                if state_dir.stat().st_uid!=0 or state_dir.stat().st_mode&0o077:
+                    raise ValueError('logrotate state directory insecure')
+                r=capture([exe, '-s', '/var/lib/iptm-retention/logrotate.state', str(cfg)], timeout=20, text=False, stdout_limit=1048576, stderr_limit=262144)
+                logs='ok' if r.returncode==0 else 'error'
+            except (OSError,subprocess.TimeoutExpired,ValueError):logs='error'
+        if logs=='error':errors.append('logrotate: errore; controllare il journal timer')
+    out={'ok':not errors,'time':dt.datetime.now(dt.timezone.utc).isoformat(),
+         'deleted':deleted,'reclaimed_bytes':reclaimed,'errors':errors[:30],
+         'warnings':inventory['warnings'][:30],'logs':logs,
+         'note':'Solo backup e report IPTM completati; stato live invariato'}
+    atomic_json(root/REPORT_NAME,out)
+    return out
 
 
 def main():
@@ -448,13 +441,14 @@ def main():
         raw=sys.stdin.buffer.read(4097)
         if len(raw)>4096:raise ValueError('Configurazione troppo grande')
         values=validate_policy(json.loads(raw))
-        atomic_json(DATA/POLICY_NAME,values)
-        if Path('/etc/logrotate.d/iptm').exists():
-            atomic_system_file(Path('/etc/logrotate.d/iptm'),logrotate_config(values))
+        root=state_root(create=True)
+        with transaction_gate(domain=root/'retention.lock'):
+            atomic_json(root/POLICY_NAME,values)
+            if Path('/etc/logrotate.d/iptm').exists():
+                atomic_system_file(Path('/etc/logrotate.d/iptm'),logrotate_config(values))
         return {'ok':True,'policy':values}
     if op=='trigger':
-        p=subprocess.run(['/usr/bin/systemctl','start','--no-block','iptm-retention.service'],
-                         capture_output=True,timeout=8)
+        p=capture(['/usr/bin/systemctl', 'start', '--no-block', 'iptm-retention.service'], timeout=8, text=False, stdout_limit=1048576, stderr_limit=262144)
         return {'ok':p.returncode==0,'queued':p.returncode==0}
     raise ValueError('Operazione retention non autorizzata')
 

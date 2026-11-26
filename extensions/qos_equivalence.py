@@ -18,7 +18,9 @@ METRICS={'rtt_p95_ms':(1.15,3.0), 'rtt_p99_ms':(1.20,5.0),
 LOWER_BETTER={'rtt_p95_ms','rtt_p99_ms','jitter_p95_ms','loss_pct','cpu_pct'}
 
 def valid_num(x):
-    return isinstance(x,(int,float)) and not isinstance(x,bool) and math.isfinite(x) and x>=0
+    if not isinstance(x,(int,float)) or isinstance(x,bool) or x<0:return False
+    try:return math.isfinite(x)
+    except OverflowError:return False
 
 def evaluate(report):
     """Reject incomplete or incomparable reports, rather than inferring parity."""
@@ -42,7 +44,7 @@ def evaluate(report):
         for role,trial in [('cfosspeed',baseline),('iptm',candidate)]:
             if type(trial.get('independent_runs'))!=int or trial['independent_runs']<3:
                 raise ValueError('three runs required: '+name+'/'+role)
-            if not all(valid_num(trial.get(k)) for k in METRICS):
+            if not all(valid_num(trial.get(k)) for k in METRICS) or trial['loss_pct']>100 or trial['rtt_p99_ms']<trial['rtt_p95_ms']:
                 raise ValueError('invalid or missing metric: '+name+'/'+role)
         checks={}
         for metric,(factor,allowance) in METRICS.items():

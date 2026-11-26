@@ -17,7 +17,9 @@ function init(){
  root.dataset.ready='1';
  const panel=document.getElementById('iptm-topology-panel'),issueEl=document.getElementById('iptm-topology-issues');
  const table=document.querySelector('#iptm-topology-table tbody'),search=document.getElementById('iptm-topo-search'),filter=document.getElementById('iptm-topo-filter');
- const records=(Array.isArray(data.nodes)?data.nodes:[]).map(n=>({...n,kind:labels[n.kind]?n.kind:'unknown',flags:[...new Set(n.flags||[])],warnings:[...(n.warnings||[])],ips:n.ips||[],selected:!!n.selected}));
+ const list=v=>Array.isArray(v)?v.filter(x=>typeof x==='string'):[];
+ const seen=new Set();
+ const records=(Array.isArray(data?.nodes)?data.nodes:[]).filter(n=>{if(!n||typeof n.mac!=='string'||!/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(n.mac)||seen.has(n.mac.toLowerCase()))return false;seen.add(n.mac.toLowerCase());return true;}).map(n=>({...n,kind:kinds.includes(n.kind)?n.kind:'unknown',vendor:typeof n.vendor==='string'?n.vendor:'',flags:[...new Set(list(n.flags))].filter(f=>Object.hasOwn(policyNames,f)),warnings:list(n.warnings),ips:list(n.ips),selected:!!n.selected}));
  const byMac=new Map(records.map(n=>[n.mac,n]));
  const state={active:null,page:0,zoom:1,positions:new Map(),issues:new Map()};
  const W=1160,H=784;

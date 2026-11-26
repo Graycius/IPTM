@@ -23,7 +23,7 @@ if (($_SERVER['REQUEST_METHOD']??'')==='GET' && (string)($_GET['p']??'')==='dnsg
     if(session_status()===PHP_SESSION_ACTIVE)session_write_close();
     [$exit,$response,$stderr]=run(array_merge([BIN_SUDO,'-n',HELPER],$command),null,10.0,1024*1024);
     $body=json_decode($response,true);
-    if($exit!==0 || !is_array($body) || empty($body['ok'])) {
+    if($exit!==0 || !is_array($body) || ($body['ok']??false)!==true) {
         http_response_code(503);
         echo json_encode(['ok'=>false,'error'=>(string)($body['error']??'Worker liste non disponibile')],JSON_UNESCAPED_UNICODE);
         exit;
@@ -38,7 +38,7 @@ if (($_SERVER['REQUEST_METHOD']??'')==='GET' && ($_GET['p']??'')==='health' && i
     header('Content-Type: application/json; charset=utf-8');
     [$rc,$raw]=priv('security',null,['lynis-status']);
     $status=json_decode((string)$raw,true);
-    if ($rc!==0 || !is_array($status) || empty($status['ok'])) {
+    if ($rc!==0 || !is_array($status) || ($status['ok']??false)!==true) {
         http_response_code(503);echo '{"ok":false,"state":"unknown"}';exit;
     }
     echo json_encode($status,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR);exit;

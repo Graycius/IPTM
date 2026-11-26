@@ -9,6 +9,26 @@ import subprocess
 import sys
 import ipaddress
 
+# Shared transport loaded only for commands; journal recovery stays standalone.
+def iptm_capture(argv, **options):
+    import importlib.util
+    from pathlib import Path
+    source=Path(__file__).resolve()
+    if source.parent.name == 'runtime':
+        module=source.parent.parent/'extensions'/'command_transport.py'
+    else:
+        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/command_transport.py')
+    if not module.is_file() or module.is_symlink():
+        raise OSError('Trasporto IPTM assente o non sicuro')
+    cached=getattr(iptm_capture,'_module',None)
+    if cached is None:
+        spec=importlib.util.spec_from_file_location('_iptm_runtime_transport',module)
+        cached=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cached)
+        iptm_capture._module=cached
+    return cached.capture(argv, **options)
+
+
 # Names below are real CrowdSec Hub collections; use local cscli to verify
 # availability/installation rather than creating an imaginary parser.
 SOURCES = (
@@ -24,9 +44,8 @@ SOURCES = (
 
 def command(args, timeout=3):
     try:
-        p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           text=True, timeout=timeout, check=False)
-        return p.returncode, p.stdout[:300000]
+        p = iptm_capture(args, timeout=timeout, stdout_limit=300000, stderr_limit=262144)
+        return p.returncode, p.stdout
     except (OSError, subprocess.TimeoutExpired):
         return 124, ''
 
@@ -126,9 +145,9 @@ def preview_blocklist(lines, protected=()):
         try:net=ipaddress.ip_network(value,strict=False)
         except ValueError:
             discarded+=1;continue
-        if not net.is_global or any(net.overlaps(n) for n in protected_networks):
+        if not net.is_global or net.is_multicast or net.is_unspecified or any(net.overlaps(n) for n in protected_networks):
             discarded+=1;continue
-        if len(keep)>=200000:raise ValueError('too-many-entries')
+        if str(net) not in keep and len(keep)>=200000:raise ValueError('too-many-entries')
         keep.add(str(net))
     return {'mode':'preview-only','entries':sorted(keep),
             'accepted':len(keep),'discarded':discarded,'applied':False}
@@ -149,9 +168,8 @@ class IntegrationError(ValueError): pass
 
 def ic_command(args, *, timeout=7):
     try:
-        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
-                           stdin=subprocess.DEVNULL, check=False)
-        return p.returncode, p.stdout[:256000]
+        p = iptm_capture(args, timeout=timeout, stdout_limit=256000, stderr_limit=262144)
+        return p.returncode, p.stdout
     except (OSError, subprocess.TimeoutExpired):
         return 124, ''
 
@@ -165,7 +183,7 @@ def parse_feed(text, protected=()):
         try: network=ipaddress.ip_network(line,strict=False)
         except ValueError:
             rejected+=1;continue
-        if not network.is_global or any(network.overlaps(g) for g in guards):
+        if not network.is_global or network.is_multicast or network.is_unspecified or any(network.overlaps(g) for g in guards):
             rejected+=1;continue
         accepted.add(str(network))
         if len(accepted)>MAX_ITEMS:raise IntegrationError('too-many-entries')

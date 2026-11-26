@@ -5,6 +5,8 @@ CLI is root-only, machine-readable; previews have no side effects to either engi
 Only explicit approved local sources are accepted for feed downloads. Web requests
 are never performed by the admin PHP process. CLI invocation is strictly argv.
 """
+
+from command_transport import capture
 import fcntl, hashlib, ipaddress, json, os, pathlib, re, shutil, subprocess, sys, tempfile, time, urllib.request
 
 BASE=pathlib.Path('/var/lib/iptm-security-stack')
@@ -28,23 +30,36 @@ def safe_dir():
     s=BASE.stat()
     if s.st_uid or s.st_mode&0o077: raise StackError('directory non root:0700')
 def write_json(path,obj):
-    fd,tmp=tempfile.mkstemp(prefix='.pending-',dir=BASE)
-    try:
-        with os.fdopen(fd,'w') as f:
-            os.fchmod(f.fileno(),0o600);json.dump(obj,f,sort_keys=True);f.flush();os.fsync(f.fileno())
-        os.replace(tmp,path)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    from command_transport import durable_json
+    durable_json(path,obj)
+
+
 def read_plan():
-    if PLAN.is_symlink():raise StackError('piano simbolico')
-    if not PLAN.exists():raise StackError('nessun piano')
-    if PLAN.stat().st_uid or PLAN.stat().st_mode&0o077:raise StackError('piano con permessi non sicuri')
-    v=json.loads(PLAN.read_text())
-    if not isinstance(v,dict) or time.time()-v.get('created',0)>TTL:raise StackError('piano scaduto')
+    from command_transport import read_private_json
+    import math
+    try:v=read_private_json(PLAN,limit=MAX_BYTES+65536)
+    except (OSError,ValueError,UnicodeError) as exc:raise StackError('Piano non protetto') from exc
+    if v is None:raise StackError('Nessun piano')
+    created=v.get('created')
+    if type(created) not in (int,float) or not math.isfinite(created) or not 0<=time.time()-created<=TTL:raise StackError('Piano scaduto')
+    digest=v.get('digest')
+    if not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest):raise StackError('Digest del piano non valido')
+    if v.get('type')=='crowdsec-feed':
+        values=v.get('values')
+        if not isinstance(values,list) or not 1<=len(values)<=MAX_ENTRIES or not all(isinstance(x,str) for x in values):raise StackError('Feed non valido')
+        raw=('\n'.join(values)+'\n').encode()
+        parsed,_=parse_feed(raw)
+        if sorted(parsed)!=values or hashlib.sha256(raw).hexdigest()!=digest:raise StackError('Feed modificato')
+        if v.get('duration') not in ('1h','4h','12h','24h','48h') or not isinstance(v.get('reason'),str) or not re.fullmatch('[a-z0-9_-]{3,32}',v['reason']):raise StackError('Metadati feed non validi')
+    elif v.get('type')=='suricata-source':
+        if not isinstance(v.get('source'),str) or not SOURCE.fullmatch(v['source']) or type(v.get('enabled')) is not bool:raise StackError('Piano Suricata non valido')
+        if hashlib.sha256(json.dumps({k:x for k,x in v.items() if k!='digest'},sort_keys=True).encode()).hexdigest()!=digest:raise StackError('Piano Suricata modificato')
+    else:raise StackError('Tipo piano non valido')
     return v
 
+
 def run(args,timeout=45,check=True):
-    try:r=subprocess.run(args,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=timeout)
+    try:r=capture(args,timeout=timeout)
     except (OSError,subprocess.TimeoutExpired) as e:raise StackError('esecuzione non disponibile: '+str(e)) from e
     if check and r.returncode:raise StackError('comando fallito: '+(r.stderr or r.stdout)[-350:])
     return r
@@ -54,7 +69,11 @@ def inventory():
     for cmd in ['cscli','crowdsec','crowdsec-firewall-bouncer','suricata','suricata-update','suricatasc','evebox','nmcli']:
         result[cmd]=shutil.which(cmd)
     for unit in ['crowdsec','crowdsec-firewall-bouncer','suricata','NetworkManager']:
-        result[unit+'_status']=run(['systemctl','is-active',unit],timeout=5,check=False).stdout.strip()
+        try:
+            status=run(['systemctl','is-active',unit],timeout=3,check=False).stdout.strip()
+            result[unit+'_status']=status if status in ('active','inactive','failed','activating','deactivating','reloading','maintenance','unknown') else 'unknown'
+        except StackError:
+            result[unit+'_status']='unknown'
     return {'ok':True,'components':result,'third_party_gui':'optional-not-embedded'}
 
 def parse_feed(contents):
@@ -213,9 +232,8 @@ def suricata_apply(digest):
 
 def main(argv):
     check_root();safe_dir()
-    fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
-    with os.fdopen(fd,'r+') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX)
+    from command_transport import domain_lock
+    with domain_lock(LOCK):
         if argv==['status']:return inventory()
         if argv==['suricata-sources']:return suricata_sources()
         if argv in (['crowdsec-stage'],['suricata-stage']):
@@ -229,7 +247,12 @@ def main(argv):
         if argv==['plan']:
             p=read_plan();return {k:v for k,v in p.items() if k!='values'}
         raise StackError('comando sconosciuto')
+def coordinated_main(args):
+    from command_transport import driver_admission
+    with driver_admission('security_stack',args):
+        return main(args)
+
 if __name__=='__main__':
-    try:print(json.dumps(main(sys.argv[1:]),ensure_ascii=False))
+    try:print(json.dumps(coordinated_main(sys.argv[1:]),ensure_ascii=False))
     except (StackError,ValueError,KeyError,OSError) as e:
         print(json.dumps({'ok':False,'error':str(e)},ensure_ascii=False));sys.exit(1)

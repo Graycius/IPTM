@@ -8,6 +8,10 @@ trials. This is NOT a production secondary address or multi-WAN executor.
 """
 from __future__ import annotations
 
+from command_transport import durable_replace
+
+from command_transport import capture, OutputLimitError
+
 import fcntl
 import hashlib
 import ipaddress
@@ -25,7 +29,7 @@ import time
 import fabric_runtime as journal
 from multinic_manager import inventory, read_profile, validate, ValidationError
 
-VERSION = '5.30.23'
+VERSION = '6.0.8'
 STATE_DIR = Path('/var/lib/iptm-alias-trial')
 STATE = STATE_DIR/'state.json'
 LOCK = STATE_DIR/'lock'
@@ -42,7 +46,7 @@ class AliasError(ValueError): pass
 
 
 def command(argv, *, runner=None, check=True, timeout=12):
-    result=(runner or subprocess.run)(argv,capture_output=True,text=True,timeout=timeout,check=False)
+    result=capture(argv,timeout=timeout) if runner is None else runner(argv,capture_output=True,text=True,timeout=timeout,check=False)
     if check and result.returncode:
         raise AliasError(f'{argv[0]} non riuscito: exit {result.returncode}; {result.stderr[:120]}')
     return result
@@ -142,15 +146,13 @@ def atomic(doc):journal.atomic_state(doc, STATE)
 
 def read():
     journal.secure_dir(STATE_DIR)
-    if STATE.exists():
-        st=STATE.lstat()
-        if not STATE.is_file() or st.st_uid!=0 or st.st_mode & 0o077:
-            raise AliasError('File di stato non root-only')
-    doc=journal.state_read(STATE)
+    try:doc=journal.state_read(STATE)
+    except journal.TrialError as exc:raise AliasError(str(exc)) from exc
     if doc is not None and (doc.get('version')!=VERSION or doc.get('status') not in
         {'pending','confirmed','rolled-back','rollback-incomplete','rebooted-not-persistent'}):
         raise AliasError('Transazione da release diversa o stato sconosciuto')
     return doc
+
 
 def _lock():return journal.locking(LOCK)
 
@@ -165,13 +167,7 @@ def boot_guard_install(*,runner=None,unit=None,script=SCRIPT):
              'After=local-fs.target\nBefore=network-pre.target\nWants=network-pre.target\n'
              f'[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -B {script} boot-recover\n'
              '[Install]\nWantedBy=sysinit.target\n')
-    fd,tmp=tempfile.mkstemp(prefix='.iptm-alias-',dir=unit.parent)
-    try:
-        with os.fdopen(fd,'w') as f:
-            f.write(content);f.flush();os.fsync(f.fileno());os.fchmod(f.fileno(),0o644)
-        os.replace(tmp,unit)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    durable_replace(unit, content.encode(), mode=0o644)
     command(['systemctl','daemon-reload'],runner=runner)
     command(['systemctl','enable',unit.name],runner=runner)
     return {'ok':True,'unit':str(unit)}
@@ -296,7 +292,13 @@ def main(args):
         return action(args[0],args[1])
     raise AliasError('Uso: net-alias status|preview|install-guard|apply HASH|confirm TOKEN|rollback TOKEN')
 
+def coordinated_main(args):
+    from command_transport import driver_admission
+    with driver_admission('network_alias_trial',args):
+        return main(args)
+
+
 if __name__=='__main__':
-    try:print(json.dumps(main(sys.argv[1:]),ensure_ascii=False,separators=(',',':')))
+    try:print(json.dumps(coordinated_main(sys.argv[1:]),ensure_ascii=False,separators=(',',':')))
     except (AliasError,journal.TrialError,ValueError,OSError,subprocess.TimeoutExpired) as exc:
         print(json.dumps({'ok':False,'error':str(exc)},ensure_ascii=False));sys.exit(2)

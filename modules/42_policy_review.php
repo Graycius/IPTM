@@ -19,6 +19,7 @@ function iptm_policy_findings(string $text, array $S = []): array {
     foreach(explode("\n",$text) as $index=>$row){
         $line=trim($row);
         if(str_starts_with($line,'*')){$tab=substr($line,1);$owned='';continue;}
+        if($line==='COMMIT'){$tab='';$owned='';continue;}
         if(str_starts_with($line,'# >>> IPTM:')){$owned=explode(' ',substr($line,11),2)[0];continue;}
         if(str_starts_with($line,'# <<< IPTM:')){$owned='';continue;}
         if($tab!=='filter'||!preg_match('/^-A\s+(INPUT|FORWARD|\S+)\s+/',$line,$mm))continue;
@@ -49,7 +50,7 @@ function iptm_policy_findings(string $text, array $S = []): array {
         if ($chain==='FORWARD' && str_starts_with($owned,'iot-') &&
             preg_match('/(?:^|\s)--mac-source\s+((?:[0-9a-f]{2}:){5}[0-9a-f]{2})/i',$line,$managedMatch))
             $managedRuleMacs[strtolower($managedMatch[1])]=true;
-        if($chain==='FORWARD' && preg_match('/(?:^|\s)-o\s+'.preg_quote($wg,'/').'\b/',$line) && preg_match('/\s-j\s+ACCEPT(?:\s|$)/',$line)
+        if($chain==='FORWARD' && preg_match('/(?:^|\s)-o\s+'.preg_quote($wg,'/').'(?:\s|$)/',$line) && !preg_match('/!\s+-o\s+|(?:^|\s)-o\s+!\s+/',$line) && preg_match('/\s-j\s+ACCEPT(?:\s|$)/',$line)
            && !preg_match('/\s-s\s+|\s--ctstate\s+|\s-d\s+|\s--dport/', $line))
             $add('alto','FORWARD aperto indiscriminatamente verso WireGuard','Consente nuove connessioni verso i peer VPN. Disattiva questa riga, oppure abilita esplicitamente il percorso LAN → WireGuard.',$at);
         if($chain==='FORWARD' && preg_match('/\s-m mac\s+--mac-source\s+((?:[0-9a-f]{2}:){5}[0-9a-f]{2})/i',$line,$ma))
@@ -90,6 +91,10 @@ function iptm_policy_findings(string $text, array $S = []): array {
     if(!empty($S['iot_policies']) || $iotPolicy)$add('medio','Isolamento IoT MAC limitato al livello 3','Il traffico L2 tra dispositivi della stessa subnet (ARP, broadcast e IPv6 link-local) non attraversa necessariamente iptables; servono VLAN o isolamento client sull’AP.','Zone IoT');
     if(!empty($S['single_nic']) && !empty($S['wan_if']))
         $add('medio','WAN/LAN condivise','Impossibile certificare l’origine LAN tramite la sola interfaccia '.$S['wan_if'].'. L’anti-spoof RFC1918 sulla stessa interfaccia romperebbe il traffico legittimo; non viene generato automaticamente.','Setup / bond');
+    if (!empty($S['lan_nets']) && !iptm_management_nets($S))
+        $add('alto','Rete di amministrazione non univoca','Indicare CIDR amministrativi separati dalle reti ospiti e di transito. Il nuovo anti-lockout non concede accesso a tutte le LAN.','Sicurezza / Anti-lockout');
+    foreach (iptm_management_nets($S) as $mgmtNet) if (iptm_management_ingress($mgmtNet,$S)==='')
+        $add('medio','Ingresso amministrativo non verificato','Il CIDR '.$mgmtNet.' non ha un vincolo di ingresso verificabile; configurare la mappa subnet/interfaccia.','Setup / topologia');
     // Prioritize real security issues over repeated housekeeping findings.
     $rank=['critico'=>0,'alto'=>1,'medio'=>2,'basso'=>3];
     usort($findings,fn($a,$b)=>($rank[$a['severity']]??4)<=>($rank[$b['severity']]??4));

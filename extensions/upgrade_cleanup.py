@@ -7,6 +7,7 @@ interfaces, DNS, service files for active/ enabled services, or user backups.
 All removed unit bytes are archived in a root-only snapshot first.
 """
 from __future__ import annotations
+from command_transport import capture, read_private_json, durable_replace, durable_unlink, domain_lock
 import fcntl, hashlib, json, os, pathlib, re, shlex, shutil, stat, subprocess, sys, tempfile, time
 
 STATE=pathlib.Path('/var/lib/iptm-update-cleanup')
@@ -79,24 +80,27 @@ def secure_directory(path, create=False):
 def secure_file(path):
     if path.is_symlink() or not path.is_file():return False
     st=path.stat()
-    return st.st_uid==0 and not(st.st_mode & 0o022) and stat.S_ISREG(st.st_mode)
+    return st.st_uid==0 and st.st_nlink==1 and not(st.st_mode & 0o022) and stat.S_ISREG(st.st_mode)
 
 def call(*args):
-    try:return subprocess.run(args,capture_output=True,text=True,stdin=subprocess.DEVNULL,timeout=8)
+    try:return capture(args,timeout=8,stdout_limit=1048576,stderr_limit=262144)
     except (OSError, subprocess.TimeoutExpired) as exc:raise CleanupError('Stato servizi non verificabile') from exc
 
 def pending_network():
     if PENDING.exists() or PENDING.is_symlink():return 'aggiornamento non confermato'
+    for raw in ('/var/lib/iptables-manager/pending.json','/var/lib/iptm/ipv6-control/pending.json','/var/lib/iptables-manager/backups/dns-guard/pending.json'):
+        marker=pathlib.Path(raw)
+        if marker.exists() or marker.is_symlink():return 'transazione pendente: '+raw
     for raw in ('/var/lib/iptm-qos-engine/active.json','/var/lib/iptm-nm-editor/trial.json',
                 '/var/lib/iptm-network-runtime/transaction.json',
                 '/var/lib/iptm-sqm-uplink/state.json','/var/lib/iptm-sqm-reconcile/state.json'):
         path=pathlib.Path(raw)
         if not path.exists() and not path.is_symlink():continue
         if not secure_file(path) or path.stat().st_mode & 0o077:return 'journal non verificabile: '+raw
-        try:data=json.loads(path.read_text())
+        try:data=read_private_json(path)
         except (OSError, ValueError, UnicodeError):return 'journal incompleto: '+raw
         if not isinstance(data,dict):return 'journal non valido: '+raw
-        if data.get('state') in ('pending','applying','rollback-failed','reconciling') or data.get('status') in ('pending','applying','rollback-failed','reconciling'):
+        if data.get('state') in ('pending','applying','rolling-back','rollback-failed','reconciling','recovery_required') or data.get('status') in ('pending','applying','rolling-back','rollback-failed','reconciling','recovery_required'):
             return 'transazione rete attiva: '+raw
     return None
 
@@ -154,7 +158,7 @@ def inspect_unit(name,markers,permitted_refs=frozenset()):
         if state not in ('inactive','failed','unknown'):
             record['reason']='servizio associato operativo: '+service;return record
     record.update(action='retire',reason='firma IPTM verificata; unità inattiva, disabilitata e senza job',
-                  sha256=hashlib.sha256(content).hexdigest(),mode=path.stat().st_mode & 0o777)
+                  sha256=hashlib.sha256(content).hexdigest(),mode=path.stat().st_mode & 0o777, gid=path.stat().st_gid)
     return record
 
 def backup_candidates(now=None):
@@ -171,10 +175,10 @@ def backup_candidates(now=None):
                 files.append(file)
             files.sort(key=lambda item:(item.stat().st_mtime,item.name),reverse=True)
             for file in files[3:]:
-                if now-file.stat().st_mtime < 30*86400:continue
+                if now-file.stat().st_mtime < 30*86400 or file.stat().st_size > 16*1024*1024:continue
                 results.append({'file':str(file),'sha256':hashlib.sha256(file.read_bytes()).hexdigest(),
-                                'mode':file.stat().st_mode & 0o777,'size':file.stat().st_size})
-    return results
+                                'mode':file.stat().st_mode & 0o777,'gid':file.stat().st_gid,'size':file.stat().st_size})
+    return sorted(results,key=lambda x:x["file"])
 
 def disabled_iot_post_script():
     """Convert only a script that the helper ALREADY refuses to execute.
@@ -197,20 +201,21 @@ def disabled_iot_post_script():
         if not re.fullmatch(r'(?:/[A-Za-z0-9_.-]+)*/iot_warden\.sh',value):return None
         output=text[:matches[0].start()]+ 'POST_SCRIPT=""'+text[matches[0].end():]
         return {'path':str(path),'sha256':hashlib.sha256(content).hexdigest(),
-                'mode':path.stat().st_mode & 0o777,'replacement':output.encode()}
+                'mode':path.stat().st_mode & 0o777,'gid':path.stat().st_gid,'replacement':output.encode()}
     except (UnicodeError, OSError, ValueError):return None
 
 def plan():
     blocker=pending_network()
     entries=[]
     candidates=dict(RETIRED_UNITS)
-    candidates.update(obsolete_iptm_units())
+    # Unknown units are inventory only; a name or description is not proof of ownership.
+    unidentified=obsolete_iptm_units()
     # A retired timer may be the sole remaining reference to a retired service:
     # only ignore that reference after the timer itself passed independent checks.
     prelim={name:inspect_unit(name,markers) for name,markers in candidates.items()}
     linked={name for name,record in prelim.items() if name.endswith('.timer')
             and record is not None and record.get('action')=='retire'}
-    for name,markers in candidates.items():
+    for name,markers in sorted(candidates.items()):
         entry=prelim[name]
         if entry is not None and entry.get('action')!='retire' and name.endswith('.service'):
             # Allow only the already verified disabled companion timer, not arbitrary references.
@@ -218,6 +223,8 @@ def plan():
             if paired in linked:
                 entry=inspect_unit(name,markers,frozenset([paired]))
         if entry is not None:entries.append(entry)
+    for name in sorted(unidentified):
+        entries.append({"unit":name,"action":"preserve","reason":"unità IPTM non catalogata: verifica manuale necessaria"})
     if blocker:
         for entry in entries:
             if entry['action']=='retire':entry.update(action='preserve',reason=blocker)
@@ -232,24 +239,16 @@ def plan():
     return dict({'ok':True,'sha256':hashlib.sha256(fingerprint).hexdigest()},**summary)
 
 def atomic_json(path,obj):
-    fd,temp=tempfile.mkstemp(dir=path.parent,prefix='.iptm-cleanup-')
-    try:
-        with os.fdopen(fd,'w') as stream:
-            os.fchmod(stream.fileno(),0o600)
-            json.dump(obj,stream,sort_keys=True,ensure_ascii=False)
-            stream.flush();os.fsync(stream.fileno())
-        os.replace(temp,path)
-    finally:
-        if os.path.exists(temp):os.unlink(temp)
+    from command_transport import durable_json
+    durable_json(path,obj,ensure_ascii=False)
+
 
 def run(expected=None):
     if os.geteuid():raise CleanupError('root richiesto')
     if PENDING.exists() or PENDING.is_symlink():
         raise CleanupError('Aggiornamento non ancora confermato; pulizia non avviata')
     secure_directory(STATE,create=True)
-    lock_fd=os.open(STATE/'lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
-    with os.fdopen(lock_fd,'r+') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX)
+    with domain_lock(STATE/'lock'):
         before=plan()
         if expected is not None and before['sha256']!=expected:
             raise CleanupError('Inventario cambiato: eseguire nuova scansione')
@@ -283,8 +282,8 @@ def run(expected=None):
             src=UNIT_DIR/entry['unit']
             if not secure_file(src) or hashlib.sha256(src.read_bytes()).hexdigest()!=entry['sha256']:
                 raise CleanupError('Unità modificata dopo inventario: '+entry['unit'])
-            dest=folder/entry['unit'];dest.write_bytes(src.read_bytes());dest.chmod(0o600)
-            snapshot.append({'source':str(src),'copy':dest.name,'sha256':entry['sha256'],'mode':entry['mode']})
+            dest=folder/entry['unit']; durable_replace(dest,src.read_bytes(),create_only=True)
+            snapshot.append({'source':str(src),'copy':dest.name,'sha256':entry['sha256'],'mode':entry['mode'],'gid':entry['gid']})
         for i,item in enumerate(stale):
             src=pathlib.Path(item['file'])
             if not secure_file(src) or hashlib.sha256(src.read_bytes()).hexdigest()!=item['sha256']:
@@ -292,16 +291,16 @@ def run(expected=None):
             if item['size']>16*1024*1024:
                 preserved.append(str(src));continue
             name='old-file-'+str(i)
-            dest=folder/name;shutil.copyfile(src,dest);dest.chmod(0o600)
-            snapshot.append({'source':str(src),'copy':name,'sha256':item['sha256'],'mode':item['mode']})
+            dest=folder/name; durable_replace(dest,src.read_bytes(),create_only=True)
+            snapshot.append({'source':str(src),'copy':name,'sha256':item['sha256'],'mode':item['mode'],'gid':item['gid']})
         if config:
             src=LEGACY_CONFIG
             if not secure_file(src) or hashlib.sha256(src.read_bytes()).hexdigest()!=config['sha256']:
                 raise CleanupError('Configurazione post-apply cambiata durante la preparazione')
             config_backup=folder/'post-apply-config'
-            shutil.copyfile(src,config_backup);config_backup.chmod(0o600)
+            durable_replace(config_backup,src.read_bytes(),create_only=True)
             snapshot.append({'source':str(src),'copy':config_backup.name,'sha256':config['sha256'],
-                             'mode':config['mode']})
+                             'mode':config['mode'],'gid':config['gid']})
         atomic_json(folder/'manifest.json',{'version':1,'files':snapshot,'created':int(time.time()),'status':'prepared'})
         # Reverify systemd immediately before removal; never stop an active service.
         changed=[];converted=[];did_convert=False
@@ -310,18 +309,12 @@ def run(expected=None):
                 original=LEGACY_CONFIG.stat()
                 if hashlib.sha256(LEGACY_CONFIG.read_bytes()).hexdigest()!=config['sha256']:
                     raise CleanupError('Configurazione modificata: conversione rinviata')
-                fd,temp=tempfile.mkstemp(prefix='.iptm-post-apply-',dir=LEGACY_CONFIG.parent)
-                try:
-                    with os.fdopen(fd,'wb') as f:
-                        os.fchmod(f.fileno(),config['mode']);os.fchown(f.fileno(),0,original.st_gid)
-                        f.write(config['replacement']);f.flush();os.fsync(f.fileno())
-                    os.replace(temp,LEGACY_CONFIG)
-                finally:
-                    if os.path.exists(temp):os.unlink(temp)
+                # Mark before publishing: an fsync error may occur after rename.
                 did_convert=True
+                durable_replace(LEGACY_CONFIG,config['replacement'],mode=config['mode'],group=original.st_gid)
                 converted.append('POST_SCRIPT IoT Warden disabilitato')
             current_candidates=dict(RETIRED_UNITS)
-            current_candidates.update(obsolete_iptm_units())
+            # Do not retire unclassified units automatically.
             eligible_timer_names={x['unit'] for x in eligible if x['unit'].endswith('.timer')}
             for entry in eligible:
                 markers=current_candidates.get(entry['unit'])
@@ -332,8 +325,9 @@ def run(expected=None):
                 rechecked=inspect_unit(entry['unit'],markers,permit)
                 if not rechecked or rechecked.get('action')!='retire' or rechecked.get('sha256')!=entry['sha256']:
                     preserved.append(entry['unit']);continue
-                (UNIT_DIR/entry['unit']).unlink()
-                changed.append(entry['unit']);retired.append(entry['unit'])
+                changed.append(entry['unit'])
+                durable_unlink(UNIT_DIR/entry['unit'])
+                retired.append(entry['unit'])
             if changed:
                 r=call('systemctl','daemon-reload')
                 if r.returncode:raise CleanupError('systemd daemon-reload fallito')
@@ -341,12 +335,12 @@ def run(expected=None):
             if did_convert:
                 src=LEGACY_CONFIG
                 data=(folder/'post-apply-config').read_bytes()
-                src.write_bytes(data);src.chmod(config['mode'])
+                durable_replace(src,data,mode=config['mode'],group=config['gid'])
             for name in changed:
                 original=next(x for x in snapshot if x['source']==str(UNIT_DIR/name))
                 src=UNIT_DIR/name
                 if not src.exists() and not src.is_symlink():
-                    src.write_bytes((folder/original['copy']).read_bytes());src.chmod(original['mode'])
+                    durable_replace(src,(folder/original['copy']).read_bytes(),mode=original['mode'],group=original['gid'],create_only=True)
             call('systemctl','daemon-reload')
             raise
         for item in stale:
@@ -354,7 +348,7 @@ def run(expected=None):
             match=next((x for x in snapshot if x['source']==str(src)),None)
             if match is None:continue
             if secure_file(src) and hashlib.sha256(src.read_bytes()).hexdigest()==item['sha256']:
-                src.unlink();archived.append(str(src))
+                durable_unlink(src);archived.append(str(src))
         atomic_json(folder/'manifest.json',{'version':1,'files':snapshot,'created':int(time.time()),'status':'completed'})
         report={'ok':True,'state':'completed','retired':retired,'archived':archived,
                 'converted':converted,'preserved':preserved,'snapshot':str(folder),

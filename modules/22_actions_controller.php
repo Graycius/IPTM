@@ -1,19 +1,7 @@
 <?php
-// ===================== AZIONI POST =====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (($_SESSION['role'] ?? 'viewer') !== 'admin' && !in_array($a, ['chpw', 'totp_start', 'totp_on', 'totp_off'], true)) {
-        if ($a==='antidpi_sources' && (string)($_POST['source_async']??'')==='1') {
-            header('Content-Type: application/json; charset=utf-8');
-            http_response_code(403);
-            echo json_encode(['ok'=>false,'error'=>'Account IPTM in sola lettura.']);
-            exit;
-        }
-        flash('Account in sola lettura.', 'err'); go($back);
-    }
-    $MUT = ['rule_save', 'rule_op', 'wizard_add', 'chain_op', 'raw_save', 'settings_save', 'strip_managed', 'import_apply', 'rules_cleanup_apply', 'custom_rules_integrate', 'custom_rules_delete', 'apply', 'save_file', 'iot_bulk_save', 'sec_preset', 'regen_now', 'rules_compact_safe', 'rules_audit_import', 'dns_guard_restore_disk'];
-    if (in_array($a, $MUT, true) && ($_POST['rev'] ?? '') !== $rev) { flash('La bozza è cambiata in un\'altra scheda: operazione annullata, ricarica e riprova.', 'err'); go($back); }
-    try {
-    $iptm_handlers=array (
+// Registro unico delle azioni autenticate; gli handler conservano lo scope di richiesta.
+function iptm_action_registry(): array {
+    return array (
   'rule_op' => 'firewall',
   'rule_save' => 'firewall',
   'wizard_add' => 'firewall',
@@ -55,6 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   'upgrade_cleanup_scan' => 'qos',
   'upgrade_cleanup_retire' => 'qos',
   'upgrade_cleanup_run' => 'update_backup',
+  'release_cleanup_run' => 'update_backup',
   'qos_stage' => 'qos',
   'qos_apply' => 'qos',
   'qos_commit' => 'qos',
@@ -242,11 +231,121 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   'settings_rollback' => 'system',
   'backup_prune' => 'update_backup',
   'restore_backup' => 'update_backup',
+  'release_rollback' => 'update_backup',
   'rules_verify' => 'firewall',
   'test' => 'system',
   'save_file' => 'firewall',
   'apply' => 'firewall',
 );
+}
+/** Validate the complete security decision before invoking a privileged driver. */
+function iptm_security_decision_request(string $action,array $post): array {
+    $ip=$post['ip']??null;
+    if(!is_string($ip)||strlen($ip)>80)throw new InvalidArgumentException('Indirizzo non valido.');
+    $ip=trim($ip);$parts=explode('/',$ip);
+    if(count($parts)>2||!filter_var($parts[0],FILTER_VALIDATE_IP))throw new InvalidArgumentException('Indirizzo IP non valido.');
+    if(count($parts)===2) {
+        $max=str_contains($parts[0],':')?128:32;
+        if($action==='f2b_unban'||!preg_match('/^[0-9]{1,3}$/D',$parts[1])||(int)$parts[1]>$max)throw new InvalidArgumentException('Prefisso CIDR non valido.');
+    }
+    if($action==='f2b_unban') {
+        $jail=$post['jail']??null;
+        if(!is_string($jail)||!preg_match('/^[A-Za-z0-9_.-]{1,40}$/D',$jail))throw new InvalidArgumentException('Jail non valida.');
+        return ['command'=>'f2b-unban','args'=>[$jail,$ip],'success'=>'Indirizzo sbannato.'];
+    }
+    if($action==='cs_ban') {
+        $duration=$post['dur']??'4h';
+        if(!is_string($duration)||!preg_match('/^[0-9]{1,5}[smhd]$/D',$duration)||(int)$duration===0)throw new InvalidArgumentException('Durata non valida.');
+        return ['command'=>'cs-ban','args'=>[$ip,$duration],'success'=>'Decisione aggiunta; il bouncer la applica secondo la propria configurazione.'];
+    }
+    if($action==='cs_unban')return ['command'=>'cs-unban','args'=>[$ip],'success'=>'Decisione rimossa.'];
+    throw new InvalidArgumentException('Azione non valida.');
+}
+/** Require a complete IPv4 connection tuple before deletion. */
+function iptm_connection_request(array $post): array {
+    $fields=[];foreach(['proto','src','dst','sport','dport'] as $key){$v=$post[$key]??null;if(!is_string($v)||$v==='')throw new InvalidArgumentException('Connessione incompleta.');$fields[]=$v;}
+    [$proto,$src,$dst,$sport,$dport]=$fields;
+    if(!in_array($proto,['tcp','udp'],true))throw new InvalidArgumentException('Protocollo non valido.');
+    foreach([$src,$dst] as $ip)if(!filter_var($ip,FILTER_VALIDATE_IP,FILTER_FLAG_IPV4))throw new InvalidArgumentException('Indirizzo IPv4 non valido.');
+    foreach([$sport,$dport] as $port)if(!preg_match('/^[1-9][0-9]{0,4}$/D',$port)||(int)$port>65535)throw new InvalidArgumentException('Porta non valida.');
+    return $fields;
+}
+/** Typed diagnostic request; an unexpected checkbox value cannot enable network probes. */
+function iptm_diagnostic_request(array $post): array {
+    $op=$post['diag_op']??null;
+    if(!is_string($op)||!in_array($op,['start','clear'],true))throw new InvalidArgumentException('Operazione diagnostica non valida.');
+    if($op==='clear')return ['op'=>$op,'payload'=>null];
+    $level=$post['diag_level']??'preflight';$network=$post['diag_network']??'0';
+    if(!is_string($level)||!in_array($level,['schema','preflight','isolated'],true)||!is_string($network)||!in_array($network,['0','1'],true))throw new InvalidArgumentException('Parametri diagnostici non validi.');
+    return ['op'=>$op,'payload'=>json_encode(['include_network'=>$network==='1','level'=>$level],JSON_THROW_ON_ERROR)];
+}
+function iptm_action_authorized(string $action, string $role): bool {
+    return $role==='admin' || ($role==='viewer' && in_array($action,['chpw','totp_start','totp_on','totp_off'],true));
+}
+/** Nonblocking request coordinator. The lock belongs to the web data owner, not root.
+ * Never hold it across requests or take it from recovery watchdogs.
+ */
+function iptm_request_gate_required(string $action): bool {
+    return !in_array($action,['confirm','revert','qos_commit','qos_revert','nm_trial_confirm','nm_trial_revert','ipv6_kernel_confirm','ipv6_kernel_rollback','dns_guard_confirm','dns_guard_revert','health_policy_confirm','health_policy_revert','health_recovery_retry','ssh_continuity_recover','fw_restore_saved','sysctl_consolidate_rollback','release_rollback','dns_guard_restore_disk'],true);
+}
+function iptm_request_gate(string $directory) {
+    clearstatcache(true,$directory);
+    $dir=@lstat($directory);
+    if (!is_array($dir) || ($dir['mode'] & 0170000)!==0040000 || ($dir['mode'] & 0022)!==0) return false;
+    $path=$directory.'/request-transaction.lock';
+    clearstatcache(true,$path);
+    $st=@lstat($path);
+    if ($st===false) {
+        $fp=@fopen($path,'x+b');
+        if ($fp!==false) { if (!@chmod($path,0600)) {fclose($fp);return false;} }
+        else {clearstatcache(true,$path);$st=@lstat($path);}
+    }
+    if (!isset($fp) || $fp===false) {
+        if (!is_array($st) || ($st['mode'] & 0170000)!==0100000 || $st['uid']!==$dir['uid'] || $st['nlink']!==1 || ($st['mode'] & 0077)!==0) return false;
+        $fp=@fopen($path,'r+b');
+    }
+    if (!is_resource($fp)) return false;
+    if (!@flock($fp,LOCK_EX|LOCK_NB)) {fclose($fp);return false;}
+    clearstatcache(true,$path);$st=@lstat($path);$opened=@fstat($fp);
+    if (!is_array($st)||!is_array($opened)||($opened['mode'] & 0170000)!==0100000||$opened['uid']!==$dir['uid']||$opened['nlink']!==1||($opened['mode'] & 0077)!==0||$st['dev']!==$opened['dev']||$st['ino']!==$opened['ino']) {fclose($fp);return false;}
+    return $fp;
+}
+// ===================== AZIONI POST =====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!iptm_action_authorized($a, $_SESSION['role'] ?? 'viewer')) {
+        if ($a==='antidpi_sources' && ($_POST['source_async']??'')==='1') {
+            header('Content-Type: application/json; charset=utf-8');
+            http_response_code(403);
+            echo json_encode(['ok'=>false,'error'=>'Account IPTM in sola lettura.']);
+            exit;
+        }
+        flash('Account in sola lettura.', 'err'); go($back);
+    }
+    $MUT = ['rule_save', 'rule_op', 'wizard_add', 'chain_op', 'raw_save', 'settings_save', 'strip_managed', 'import_apply', 'rules_cleanup_apply', 'custom_rules_integrate', 'custom_rules_delete', 'apply', 'save_file', 'iot_bulk_save', 'sec_preset', 'regen_now', 'rules_compact_safe', 'rules_audit_import', 'dns_guard_restore_disk', 'restore_backup', 'settings_rollback', 'config_bundle_import', 'advise_apply'];
+    if (in_array($a, $MUT, true) && ($_POST['rev'] ?? '') !== $rev) { flash('La bozza è cambiata in un\'altra scheda: operazione annullata, ricarica e riprova.', 'err'); go($back); }
+    try {
+    $iptm_handlers=iptm_action_registry();
+    if ($a!=='modules_repair' && !isset($iptm_handlers[$a])) {
+        flash('Azione non riconosciuta: nessuna modifica applicata.', 'err'); go($back);
+    }
+    if (iptm_request_gate_required($a)) {
+        $iptmRequestLock=iptm_request_gate(DATA_DIR);
+        if ($iptmRequestLock===false) {
+            if ($a==='antidpi_sources' && ($_POST['source_async']??'')==='1') {
+                http_response_code(409);header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['ok'=>false,'error'=>'Transazione IPTM occupata o lock non verificabile.']);exit;
+            }
+            flash('Altra operazione IPTM in corso o lock non verificabile. Riprova dopo il completamento.', 'err');go($back);
+        }
+        // The first revision check ran before admission; repeat with the
+        // current snapshot while serialized, before any handler mutates state.
+        if (in_array($a, $MUT, true) && !hash_equals($rev, hash('sha256',get_draft()))) {
+            fclose($iptmRequestLock);
+            flash('La bozza è cambiata durante l’accesso: ricarica e riprova.', 'err'); go($back);
+        }
+        // Keep the descriptor alive through handler exits and post_hooks.
+        register_shutdown_function(static function() use ($iptmRequestLock) {if (is_resource($iptmRequestLock)) fclose($iptmRequestLock);});
+    }
     if ($a==='modules_repair') {
         // Safe remediation of a partially-installed bridge. Does not mutate
         // firewall, DNS settings, or the current firewall draft.
@@ -264,7 +363,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         unset($GLOBALS['_iptm_post_stage']);
         go($back);
     }
-    $iptmSourceAjax=($a==='antidpi_sources' && (string)($_POST['source_async']??'')==='1');
+    $iptmSourceAjax=($a==='antidpi_sources' && ($_POST['source_async']??'')==='1');
     if (isset($iptm_handlers[$a])) {
         $iptm_handler=IPTM_RELEASE_DIR.'/actions/'.$iptm_handlers[$a].'.php';
         // Runtime components may be only partially deployed after a legacy
@@ -306,7 +405,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ($macStage!=='' ? ' stage='.$macStage : '').
             ' stage='.$postStage.' exception='.get_class($exc).' at='.basename($exc->getFile()).':'.$exc->getLine());
         unset($GLOBALS['_iptm_mac_stage']);
-        if ($a==='antidpi_sources' && (string)($_POST['source_async']??'')==='1') {
+        if ($a==='antidpi_sources' && ($_POST['source_async']??'')==='1') {
             http_response_code(500);
             header('Content-Type: application/json; charset=utf-8');
             header('Cache-Control: no-store, private');

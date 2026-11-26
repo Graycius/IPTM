@@ -6,11 +6,13 @@ mutating a live connection. Supports full NM setting/property namespace through
 nmcli with strict argument separation. Live activation stays with the existing
 IPTM network-runtime guarded trial (not a second competing network manager).
 """
+
+from command_transport import capture
 import fcntl, hashlib, json, os, pathlib, re, secrets, subprocess, sys, tempfile, time
 
 BASE=pathlib.Path('/var/lib/iptm-nm-editor')
 STAGE=BASE/'plan.json';LOCK=BASE/'lock';TRIAL=BASE/'trial.json';LAST=BASE/'last.json'
-SCRIPT='/usr/local/lib/iptables-manager/web/releases/5.30.23/extensions/nm_control.py'
+SCRIPT='/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/nm_control.py'
 UUID=re.compile(r'^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$')
 PROP=re.compile(r'^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$')
 NAME=re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$')
@@ -20,7 +22,7 @@ DENY={'connection.uuid','connection.id','connection.interface-name','connection.
 class NmError(Exception):pass
 
 def run(args,check=True,timeout=30):
-    try:r=subprocess.run(args,capture_output=True,text=True,timeout=timeout,stdin=subprocess.DEVNULL)
+    try:r=capture(args,timeout=timeout)
     except (OSError,subprocess.TimeoutExpired) as e:raise NmError('nmcli non disponibile: '+str(e)) from e
     if check and r.returncode:raise NmError((r.stderr or r.stdout)[-500:])
     return r
@@ -32,13 +34,9 @@ def dguard():
     if s.st_uid or s.st_mode&0o077:raise NmError('directory non sicura')
 
 def atomic(path,obj):
-    fd,tmp=tempfile.mkstemp(dir=BASE,prefix='.nm-')
-    try:
-        with os.fdopen(fd,'w') as f:
-            os.fchmod(f.fileno(),0o600);json.dump(obj,f,sort_keys=True);f.flush();os.fsync(f.fileno())
-        os.replace(tmp,path)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    from command_transport import durable_json
+    durable_json(path,obj)
+
 
 def existing():
     rows=run(['nmcli','-t','-f','UUID,TYPE,DEVICE,NAME','connection','show'],check=False)
@@ -104,11 +102,19 @@ def stage(raw):
     return {'ok':True,'sha256':digest,'preview':obj,'mutated':False}
 
 def read_stage():
-    if STAGE.is_symlink() or not STAGE.is_file() or STAGE.stat().st_uid or STAGE.stat().st_mode&0o077:
-        raise NmError('piano non disponibile o non sicuro')
-    obj=json.loads(STAGE.read_text())
-    if time.time()-obj.get('created',0)>900:raise NmError('piano scaduto')
+    from command_transport import read_private_json
+    import math
+    try:obj=read_private_json(STAGE,limit=131072)
+    except (OSError,ValueError,UnicodeError) as exc:raise NmError('Piano non disponibile o non sicuro') from exc
+    if obj is None:raise NmError('Piano non disponibile')
+    created=obj.get('created');digest=obj.get('digest')
+    if type(created) not in (int,float) or not math.isfinite(created) or not 0<=time.time()-created<=900:raise NmError('Piano scaduto o timestamp non valido')
+    content={k:v for k,v in obj.items() if k!='digest'}
+    if not isinstance(digest,str) or hashlib.sha256(json.dumps(content,sort_keys=True).encode()).hexdigest()!=digest:raise NmError('Piano alterato')
+    sanitize({k:obj.get(k) for k in ('uuid','properties')})
+    if obj.get('state')!='staged' or not re.fullmatch(r'iptm-[a-f0-9]{12}',str(obj.get('name',''))):raise NmError('Piano incoerente')
     return obj
+
 
 def apply(digest):
     obj=read_stage()
@@ -231,9 +237,8 @@ def main(args):
     if os.geteuid():raise NmError('root richiesto')
     dguard()
 
-    fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
-    with os.fdopen(fd,'r+') as f:
-        fcntl.flock(f,fcntl.LOCK_EX)
+    from command_transport import domain_lock
+    with domain_lock(LOCK):
         if args==['inventory']:return inventory()
         if args==['trial-status']:return trial_state()
         if args==['stage']:
@@ -247,7 +252,13 @@ def main(args):
         if len(args)==2 and args[0] in ('confirm-trial','revert-trial'):
             return trial_change(args[1],'confirmed' if args[0]=='confirm-trial' else 'reverting')
         raise NmError('comando sconosciuto')
+def coordinated_main(args):
+    from command_transport import driver_admission
+    with driver_admission('nm_control',args):
+        return main(args)
+
+
 if __name__=='__main__':
-    try:print(json.dumps(main(sys.argv[1:]),ensure_ascii=False))
+    try:print(json.dumps(coordinated_main(sys.argv[1:]),ensure_ascii=False))
     except (NmError,OSError,ValueError,TypeError,KeyError) as e:
         print(json.dumps({'ok':False,'error':str(e)},ensure_ascii=False));sys.exit(1)

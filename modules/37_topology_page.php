@@ -22,11 +22,11 @@ function iptm_topology_data(array $inventory,array $S): array {
     foreach((array)($inventory['devices']??[]) as $row) {
         if(!is_array($row))continue;
         $mac=strtolower((string)($row['mac']??''));
-        if(!preg_match('/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/D',$mac))continue;
+        if(!preg_match('/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/D',$mac)||isset($seenMac[$mac]))continue;
         $kind=(string)($kinds[$mac]??'unknown');
         if(!in_array($kind,['trusted','guest','iot','unknown'],true))$kind='unknown';
         [$icon,$evidence]=iptm_topology_kind((string)($row['vendor']??''),$kind);
-        $addresses=array_values(array_filter((array)($row['addresses']??[]),'is_string'));
+        $addresses=array_values(array_unique(array_filter((array)($row['addresses']??[]),fn($v)=>is_string($v)&&filter_var(explode('/',$v,2)[0],FILTER_VALIDATE_IP)!==false)));
         $addresses=array_slice($addresses,0,6);
         $flags=array_values(array_intersect((array)($policies[$mac]??[]),array_keys(iptm_iot_policy_options())));
         $warnings=[];

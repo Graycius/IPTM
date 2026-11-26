@@ -21,6 +21,26 @@ import sys
 import tempfile
 import uuid
 
+# Shared transport loaded only for commands; journal recovery stays standalone.
+def iptm_capture(argv, **options):
+    import importlib.util
+    from pathlib import Path
+    source=Path(__file__).resolve()
+    if source.parent.name == 'runtime':
+        module=source.parent.parent/'extensions'/'command_transport.py'
+    else:
+        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/command_transport.py')
+    if not module.is_file() or module.is_symlink():
+        raise OSError('Trasporto IPTM assente o non sicuro')
+    cached=getattr(iptm_capture,'_module',None)
+    if cached is None:
+        spec=importlib.util.spec_from_file_location('_iptm_runtime_transport',module)
+        cached=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cached)
+        iptm_capture._module=cached
+    return cached.capture(argv, **options)
+
+
 UNITS = ('iot-warden.service', 'iot-warden.timer', 'iotwarden.service', 'iotwarden.timer')
 KNOWN = (
     '/etc/cron.d/iot-warden', '/etc/cron.d/iotwarden',
@@ -58,8 +78,7 @@ class Warden:
     @staticmethod
     def _run(cmd):
         try:
-            return subprocess.run(cmd, stdin=subprocess.DEVNULL, text=True,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=12)
+            return iptm_capture(cmd, timeout=12, stdout_limit=1048576, stderr_limit=262144)
         except (OSError, subprocess.TimeoutExpired) as e:
             return subprocess.CompletedProcess(cmd, 127, '', type(e).__name__)
 
@@ -97,8 +116,9 @@ class Warden:
             st = f.lstat()
             if not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)):
                 raise ValueError(f'file non regolare / symlink: {f}')
-            if self.root == Path('/') and st.st_uid != 0:
-                raise ValueError(f'risorsa non di root: {f}')
+            if self.root == Path('/') and (st.st_uid != 0 or st.st_mode&0o022):
+                raise ValueError(f'risorsa non protetta di root: {f}')
+            if stat.S_ISREG(st.st_mode) and st.st_nlink!=1:raise ValueError(f'hardlink non gestibile: {f}')
             if f.is_mount():
                 raise ValueError(f'filesystem montato non gestibile automaticamente: {f}')
             count += 1
@@ -110,6 +130,14 @@ class Warden:
                 total += st.st_size
             if count > MAX_ITEMS or total > MAX_BYTES:
                 raise ValueError(f'risorsa troppo grande, rimozione manuale: {p}')
+            if stat.S_ISREG(st.st_mode):
+                fd=os.open(f,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+                with os.fdopen(fd,'rb') as stream:
+                    current=os.fstat(stream.fileno())
+                    if (current.st_dev,current.st_ino,current.st_size,current.st_mtime_ns)!=(st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns):raise ValueError(f'risorsa modificata: {f}')
+                    content=stream.read(st.st_size+1)
+                    if len(content)!=st.st_size or os.fstat(stream.fileno()).st_ctime_ns!=st.st_ctime_ns:raise ValueError(f'risorsa modificata: {f}')
+                    fingerprint.update(hashlib.sha256(content).digest())
         return count, total, fingerprint.hexdigest()
 
     def _conf(self):

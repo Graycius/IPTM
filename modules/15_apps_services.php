@@ -112,32 +112,44 @@ function app_catalog(): array {
 }
 
 /** Porte in ascolto non-loopback: ['tcp' => ['80'=>1,...], 'udp'=>...] */
-function apps_listen_map(): array {
-    $map = ['tcp' => [], 'udp' => []];
-    [$c, $o] = priv('listen-ports');
-    if ($c === 0 && trim($o) !== '') {
-        foreach (preg_split('/\s+/', trim($o)) as $x) {
-            if (!preg_match('/^(tcp|udp)\/(\d+)$/i', $x, $m)) continue;
-            $map[strtolower($m[1])][(string)(int)$m[2]] = 1;
-        }
-        return $map;
+/** Convert procfs socket records into an inventory, not proof of identity. */
+function apps_socket_rows(array $lines, string $proto, bool $ipv6=false): array {
+    $out=[];
+    foreach ($lines as $ln) {
+        $p=preg_split('/\s+/',trim($ln));
+        if(count($p)<4 || !preg_match('/^([0-9A-Fa-f]+):([0-9A-Fa-f]{4})$/D',$p[1],$m))continue;
+        if($proto==='tcp' && strtoupper($p[3])!=='0A')continue;
+        if($proto==='udp' && strtoupper($p[3])!=='07')continue;
+        $hex=strtoupper($m[1]);
+        if(!$ipv6 && (strlen($hex)!==8 || substr($hex,-2)==='7F'))continue;
+        if($ipv6 && (strlen($hex)!==32 || $hex==='00000000000000000000000001000000' || preg_match('/^0000000000000000FFFF0000[0-9A-F]{6}7F$/D',$hex)))continue;
+        $port=hexdec($m[2]); if($port>0)$out[(string)$port]=1;
     }
-    // fallback: /proc/net/tcp e udp (solo IPv4)
-    foreach (['tcp' => '/proc/net/tcp', 'udp' => '/proc/net/udp'] as $proto => $f) {
-        if (!is_readable($f)) continue;
-        $lines = file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
-        array_shift($lines);
-        foreach ($lines as $ln) {
-            $p = preg_split('/\s+/', trim($ln));
-            if (count($p) < 2) continue;
-            [$ipHex, $portHex] = array_pad(explode(':', $p[1]), 2, '0');
-            if (strtolower($ipHex) === '0100007f') continue; // 127.0.0.1
-            $port = hexdec($portHex);
-            if ($port > 0 && $port < 65536) $map[$proto][(string)$port] = 1;
-        }
-    }
-    return $map;
+    return $out;
 }
+/** Return inventory and observation completeness separately. */
+function apps_listen_inventory(): array {
+    $map=['tcp'=>[],'udp'=>[]];
+    [$c,$o]=priv('listen-ports');
+    if($c===0){
+        $valid=true;
+        foreach(preg_split('/\s+/',trim($o),-1,PREG_SPLIT_NO_EMPTY) as $x) {
+            if(preg_match('/^(tcp|udp)\/(\d+)$/iD',$x,$m) && (int)$m[2]>0 && (int)$m[2]<=65535)$map[strtolower($m[1])][(string)(int)$m[2]]=1;
+            else $valid=false;
+        }
+        if($valid)return ['ports'=>$map,'complete'=>true,'source'=>'ss'];
+    }
+    $map=['tcp'=>[],'udp'=>[]]; // non mescolare risultati ss parziali con il fallback
+    $complete=true;
+    foreach(['tcp','udp'] as $proto)foreach([false,true] as $v6){
+        $f='/proc/net/'.$proto.($v6?'6':'');
+        $lines=is_readable($f)?@file($f,FILE_IGNORE_NEW_LINES):false;
+        if($lines===false){$complete=false;continue;}
+        $map[$proto]+=apps_socket_rows($lines,$proto,$v6);
+    }
+    return ['ports'=>$map,'complete'=>$complete,'source'=>'procfs'];
+}
+function apps_listen_map(): array {return apps_listen_inventory()['ports'];}
 
 function apps_unit_exists(string $u): bool {
     $u = basename($u);
@@ -149,10 +161,14 @@ function apps_unit_exists(string $u): bool {
 
 function apps_bin_exists(array $bins): bool {
     foreach ($bins as $b) {
-        if ($b !== '' && (is_file($b) || is_executable($b))) return true;
-        // PATH
-        if ($b !== '' && $b[0] !== '/' && ($w = shell_exec('command -v ' . escapeshellarg($b) . ' 2>/dev/null'))) {
-            if (trim($w) !== '') return true;
+        if ($b !== '' && is_file($b) && is_executable($b)) return true;
+        // No shell: search executable paths, including DietPi's local tools.
+        if (preg_match('/^[A-Za-z0-9_.+-]+$/D',$b) && $b!=='.' && $b!=='..') {
+            foreach (array_unique(array_merge(['/usr/local/sbin','/usr/local/bin','/usr/sbin','/usr/bin','/sbin','/bin'],explode(PATH_SEPARATOR,(string)getenv('PATH')))) as $dir) {
+                if ($dir==='' || $dir[0]!=='/') continue;
+                $candidate=rtrim($dir,'/').'/'.$b;
+                if (is_file($candidate)&&is_executable($candidate)) return true;
+            }
         }
     }
     return false;
@@ -176,7 +192,7 @@ function apps_parse_ports(string $spec): array {
             $x = trim($x);
             if (preg_match('/^(\d+)-(\d+)$/', $x, $r)) {
                 $a = (int)$r[1]; $b = (int)$r[2];
-                if ($a > 0 && $b >= $a && $b - $a < 50) for ($i = $a; $i <= $b; $i++) $ports[] = $i;
+                if ($a > 0 && $b >= $a && $b <= 65535 && $b - $a < 50) for ($i = $a; $i <= $b; $i++) $ports[] = $i;
             } elseif (ctype_digit($x) && (int)$x > 0 && (int)$x < 65536) $ports[] = (int)$x;
         }
         if ($ports) $out[] = [$proto, array_values(array_unique($ports))];
@@ -190,7 +206,7 @@ function apps_parse_ports(string $spec): array {
 function apps_detect(?array $S = null): array {
     $S ??= S_get();
     $en = array_fill_keys(array_map('strval', (array)($S['apps'] ?? [])), 1);
-    $listen = apps_listen_map();
+    $inventory = apps_listen_inventory(); $listen = $inventory['ports'];
     $out = [];
     foreach (app_catalog() as $id => $a) {
         $byBin = apps_bin_exists($a['bins']);
@@ -199,18 +215,19 @@ function apps_detect(?array $S = null): array {
         $byListen = apps_ports_listening($a['ports'], $listen);
         // shelly: "soft" — suggerito se c'è mosquitto o porte CoAP
         if ($id === 'shelly' && !$byBin && !$byUnit) {
-            $byListen = !empty($listen['udp']['5683']) || !empty($en[$id]);
+            $byListen = !empty($listen['udp']['5683']);
         }
-        $installed = $byBin || $byUnit || $byListen;
+        $installed = $byBin || $byUnit; // A shared port cannot prove which application owns it.
         $why = [];
         if ($byBin) $why[] = 'binario';
         if ($byUnit) $why[] = 'servizio systemd';
-        if ($byListen) $why[] = 'in ascolto';
+        if ($byListen) $why[] = 'porta compatibile in ascolto (identità non verificata)';
+        elseif (!$inventory['complete']) $why[] = 'inventario listener incompleto';
         if (!$why && !empty($en[$id])) $why[] = 'abilitato manualmente';
         $out[$id] = [
             'id' => $id, 'name' => $a['name'], 'cat' => $a['cat'], 'ports' => $a['ports'],
             'scope' => $a['scope'], 'note' => $a['note'],
-            'installed' => $installed, 'listening' => $byListen,
+            'installed' => $installed, 'listening' => $byListen, 'listener_known' => $byListen || $inventory['complete'],
             'enabled' => !empty($en[$id]),
             'why' => implode(', ', $why),
         ];
@@ -227,20 +244,40 @@ function apps_rules(array $S): array {
     $lan=iptm_trusted_lan_nets((string)($S['lan_nets']??''));
     $nets=$lan!==''?explode(',',$lan):[];
     $cat=app_catalog();$seen=[];$groups=[];
-    // Only count assured same-semantics managed accepts. Do not infer a port
-    // allowed by a source/target/conntrack-filtered user service.
+    // Core ports already covered by dedicated IPTM sections — never re-emit in apps.
+    $coreSkip=['tcp'=>[],'udp'=>[]];
+    if(!empty($S['dhcp_accept'])){$coreSkip['udp']['67']=true;$coreSkip['udp']['68']=true;}
+    if(!empty($S['dns_redirect']) || !empty($S['dns_ip'])){$coreSkip['tcp']['53']=true;$coreSkip['udp']['53']=true;}
+    if(!empty($S['wg_on'])){
+        $wgp=(string)(int)($S['wg_port']??51820);
+        if($wgp!=='0')$coreSkip['udp'][$wgp]=true;
+    }
+    // Mark ports from svc_in; accept single-LAN src or multiport "a,b,c" of trusted nets.
     foreach((array)($S['svc_in']??[]) as $row){
         if(!is_array($row)||empty($row['on']) || ($row['act']??'ACCEPT')!=='ACCEPT' ||
            !empty($row['iif']) || !empty($row['dst']) || !empty($row['ct']) || !empty($row['after']))continue;
-        $proto=(string)($row['proto']??'');$src=(string)($row['src']??'');
-        if(!in_array($proto,['tcp','udp'],true) || !in_array($src,$nets,true))continue;
-        foreach(explode(',',(string)($row['ports']??'')) as $part){
-            if(ctype_digit($part) && (int)$part>0 && (int)$part<65536)
-                $seen[$proto.'|'.$src][(string)(int)$part]=true;
+        $proto=(string)($row['proto']??'');
+        if(!in_array($proto,['tcp','udp'],true))continue;
+        $srcRaw=trim((string)($row['src']??''));
+        $srcList=[];
+        if($srcRaw==='')$srcList=$nets; // bare multiport without -s is treated as all trusted LAN for dedupe
+        else{
+            foreach(preg_split('/\s*,\s*/',$srcRaw)?:[] as $piece){
+                $piece=trim($piece);
+                if($piece!=='' && in_array($piece,$nets,true))$srcList[]=$piece;
+            }
+        }
+        if(!$srcList)continue;
+        foreach($srcList as $src){
+            foreach(explode(',',(string)($row['ports']??'')) as $part){
+                $part=trim($part);
+                if(ctype_digit($part) && (int)$part>0 && (int)$part<65536)
+                    $seen[$proto.'|'.$src][(string)(int)$part]=true;
+            }
         }
     }
     if(!empty($S['lockout_on'])){
-        foreach($nets as $src)foreach(explode(',',(string)($S['mgmt_ports']??'')) as $part){
+        foreach(iptm_management_nets($S) as $src)foreach(explode(',',(string)($S['mgmt_ports']??'')) as $part){
             if(!ctype_digit($part))continue;
             $p=(int)$part;
             if($p>=1&&$p<=65535 && !(empty($S['ssh_acc'])===false && $p===(int)($S['ssh_acc_port']??22)))
@@ -257,6 +294,7 @@ function apps_rules(array $S): array {
                 $key=$proto.'|'.$src;
                 foreach($ports as $port){
                     $port=(int)$port;
+                    if(!empty($coreSkip[$proto][(string)$port]))continue;
                     if(($proto==='tcp') && $port===(int)($S['ssh_acc_port']??22) &&
                         !empty($S['ssh_acc']) && ($src!=='' || !empty($S['ssh_nets'])))continue;
                     if(isset($seen[$key][(string)$port]))continue;
@@ -299,10 +337,10 @@ function pg_apps() {
         . 'Di solito dalla <b>LAN</b>: le porte comuni (DNS 53, web 80/443) vengono compattate senza riaprirle più volte. Il provider DNS in esecuzione si sceglie nel resolver, non tramite queste aperture. Dopo «Salva» usa <b>Applica</b>.</p>';
     $nInst = count(array_filter($det, fn($x) => $x['installed']));
     $nEn = count(array_filter($det, fn($x) => $x['enabled']));
-    $nIdle = count(array_filter($det, fn($x) => $x['enabled'] && !$x['listening']));
+    $nIdle = count(array_filter($det, fn($x) => $x['enabled'] && !$x['listening'] && $x['listener_known']));
     echo '<p>Rilevati: <b>' . $nInst . '</b> · Abilitati: <b>' . $nEn . '</b> · Senza listener verificato: <b>'.$nIdle.'</b> · LAN: <code>' . h(trim((string)($S['lan_nets'] ?? '')) ?: 'non impostata — nessuna apertura LAN generata') . '</code></p>';
     if($nIdle){
-        $candidates=array_values(array_filter($det,fn($x)=>$x['enabled']&&!$x['listening']));
+        $candidates=array_values(array_filter($det,fn($x)=>$x['enabled']&&!$x['listening']&&$x['listener_known']));
         $labels=array_map(fn($x)=>$x['name'],array_slice($candidates,0,8));
         echo '<p class="msg warn">Profili abilitati senza listener rilevato: <b>'.h(implode(', ',$labels)).'</b>'.($nIdle>8?' e altri '.($nIdle-8):'').'. Il rilevamento non copre tutte le installazioni/container: verifica prima di disabilitare.</p>';
     }
@@ -318,7 +356,7 @@ function pg_apps() {
 
     $row = function (array $x, bool $checkedDefault) {
         $id = $x['id'];
-        $badge = $x['listening'] ? '<span class="b b-ACCEPT">in ascolto</span>' : ($x['installed'] ? '<span class="b b-jump">installato</span>' : '<span class=mut>catalogo</span>');
+        $badge = $x['listening'] ? '<span class="b b-jump">porta compatibile</span>' : (!$x['listener_known'] ? '<span class=mut>listener non verificabile</span>' : ($x['installed'] ? '<span class="b b-jump">installato</span>' : '<span class=mut>catalogo</span>'));
         $scope = $x['scope'] === 'any' ? 'WAN+LAN' : 'solo LAN';
         echo '<tr><td><label><input type=checkbox class=acb name="apps[]" data-iptm-no-listener="' . (!empty($x['enabled'])&&!$x['listening']?'1':'0') . '" value="' . h($id) . '"'
             . (!empty($x['enabled']) ? ' checked' : '')
@@ -330,14 +368,14 @@ function pg_apps() {
             . ($x['note'] ? '<br><small class=mut>' . h($x['note']) . '</small>' : '') . '</td></tr>';
     };
 
-    echo '<form method=post>' . fh('p=apps') . '<input type=hidden name=action value=apps_save>';
+    echo '<form method=post id=iptm-app-selection>' . fh('p=apps') . '<input type=hidden name=action value=apps_save>';
     echo '<div class=card><h3>Rilevati o già abilitati</h3>';
     if (!$found) {
         echo '<p class=mut>Nessun software del catalogo risulta installato o in ascolto. Puoi comunque abilitare voci dal catalogo completo sotto (es. Shelly/MQTT).</p>';
     } else {
-        echo '<p><button type=button class=s onclick="document.querySelectorAll(\'.acb\').forEach(c=>c.checked=true)">Seleziona tutto</button> '
-            . '<button type=button class=s onclick="document.querySelectorAll(\'.acb\').forEach(c=>c.checked=false)">Nessuna</button></p>';
-        echo '<p><button type=button class=s onclick="document.querySelectorAll(\'.acb[data-iptm-no-listener=1]\').forEach(c=>c.checked=false)">Deseleziona servizi senza listener (solo modulo)</button></p>';
+        echo '<p><button type=button class=s onclick="this.closest(\'.card\').querySelectorAll(\'.acb\').forEach(c=>c.checked=true)">Seleziona tutto</button> '
+            . '<button type=button class=s onclick="this.closest(\'.card\').querySelectorAll(\'.acb\').forEach(c=>c.checked=false)">Nessuna</button></p>';
+        echo '<p><button type=button class=s onclick="document.querySelectorAll(\'.acb[data-iptm-no-listener=1]\').forEach(c=>c.checked=false)">Deseleziona profili senza listener rilevato (solo selezione)</button></p>';
         echo '<p class=mut>Verifica le voci prima di salvare: container e porte personalizzate potrebbero non essere rilevati.</p>';
         echo '<table><tr><th>Software</th><th>Categoria</th><th>Porte</th><th>Ambito</th><th>Stato</th></tr>';
         foreach ($found as $x) $row($x, true);

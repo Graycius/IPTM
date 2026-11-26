@@ -22,15 +22,10 @@ SAFE_NAME=re.compile(r'^[A-Za-z0-9_.:@/+ -]{1,110}$')
 
 
 def execute(args, timeout=6):
-    if not shutil.which(args[0]):
-        return None
-    try:
-        p=subprocess.run(args,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=timeout,check=False)
-        if p.returncode or len(p.stdout)>524288:
-            return None
-        return p.stdout
-    except (OSError,subprocess.TimeoutExpired):
-        return None
+    # Same bounded process adapter as the connection inventory; no shell or stderr capture.
+    from device_insights import bounded_output
+    status, output = bounded_output(args, 524288, timeout)
+    return output if status == 'ok' else None
 
 
 def bounded_json(raw):
@@ -72,7 +67,7 @@ def safe_tail(path,max_bytes=MAX_EVE):
     fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
     try:
         st=os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_mode&0o002:
+        if not stat.S_ISREG(st.st_mode) or st.st_mode&0o022:
             raise ValueError('proprietà/permessi EVE non sicuri')
         os.lseek(fd,max(0,st.st_size-max_bytes),os.SEEK_SET)
         data=os.read(fd,max_bytes)
@@ -142,10 +137,8 @@ def qos_summary():
             'cfosspeed_certified':False,'reason':'comparative real-device benchmarks absent'}
     for key,path in [('policy',policy_path),('engine',engine_path)]:
         try:
-            if path.is_symlink():continue
-            s=path.stat()
-            if not stat.S_ISREG(s.st_mode) or s.st_uid!=0 or s.st_mode&0o077 or s.st_size>65536:continue
-            val=json.loads(path.read_text())
+            from command_transport import read_private_json
+            val=read_private_json(path,limit=65536)
             if isinstance(val,dict):result[key+'_state']=str(val.get('state','present'))[:36]
         except (OSError,ValueError,TypeError):pass
     return result

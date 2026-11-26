@@ -8,6 +8,10 @@ A successful unit test is NOT a substitute for a live console recovery test.
 """
 from __future__ import annotations
 
+from command_transport import durable_replace
+
+from command_transport import capture
+
 import contextlib
 import fcntl
 import hashlib
@@ -23,7 +27,7 @@ import sys
 import tempfile
 import time
 
-VERSION = '5.30.23'
+VERSION = '6.0.8'
 ROOT = Path('/var/lib/iptm-network-runtime')
 STATE = ROOT / 'transaction.json'
 PLAN = ROOT / 'plan.json'
@@ -73,10 +77,10 @@ def run(argv: list[str], *, check=True, timeout=20, runner=None):
     """No shell, fixed executable names and bounded output."""
     if not isinstance(argv,list) or not argv or not all(isinstance(x,str) and len(x)<512 for x in argv):
         raise NetworkError('Comando non valido')
-    func = runner or subprocess.run
     try:
-        p = func(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                 timeout=timeout, stdin=subprocess.DEVNULL, check=False)
+        p = capture(argv, timeout=timeout) if runner is None else runner(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=timeout, stdin=subprocess.DEVNULL, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise NetworkError('Comando non disponibile: '+argv[0]) from exc
     if check and p.returncode != 0:
@@ -371,36 +375,26 @@ def ensure_private(path):
 
 def atom(path,content):
     ensure_private(path.parent)
-    fd,tmp=tempfile.mkstemp(prefix='.iptm-',dir=path.parent)
-    try:
-        with os.fdopen(fd,'wb') as f:
-            os.fchmod(f.fileno(),0o600);f.write(content);f.flush();os.fsync(f.fileno())
-        os.replace(tmp,path)
-        folder=os.open(path.parent,os.O_DIRECTORY|os.O_RDONLY|os.O_NOFOLLOW)
-        try:os.fsync(folder)
-        finally:os.close(folder)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    from command_transport import durable_replace
+    try: durable_replace(path,content)
+    except (OSError,ValueError) as exc: raise NetworkError(str(exc)) from exc
 
 
 def read_doc(path):
-    if not path.exists() and not path.is_symlink():return None
-    if path.is_symlink() or not path.is_file() or path.stat().st_uid!=0 or path.stat().st_mode & 0o077:
-        raise NetworkError('Documento non root-only')
-    try:return json.loads(path.read_text())
-    except (ValueError,UnicodeError) as exc:raise NetworkError('Documento non valido') from exc
+    from command_transport import read_private_json
+    try:return read_private_json(path,limit=2097152)
+    except (OSError,ValueError,UnicodeError) as exc:raise NetworkError('Documento di stato non protetto o non valido: '+str(exc)) from exc
 
 
 def write_doc(path,data):
-    atom(path,json.dumps(data,sort_keys=True,separators=(',',':')).encode())
+    atom(path,json.dumps(data,sort_keys=True,separators=(',',':'),allow_nan=False).encode())
 
 
 @contextlib.contextmanager
 def mutex():
     require_root();ensure_private(ROOT)
-    fd=os.open(LOCK,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
-    with os.fdopen(fd,'r+') as f:
-        fcntl.flock(f,fcntl.LOCK_EX)
+    from command_transport import domain_lock
+    with domain_lock(LOCK):
         yield
 
 
@@ -670,13 +664,7 @@ def pihole_bind_install_guard(*, runner=None):
     content=('[Unit]\nDescription=IPTM Pi-hole interface boot recovery\nAfter=pihole-FTL.service\n'
              '[Service]\nType=oneshot\nExecStart=/usr/local/sbin/iptm-helper pihole-bind boot-recover\n'
              '[Install]\nWantedBy=multi-user.target\n')
-    fd,t=tempfile.mkstemp(prefix='.iptm-pihole-',dir=BIND_UNIT.parent)
-    try:
-        with os.fdopen(fd,'w') as f:
-            f.write(content);f.flush();os.fsync(f.fileno());os.fchmod(f.fileno(),0o644)
-        os.replace(t,BIND_UNIT)
-    finally:
-        if os.path.exists(t):os.unlink(t)
+    durable_replace(BIND_UNIT, content.encode(), mode=0o644)
     run(['systemctl','daemon-reload'],runner=runner)
     run(['systemctl','enable','iptm-pihole-bind-boot.service'],runner=runner)
     return {'ok':True,'guard':'installed'}
@@ -851,12 +839,7 @@ def configure_secondary(step,*,runner=None,previous=None,sid=None):
              'Restart=on-failure\nRestartSec=3s\n'
              '[Install]\nWantedBy=multi-user.target\n')
     # Use private staging then install a world-readable unit (no secrets in it).
-    fd,t=tempfile.mkstemp(prefix='.iptm-dhcp-',dir=unit.parent)
-    try:
-        with os.fdopen(fd,'w') as f:f.write(content);f.flush();os.fsync(f.fileno());os.fchmod(f.fileno(),0o644)
-        os.replace(t,unit)
-    finally:
-        if os.path.exists(t):os.unlink(t)
+    durable_replace(unit, content.encode(), mode=0o644)
     run(['systemctl','daemon-reload'],runner=runner)
     run(['systemctl','start','iptm-dhcp-secondary.service'],runner=runner)
     # Verify a *real* running service and a bounded UDP/67 socket. A successful
@@ -928,13 +911,7 @@ def install_health_units(*,runner=None):
         if path.is_symlink():raise NetworkError('Unità monitor symlink')
         if path.exists() and 'Description=IPTM WAN health' not in path.read_text():
             raise NetworkError('Unità WAN esistente sconosciuta')
-        fd,tmp=tempfile.mkstemp(prefix='.iptm-wan-',dir=path.parent)
-        try:
-            with os.fdopen(fd,'w') as f:
-                os.fchmod(f.fileno(),0o644);f.write(txt);f.flush();os.fsync(f.fileno())
-            os.replace(tmp,path)
-        finally:
-            if os.path.exists(tmp):os.unlink(tmp)
+        durable_replace(path, txt.encode(), mode=0o644)
     run(['systemctl','daemon-reload'],runner=runner)
 
 
@@ -954,12 +931,7 @@ def guard_install(*,runner=None):
     contents=('[Unit]\nDescription=IPTM network transaction boot recovery\nAfter=local-fs.target network-online.target\n'
               'Wants=network-online.target\nAfter=pihole-FTL.service\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -B '+SCRIPT+' boot-recover\n'
               '[Install]\nWantedBy=multi-user.target\n')
-    fd,tmp=tempfile.mkstemp(prefix='.iptm-net-',dir=BOOT_UNIT.parent)
-    try:
-        with os.fdopen(fd,'w') as f:f.write(contents);f.flush();os.fsync(f.fileno());os.fchmod(f.fileno(),0o644)
-        os.replace(tmp,BOOT_UNIT)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    durable_replace(BOOT_UNIT, contents.encode(), mode=0o644)
     run(['systemctl','daemon-reload'],runner=runner)
     run(['systemctl','enable',BOOT_UNIT.name],runner=runner)
     install_health_units(runner=runner)
@@ -1283,8 +1255,14 @@ def main(args):
     raise NetworkError('Comando sconosciuto')
 
 
+def coordinated_main(args):
+    from command_transport import driver_admission
+    with driver_admission('network_runtime',args):
+        return main(args)
+
+
 if __name__=='__main__':
     try:
-        print(json.dumps(main(sys.argv[1:]),sort_keys=True))
+        print(json.dumps(coordinated_main(sys.argv[1:]),sort_keys=True))
     except (NetworkError,OSError,ValueError,KeyError,TypeError) as exc:
         print(json.dumps({'ok':False,'error':str(exc)}));sys.exit(1)

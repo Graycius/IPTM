@@ -7,20 +7,24 @@ chains, access filters and NAT are not modified. Both directions require
 explicit SHA256 staging and user approval; only a confirmed profile is used.
 """
 from __future__ import annotations
+
+from command_transport import durable_replace
+
+from command_transport import capture
 import fcntl, hashlib, ipaddress, json, os, pathlib, re, secrets, subprocess, sys, tempfile, time
 BASE=pathlib.Path('/var/lib/iptm-qos-policy')
 PLAN=BASE/'plan.json'; ACTIVE=BASE/'active.json'
 IFACE=re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$')
 TOKEN=re.compile(r'^[a-f0-9]{64}$')
 CHAIN=re.compile(r'^IPTM_QP_[A-F0-9]{8}$')
-VERSION='5.30.23'
+VERSION='6.0.8'
 UNIT=pathlib.Path('/etc/systemd/system/iptm-qos-policy-restore.service')
 SCRIPT=f'/usr/local/lib/iptables-manager/web/releases/{VERSION}/extensions/qos_policy.py'
 DSCP={'realtime':46,'interactive':34,'normal':0,'background':8}
 class PolicyError(Exception):pass
 
 def cmd(*argv,check=True):
-    try:r=subprocess.run(argv,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)
+    try:r=capture(argv,timeout=15)
     except (OSError,subprocess.TimeoutExpired) as exc:raise PolicyError('iptables non disponibile: '+str(exc)) from exc
     if check and r.returncode:raise PolicyError((r.stderr or r.stdout)[-250:])
     return r
@@ -33,22 +37,15 @@ def secure():
     if s.st_uid or s.st_mode&0o077:raise PolicyError('directory non root:0700')
 
 def load(path):
-    if path.is_symlink():raise PolicyError('file simbolico')
-    if not path.exists():return None
-    st=path.stat()
-    if st.st_uid or st.st_mode&0o077:raise PolicyError('file non protetto')
-    obj=json.loads(path.read_text())
-    if not isinstance(obj,dict):raise PolicyError('stato non valido')
-    return obj
+    from command_transport import read_private_json
+    try:return read_private_json(path,limit=2097152)
+    except (OSError,ValueError,UnicodeError) as exc:raise PolicyError('Documento di stato non protetto o non valido: '+str(exc)) from exc
+
 
 def save(path,obj):
-    fd,tmp=tempfile.mkstemp(dir=BASE,prefix='.policy-')
-    try:
-        with os.fdopen(fd,'w') as f:
-            os.fchmod(f.fileno(),0o600);json.dump(obj,f,sort_keys=True);f.flush();os.fsync(f.fileno())
-        os.replace(tmp,path)
-    finally:
-        if os.path.exists(tmp):os.unlink(tmp)
+    from command_transport import durable_json
+    durable_json(path,obj)
+
 
 def validate(payload):
     if not isinstance(payload,dict) or set(payload)!={'interface','rules'}:raise PolicyError('schema non valido')
@@ -176,13 +173,7 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 """)
-    fd,temp=tempfile.mkstemp(dir=UNIT.parent,prefix='.iptm-qos-policy-')
-    try:
-        with os.fdopen(fd,'w') as f:
-            f.write(unit);f.flush();os.fsync(f.fileno())
-        os.chmod(temp,0o644);os.replace(temp,UNIT)
-    finally:
-        if os.path.exists(temp):os.unlink(temp)
+    durable_replace(UNIT, unit.encode(), mode=0o644)
     cmd('systemctl','daemon-reload')
     cmd('systemctl','enable',UNIT.name)
     if cmd('systemctl','is-enabled',UNIT.name,check=False).stdout.strip()!='enabled':
@@ -375,8 +366,8 @@ def disable():
 
 def main(args):
     secure()
-    with (BASE/'lock').open('a+') as f:
-        os.fchmod(f.fileno(),0o600);fcntl.flock(f,fcntl.LOCK_EX)
+    from command_transport import domain_lock
+    with domain_lock(BASE/'lock'):
         if args==['status']:return status()
         if args==['restore-boot']:return boot_restore()
         if args==['stage']:
@@ -386,7 +377,13 @@ def main(args):
         if args==['disable']:return disable()
         raise PolicyError('uso: status | stage | apply SHA256 | disable | restore-boot')
 
+def coordinated_main(args):
+    from command_transport import driver_admission
+    with driver_admission('qos_policy',args):
+        return main(args)
+
+
 if __name__=='__main__':
-    try:print(json.dumps(main(sys.argv[1:]),ensure_ascii=False))
-    except (PolicyError,ValueError,KeyError,json.JSONDecodeError) as e:
+    try:print(json.dumps(coordinated_main(sys.argv[1:]),ensure_ascii=False))
+    except (PolicyError,OSError,ValueError,KeyError,json.JSONDecodeError) as e:
         print(json.dumps({'ok':False,'error':str(e)}));sys.exit(1)

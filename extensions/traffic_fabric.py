@@ -39,8 +39,12 @@ def select_flow(uplinks: list[dict], flow_id: str) -> dict:
     """Deterministic example for *new* connections, not runtime route selection."""
     if not uplinks or not isinstance(flow_id, str) or len(flow_id) > 256:
         raise ValueError('flow non valido')
-    total = sum(int(w['weight']) for w in uplinks)
-    if total <= 0 or total > 128 or any(int(w['weight']) < 1 for w in uplinks):
+    if any(not isinstance(w,dict) or type(w.get('weight')) is not int or not isinstance(w.get('interface'),str) or not w['interface'] for w in uplinks):
+        raise ValueError('uplink non valido')
+    if len({w['interface'] for w in uplinks}) != len(uplinks):
+        raise ValueError('uplink duplicato')
+    total = sum(w['weight'] for w in uplinks)
+    if total <= 0 or total > 128 or any(w['weight'] < 1 for w in uplinks):
         raise ValueError('pesi WAN non validi')
     ticket = int.from_bytes(hashlib.blake2s(flow_id.encode(), digest_size=8).digest(), 'big') % total
     for uplink in uplinks:

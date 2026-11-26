@@ -1,9 +1,10 @@
 (function () {
   'use strict';
-  const PREFIX='iptm-ui-picks-v1:';
+  const PREFIX='iptm-ui-picks-v2:';
   const escapeKey=(s)=>String(s||'').slice(0,160);
   const skipped=/^(?:csrf|_csrf|token|nonce|password|passphrase|secret|api_|recovery_|confirm|ack|explicit_optin|force|apply_sysctl|dnsbundle_|antidpi_console|sni_console)/i;
-  const explicit=['source_mode','unbound_profile','diag_level','diag_network','apply_gravity','zapret_engine'];
+  const reusable=/^(?:adlists\[\]|regex_presets\[\]|rethink_ids\[\]|source_ids\[\]|recommended_rules\[\]|selected_macs\[\])$/;
+  const explicit=['diag_level','diag_network'];
   function init(){
     let storage;try{storage=window.localStorage;}catch(_){return;}
     if(!storage)return;
@@ -18,7 +19,7 @@
       // Avoid storing user inputs, addresses, tokens or passwords. Only checkbox flags/radio and a few selectors.
       const all=[...form.querySelectorAll('input[type="checkbox"],input[type="radio"],select')].filter(el=>el.name&&!skipped.test(el.name));
       const groups=new Map(); all.forEach(el=>{const k=el.name;if(!groups.has(k))groups.set(k,[]);groups.get(k).push(el);});
-      const fields=all.filter(el=>el.type==='checkbox'||el.type==='radio'||groups.get(el.name).length>1||explicit.includes(el.name)||el.dataset.iptmRemember==='1'||el.name.endsWith('[]'));
+      const fields=all.filter(el=>!el.disabled && (reusable.test(el.name)||explicit.includes(el.name))); 
       if(!fields.length)return;
       const base=PREFIX+escapeKey(page)+':'+escapeKey(actionLabel)+':'+escapeKey([...new Set(fields.map(el=>el.name))].join(','));
       const occurrence=seenKeys.get(base)||0;seenKeys.set(base,occurrence+1);
@@ -27,7 +28,7 @@
       fields.forEach(el=>{
         const id=el.name+'|'+(el.type==='checkbox'||el.type==='radio'?el.value:'select');
         if(!Object.prototype.hasOwnProperty.call(saved,id))return;
-        if(el.type==='checkbox'||el.type==='radio')el.checked=Boolean(saved[id]);
+        if(el.type==='checkbox'||el.type==='radio')el.checked=saved[id]===true;
         else if([...el.options].some(o=>o.value===saved[id]))el.value=saved[id];
       });
       function store(){

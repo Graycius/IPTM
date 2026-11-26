@@ -1,6 +1,6 @@
 <?php
 // ===================== BOOT / AUTENTICAZIONE =====================
-session_set_cookie_params(['httponly' => true, 'samesite' => 'Strict', 'secure' => !empty($_SERVER['HTTPS']), 'path' => '/', 'lifetime' => 0]);
+session_set_cookie_params(['httponly' => true, 'samesite' => 'Strict', 'secure' => !empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off', 'path' => '/', 'lifetime' => 0]);
 ini_set('session.use_strict_mode', '1');
 ini_set('session.use_only_cookies', '1');
 ini_set('session.cookie_httponly', '1');
@@ -13,7 +13,8 @@ if (empty($_SESSION['csrf']) || !is_string($_SESSION['csrf']) || !preg_match('/^
 
 // API read-only con token in header, mai in URL — prima del login HTML
 if (isset($_GET['api']) && function_exists('api_dispatch')) {
-    api_dispatch((string)$_GET['api']);
+    if (!is_string($_GET['api']) || strlen($_GET['api']) > 128) { http_response_code(400); exit('Richiesta API non valida.'); }
+    api_dispatch($_GET['api']);
 }
 
 
@@ -30,6 +31,9 @@ function shell_page(string $title, string $body): string {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    foreach (['action','csrf','back','rev'] as $field) {
+        if (isset($_POST[$field]) && !is_string($_POST[$field])) { http_response_code(400); exit('Richiesta non valida.'); }
+    }
     if (!hash_equals($_SESSION['csrf'], (string)($_POST['csrf'] ?? ''))) {
         if (($_POST['action'] ?? '')==='antidpi_sources' && ($_POST['source_async'] ?? '')==='1') {
             header('Content-Type: application/json; charset=utf-8');
@@ -40,8 +44,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         http_response_code(400); exit('Token CSRF non valido: ricarica la pagina.');
     }
-    $a = (string)($_POST['action'] ?? '');
-    $bk = (string)($_POST['back'] ?? ''); $back = preg_match('/^[\w=&.%:-]*$/', $bk) ? $bk : 'p=status';
+    $a = $_POST['action'] ?? '';
+    $bk = $_POST['back'] ?? '';
+    if (!is_string($a) || !preg_match('/^[a-z][a-z0-9_]{0,63}$/D', $a) || !is_string($bk) || strlen($bk)>2048) {
+        http_response_code(400); exit('Richiesta IPTM non valida.');
+    }
+    $back = preg_match('/^[\w=&.%:-]*$/D', $bk) ? $bk : 'p=status';
+    if (in_array($a, ['login','setup'], true)) {
+        foreach (['user','pw','pw2','otp','token'] as $field) {
+            if (isset($_POST[$field]) && (!is_string($_POST[$field]) || strlen($_POST[$field]) > 4096)) { http_response_code(400); exit('Credenziali non valide.'); }
+        }
+    }
     if ($a === 'setup' && !users_get() && is_file($tokF)) {
         $pw = (string)($_POST['pw'] ?? '');
         if (!hash_equals(trim((string)file_get_contents($tokF)), trim((string)($_POST['token'] ?? '')))) flash('Codice di setup errato.', 'err');
@@ -62,9 +75,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $U = users_get(); $nm = strtolower(trim((string)($_POST['user'] ?? 'admin'))) ?: 'admin'; $u = $U[$nm] ?? null;
         $okp = iptm_password_verify((string)($_POST['pw'] ?? ''), is_array($u) ? (string)($u['hash'] ?? '') : null); $oko = $okp && $u && (empty($u['totp']) || totp_ok($u['totp'], (string)($_POST['otp'] ?? '')));
         if ($oko) { flock($flock, LOCK_UN); fclose($flock); session_regenerate_id(true); $_SESSION['u'] = $nm; $_SESSION['role'] = in_array($u['role'] ?? '', ['admin', 'viewer'], true) ? $u['role'] : 'viewer'; $_SESSION['csrf'] = bin2hex(random_bytes(32)); $_SESSION['t'] = time(); audit('login'); notify('login', "Accesso di $nm da $ip"); go('p=status'); }
-        $fl[$ip][] = time(); $tmpf = $ff . '.' . bin2hex(random_bytes(5)) . '.tmp';
+        $fl[$ip][] = time();
         $payload = json_encode($fl);
-        if (!is_string($payload) || file_put_contents($tmpf, $payload, LOCK_EX) !== strlen((string)$payload) || !rename($tmpf, $ff)) { @unlink($tmpf); flock($flock, LOCK_UN); fclose($flock); http_response_code(503); exit('Impossibile aggiornare il rate-limit'); }
+        if (!is_string($payload) || !atomic_data_write($ff, $payload, 0600)) { flock($flock, LOCK_UN); fclose($flock); http_response_code(503); exit('Impossibile aggiornare il rate-limit'); }
         flock($flock, LOCK_UN); fclose($flock); sleep(1); notify('loginfail', "Accesso fallito per «{$nm}» da $ip"); flash($okp ? 'Codice 2FA errato.' : 'Credenziali errate.', 'err'); go();
     }
     if ($a === 'logout') { session_destroy(); header('Location: ?p=status', true, 303); exit; }
@@ -74,7 +87,12 @@ function flashes(): string {
     $o = ''; foreach ($_SESSION['flash'] ?? [] as [$t, $m]) $o .= '<div class="msg ' . $t . '">' . h($m) . '</div>'; unset($_SESSION['flash']); return $o ? '<div id=toasts>' . $o . '</div>' : '';
 }
 if (!users_get()) {
-    if (!is_file($tokF)) { file_put_contents($tokF, bin2hex(random_bytes(8))); chmod($tokF, 0600); }
+    // Created owner-only from the start (temp file 0600 + atomic rename): no window in which the
+    // one-time setup code is readable under the default umask.
+    if (!is_file($tokF) && !atomic_data_write($tokF, bin2hex(random_bytes(8)), 0600)) {
+        http_response_code(503);
+        exit(shell_page('Setup', '<div class=card><h2>Codice di setup non creato</h2><p>Impossibile scrivere ' . h($tokF) . ': controlla proprietario e permessi di ' . h(DATA_DIR) . '.</p></div>'));
+    }
     exit(shell_page('Setup', '<div class=card><h2>Prima configurazione</h2>' . flashes() . '<p>Per sicurezza leggi il codice di setup dal server:</p><pre>cat ' . h($tokF) . '</pre><form method=post><input type=hidden name=csrf value="' . h($_SESSION['csrf']) . '"><input type=hidden name=action value=setup>
 <label class=fl><span>Codice di setup</span><input name=token required></label><label class=fl><span>Nuova password (min ' . MIN_PW . ' caratteri)</span><input type=password name=pw required></label><label class=fl><span>Conferma</span><input type=password name=pw2 required></label><button>Imposta password</button></form></div>'));
 }
@@ -130,9 +148,9 @@ function iptm_export_config(): string {
         foreach ($v as $k => $x) if (!is_string($k) || !preg_match($blocked, $k)) $o[$k] = $sanitize($x);
         return $o;
     };
-    $payload = ['settings' => $sanitize($S), 'draft_rules' => get_draft()];
+    $payload = ['settings' => $sanitize($S), 'draft_rules' => get_draft(), 'draft6_rules' => v6_get()];
     $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-    return json_encode(['format'=>'iptm.config.v1', 'version'=>APP_VERSION, 'created'=>gmdate('c'),
+    return json_encode(['format'=>'iptm.config.v2', 'version'=>APP_VERSION, 'created'=>gmdate('c'),
        'sha256'=>hash('sha256', $encoded), 'payload'=>$payload,
        'notice'=>'Export portabile IPTM: token, utenti, CA private, WireGuard private key, database e configurazioni locali dei demoni NON inclusi. Non applica regole live.'],
        JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
@@ -140,20 +158,32 @@ function iptm_export_config(): string {
 function iptm_import_plan(string $raw): array {
     if (strlen($raw) > 5*1048576) throw new RuntimeException('Bundle oltre 5 MiB');
     $b = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
-    if (!is_array($b) || ($b['format'] ?? '') !== 'iptm.config.v1' || !is_array($b['payload'] ?? null)) throw new RuntimeException('Formato importazione non riconosciuto');
+    if (!is_array($b) || !in_array(($b['format'] ?? ''),['iptm.config.v1','iptm.config.v2'],true) || !is_array($b['payload'] ?? null)) throw new RuntimeException('Formato importazione non riconosciuto');
     $p = $b['payload'];
+    $allowed=$b['format']==='iptm.config.v2'?['settings','draft_rules','draft6_rules']:['settings','draft_rules'];
+    if(array_diff(array_keys($p),$allowed))throw new RuntimeException('Campi bundle non previsti');
     if (!is_array($p['settings'] ?? null) || !is_string($p['draft_rules'] ?? null)) throw new RuntimeException('Impostazioni/bozza mancanti');
     if (strlen($p['draft_rules']) > 3*1048576) throw new RuntimeException('Bozza troppo grande');
-    $canonical = json_encode(['settings'=>$p['settings'], 'draft_rules'=>$p['draft_rules']], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-    if (!preg_match('/^[a-f0-9]{64}$/D', (string)($b['sha256'] ?? '')) || !hash_equals($b['sha256'], hash('sha256',$canonical))) throw new RuntimeException('Checksum bundle non valido');
+    $canonicalPayload=['settings'=>$p['settings'],'draft_rules'=>$p['draft_rules']];
+    if($b['format']==='iptm.config.v2') { if(!is_string($p['draft6_rules']??null)||strlen($p['draft6_rules'])>2*1048576) throw new RuntimeException('Bozza IPv6 non valida'); $canonicalPayload['draft6_rules']=$p['draft6_rules']; }
+    $canonical = json_encode($canonicalPayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    if (!is_string($b['sha256']??null) || !preg_match('/^[a-f0-9]{64}$/D', $b['sha256']) || !hash_equals($b['sha256'], hash('sha256',$canonical))) throw new RuntimeException('Checksum bundle non valido');
     $schema = S_def(); $current=S_get(); $new=$current;
     foreach ($p['settings'] as $key => $val) {
         if (!is_string($key) || !array_key_exists($key,$schema) || $key==='api_token') continue;
+        if(is_array($schema[$key])!==is_array($val)||(!is_array($val)&&!is_scalar($val)))throw new RuntimeException('Tipo impostazione non valido: '.$key);
+        if(in_array($key,['ti','notify','v6','sqm','harden'],true)){
+            foreach($val as $subkey=>$subvalue){
+                if(!array_key_exists($subkey,$schema[$key]))continue;
+                $prototype=$schema[$key][$subkey];
+                if(is_array($prototype)?(!is_array($subvalue)||count(array_filter($subvalue,fn($x)=>!is_scalar($x)))>0):!is_scalar($subvalue))throw new RuntimeException('Tipo impostazione non valido: '.$key.'.'.$subkey);
+            }
+        }
         if (in_array($key,['ti','notify'],true)) {
             if (!is_array($val)) throw new RuntimeException('Sezione settings non valida');
             // Never restore third-party secrets from untrusted portable files.
             $forbidden = ['tg_token','tg_chat','webhook','virustotal','abuseipdb','greynoise','otx','urlscan'];
-            $safe=array_diff_key($val,array_flip($forbidden));
+            $safe=array_intersect_key(array_diff_key($val,array_flip($forbidden)),$schema[$key]);
             $new[$key]=array_replace((array)($current[$key]??[]),$safe);
         } else $new[$key]=$val;
     }
@@ -162,7 +192,7 @@ function iptm_import_plan(string $raw): array {
     // Never roll the on-disk schema version backward via a portable bundle.
     $new['settings_schema'] = max((int)($current['settings_schema'] ?? SETTINGS_SCHEMA),SETTINGS_SCHEMA);
     $clean = iptm_import_without_legacy_comments($p['draft_rules']);
-    return ['settings'=>$new,'draft'=>$clean['draft'],'removed_comments'=>$clean['removed']];
+    return ['settings'=>$new,'draft'=>$clean['draft'],'removed_comments'=>$clean['removed'],'draft6'=>$canonicalPayload['draft6_rules']??null];
 }
 /** Stream a root-generated DNS ZIP without storing it in PHP memory. CSRF and admin gate are outside. */
 function iptm_dns_bundle_export_stream(string $passphrase): void {

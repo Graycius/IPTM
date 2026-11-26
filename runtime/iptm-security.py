@@ -24,6 +24,26 @@ import secrets
 import hashlib
 import urllib.error
 
+# Shared transport loaded only for commands; journal recovery stays standalone.
+def iptm_capture(argv, **options):
+    import importlib.util
+    from pathlib import Path
+    source=Path(__file__).resolve()
+    if source.parent.name == 'runtime':
+        module=source.parent.parent/'extensions'/'command_transport.py'
+    else:
+        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/command_transport.py')
+    if not module.is_file() or module.is_symlink():
+        raise OSError('Trasporto IPTM assente o non sicuro')
+    cached=getattr(iptm_capture,'_module',None)
+    if cached is None:
+        spec=importlib.util.spec_from_file_location('_iptm_runtime_transport',module)
+        cached=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cached)
+        iptm_capture._module=cached
+    return cached.capture(argv, **options)
+
+
 DATA = Path(os.environ.get('IPTM_SECURITY_DATA', '/var/lib/iptables-manager'))
 OUI_PATH = DATA / 'oui-vendors.tsv'
 IF_RE = re.compile(r'^[a-zA-Z0-9_.:-]{1,15}$')
@@ -37,10 +57,10 @@ def emit(obj):
 
 def shell(argv, timeout=8, max_output=280):
     try:
-        p = subprocess.run(argv, text=True, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        p = iptm_capture(argv, timeout=timeout, stdout_limit=1048576, stderr_limit=262144)
         # Reports deliberately do not include full stdout/stderr; they can contain identifiers.
         return {'status': p.returncode, 'summary': (p.stdout + '\n' + p.stderr).strip()[:max_output]}
-    except (FileNotFoundError, subprocess.TimeoutExpired) as ex:
+    except (OSError, subprocess.TimeoutExpired) as ex:
         return {'status': None, 'summary': type(ex).__name__}
 
 
@@ -53,9 +73,13 @@ def service(name):
 
 def read_json(path):
     try:
-        if Path(path).stat().st_size > 4*1024*1024:
-            return {}
-        v = json.loads(Path(path).read_text(encoding='utf-8'))
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as stream:
+            st=os.fstat(stream.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_size>4*1024*1024:return {}
+            raw=stream.read(4*1024*1024+1)
+            if len(raw)!=st.st_size or os.fstat(stream.fileno()).st_ctime_ns!=st.st_ctime_ns:return {}
+        v=json.loads(raw)
         return v if isinstance(v, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -317,7 +341,7 @@ def pihole_health():
             continue
         uri = f"{'https' if secure else 'http'}://{target}:{port}/admin/"
         try:
-            req = urllib.request.Request(uri, headers={'User-Agent':'IPTM-local-health/5.30.23'})
+            req = urllib.request.Request(uri, headers={'User-Agent':'IPTM-local-health/6.0.8'})
             handler = urllib.request.HTTPSHandler(context=ssl._create_unverified_context()) if secure else urllib.request.HTTPHandler()
             client = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(), handler)
             with client.open(req, timeout=2.0) as response:
@@ -426,7 +450,7 @@ def parse_oui(text):
 
 def update_oui():
     if os.geteuid()!=0: raise ValueError('aggiornamento vendor riservato a root')
-    req=urllib.request.Request(IEEE_OUI,headers={'User-Agent':'IPTM-security/5.30.23'})
+    req=urllib.request.Request(IEEE_OUI,headers={'User-Agent':'IPTM-security/6.0.8'})
     class SecureRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, request, fp, code, msg, headers, newurl):
             url=urllib.parse.urlsplit(newurl)
@@ -671,8 +695,7 @@ def _vlan_state():
 
 
 def _vlan_cmd(argv):
-    result=subprocess.run(['ip'] + argv, capture_output=True, text=True,
-                          timeout=6, stdin=subprocess.DEVNULL)
+    result=iptm_capture(['ip'] + argv, timeout=6, stdout_limit=1048576, stderr_limit=262144)
     if result.returncode:
         raise ValueError('configurazione VLAN non riuscita: ip ' + argv[0] + ' ' + argv[1])
     return result.stdout
@@ -1282,9 +1305,7 @@ def lynis_update():
     if not shutil.which('apt-get') or not shutil.which('lynis'):
         raise ValueError('Lynis o apt-get non disponibile: installa Lynis da Programmi/DietPi')
     try:
-        proc=subprocess.run(['apt-get','-y','--no-install-recommends','--only-upgrade','install','lynis'],
-                            capture_output=True,text=True,timeout=240,stdin=subprocess.DEVNULL,
-                            env={**os.environ,'DEBIAN_FRONTEND':'noninteractive'})
+        proc=iptm_capture(['apt-get', '-y', '--no-install-recommends', '--only-upgrade', 'install', 'lynis'], timeout=240, env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'}, stdout_limit=1048576, stderr_limit=262144)
     except subprocess.TimeoutExpired:
         return {'ok':False,'exit_code':None,
                 'summary':'Timeout aggiornamento Lynis: verificare lo stato di apt/dpkg prima di riprovare',

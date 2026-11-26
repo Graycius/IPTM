@@ -21,12 +21,12 @@ case 'rule_op': {
             $f = []; foreach (['chain', 'i', 'o', 's', 'd', 'p', 'sport', 'dport', 'sports', 'dports', 'ports', 'extra', 'target', 'targs'] as $k) $f[$k] = trim((string)($_POST[$k] ?? ''));
             $ct = array_intersect((array)($_POST['ct'] ?? []), ['NEW', 'ESTABLISHED', 'RELATED', 'INVALID', 'UNTRACKED', 'SNAT', 'DNAT']);
             $f['ctstate'] = ($ct ? (!empty($_POST['ctneg']) ? '! ' : '') . implode(',', $ct) : '');
-            $bad = !preg_match('/^[A-Za-z0-9_.:-]{1,28}$/', $f['chain']) || !preg_match('/^[A-Za-z0-9_.:-]*$/', $f['target']);
-            foreach (['i', 'o', 's', 'd', 'p', 'sport', 'dport', 'sports', 'dports', 'ports'] as $k) if (!preg_match('/^(!\s*)?[^\s\x00-\x1f]*$/', $f[$k])) $bad = true;
+            $bad = !preg_match('/^[A-Za-z0-9_.:-]{1,28}$/D', $f['chain']) || !preg_match('/^[A-Za-z0-9_.:-]*$/D', $f['target']);
+            foreach (['i', 'o', 's', 'd', 'p', 'sport', 'dport', 'sports', 'dports', 'ports'] as $k) if (!preg_match('/^(!\s*)?[^\s\x00-\x1f]*$/D', $f[$k])) $bad = true;
             if (preg_match('/[\x00-\x1f]/', $f['extra'] . $f['targs'])) $bad = true;
             if ($bad) { flash('Valori non validi (spazi o caratteri di controllo nei campi semplici).', 'err'); break; }
             if (!chain_ok($tn, $M[$ti]['items'], $f['chain'])) { flash('La catena «' . $f['chain'] . '» non esiste in ' . $tn . ': creala prima nella scheda Catene.', 'err'); break; }
-            $raw = rule_build($f); $on = !isset($_POST['off']); $pos = preg_match('/^(keep|start|last|smart|\d+)$/', (string)($_POST['pos'] ?? '')) ? $_POST['pos'] : 'smart';
+            $raw = rule_build($f); $on = !isset($_POST['off']); $pos = preg_match('/^(keep|start|last|smart|\d+)$/D', (string)($_POST['pos'] ?? '')) ? $_POST['pos'] : 'smart';
             $ot = (string)($_POST['ot'] ?? ''); $ix = ($_POST['idx'] ?? '') === '' ? -1 : (int)$_POST['idx']; $oti = tb($M, $ot);
             if ($ix >= 0 && $oti >= 0 && isset($M[$oti]['items'][$ix]) && in_region($M[$oti]['items'], $ix)) { flash('Questa regola è generata dalle impostazioni: modificala da Setup/Sicurezza.', 'err'); break; }
             $same = $ix >= 0 && $oti === $ti && isset($M[$ti]['items'][$ix]) && rchain($M[$ti]['items'][$ix]['r'] ?? '') === $f['chain'];
@@ -40,7 +40,7 @@ case 'rule_op': {
             save_model(); flash('Regola salvata nella bozza.'); $back = 'p=rules&t=' . $tn . '&c=' . $f['chain']; break;
         }
         case 'wizard_add': {
-            $rs = json_decode((string)($_POST['rules'] ?? ''), true); $pos = preg_match('/^(start|last|smart|\d+)$/', (string)($_POST['pos'] ?? '')) ? $_POST['pos'] : 'smart';
+            $rs = json_decode((string)($_POST['rules'] ?? ''), true); $pos = preg_match('/^(start|last|smart|\d+)$/D', (string)($_POST['pos'] ?? '')) ? $_POST['pos'] : 'smart';
             if (!is_array($rs) || !$rs) { flash('Nessuna regola da aggiungere.', 'err'); break; }
             $groups = [];
             foreach ($rs as $x) {
@@ -59,7 +59,7 @@ case 'rule_op': {
         }
         case 'chain_op': {
             $tn = (string)($_POST['t'] ?? ''); $ti = tb($M, $tn); $ch = (string)($_POST['chain'] ?? ''); $op = (string)($_POST['op'] ?? '');
-            if ($ti < 0 || !preg_match('/^[A-Za-z0-9_.:-]{1,28}$/', $ch)) { flash('Parametri non validi.', 'err'); break; }
+            if ($ti < 0 || !preg_match('/^[A-Za-z0-9_.:-]{1,28}$/D', $ch)) { flash('Parametri non validi.', 'err'); break; }
             $items = &$M[$ti]['items'];
             $ci = null; foreach ($items as $i => $it) if ($it['t'] === 'chain' && $it['n'] === $ch) $ci = $i;
             if ($op === 'add') {
@@ -180,7 +180,7 @@ case 'rule_op': {
             $n = 0;
             $del = [];
             foreach ($sel as $key) {
-                if (!preg_match('/^(\d+):(\d+)$/', (string)$key, $m)) continue;
+                if (!preg_match('/^(\d+):(\d+)$/D', (string)$key, $m)) continue;
                 $del[(int)$m[1]][] = (int)$m[2];
             }
             foreach ($del as $ti => $idxs) {
@@ -276,6 +276,7 @@ case 'rule_op': {
             $V['lan_prefix'] = preg_replace('/\s+/', '', (string)($_POST['lan_prefix'] ?? '')); if (!v6_prefixes_ok($V['lan_prefix'])) $err = true;
             $V['ssh_port'] = trim((string)($_POST['ssh_port'] ?? '22')); if (!v_ok('port', $V['ssh_port']) || $V['ssh_port'] === '') $err = true; $V['ports'] = trim((string)($_POST['ports'] ?? '')); if (!v_ok('ports', $V['ports'])) $err = true;
             foreach (['icmp', 'dhcp6', 'ssh', 'log', 'crowdsec', 'bogon', 'ssh_rl', 'wg_on', 'wg_input', 'wg_lan'] as $k) $V[$k] = empty($_POST[$k]) ? 0 : 1; $V['on'] = 1;
+            $V['wg_prefix'] = preg_replace('/\s+/', '', (string)($_POST['wg_prefix'] ?? '')); if ($V['wg_prefix'] !== '' && !v6_prefixes_ok($V['wg_prefix'])) $err = true;
             $V['wg_if'] = trim((string)($_POST['wg_if'] ?? 'wg0')); if (!v_ok('if', $V['wg_if'])) $err = true;
             $V['wg_port'] = trim((string)($_POST['wg_port'] ?? '51820')); if (!v_ok('port', $V['wg_port']) || $V['wg_port'] === '') $err = true;
             $V['cs_sets'] = preg_replace('/\s+/', '', (string)($_POST['cs_sets'] ?? '')); if (!v_ok('setlist', $V['cs_sets'])) $err = true;
@@ -300,7 +301,7 @@ case 'rule_op': {
         }
         case 'v6_raw': if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Salvataggio IPv6 fallito.', 'err'); break; } flash('Testo IPv6 salvato nella bozza.'); break;
         case 'v6_test': { if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } [$c, $o, $e] = priv('test6', v6_get()); flash($c === 0 ? '✔ Sintassi IPv6 valida.' : '✖ Errore: ' . trim($o . $e), $c === 0 ? 'ok' : 'err'); break; }
-        case 'v6_apply': { if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } if (apply_result(do_apply(ROLLBACK_SECS, '6'))) flash('Regole IPv6 in prova: verifica e conferma prima della scadenza.'); break; }
+        case 'v6_apply': { try { $secs = iptm_trial_seconds($_POST['secs'] ?? null); } catch (RuntimeException $e) { flash($e->getMessage(), 'err'); break; } if (!v6_put(str_replace("\r\n", "\n", (string)($_POST['txt'] ?? '')))) { flash('Bozza IPv6 non salvata.', 'err'); break; } unset($_POST['rev6']); if (apply_result(do_apply($secs, '6', true, true))) flash('Regole IPv6 applicate in prova: verifica la rete e conferma.'); break; }
         case 'v6_write': {
             // Salvare per il boot SENZA il test rollback può tagliare fuori
             // l'IPv6 al prossimo riavvio. Usare Applica IPv6 + conferma.
@@ -377,7 +378,7 @@ case 'manual_convert': {
             $S = S_get(); $back = 'p=manual'; $rules = []; $bad = [];
             foreach (preg_split('/\R/', trim((string)($_POST['rules'] ?? ''))) as $ln) {
                 $ln = trim($ln); if ($ln === '' || $ln[0] === '#') continue;
-                if (preg_match('/^(filter|nat|mangle|raw|security)\s+(-A .*)$/', $ln, $m)) { $t = $m[1]; $r = $m[2]; } elseif (str_starts_with($ln, '-A ')) { $t = 'filter'; $r = $ln; } else { $bad[] = $ln; continue; }
+                if (preg_match('/^(filter|nat|mangle|raw|security)\s+(-A .*)$/D', $ln, $m)) { $t = $m[1]; $r = $m[2]; } elseif (str_starts_with($ln, '-A ')) { $t = 'filter'; $r = $ln; } else { $bad[] = $ln; continue; }
                 if (lint_rule($r) && !preg_match('/[;`$|&<>\\\\]/', $r)) $rules[] = ['t' => $t, 'r' => $r]; else $bad[] = $ln;
             }
             if (!$rules || count($rules) > 200) { flash('Inserisci da 1 a 200 regole, una per riga, nel formato «-A INPUT ...» oppure «nat -A PREROUTING ...».' . ($bad ? ' Non valide: ' . implode(' | ', array_slice($bad, 0, 3)) : ''), 'err'); break; }
@@ -464,11 +465,9 @@ case 'manual_convert': {
                 }
                 try {$removed=iptm_dns_guard_losses(rules_live(),$draftTxt);}
                 catch(RuntimeException $ex){flash('Verifica DoT/DNS impossibile: '.$ex->getMessage(),'err');break;}
-                // A plain save cannot silently remove DNS protections: unlike
-                // apply+confirm it has no connectivity watchdog.
+                // Simplified flow: allow saving drafts that drop DNS/DoT guards.
                 if ($removed) {
-                    flash('Salvataggio bloccato: rimozione DoT/DNS non confermata (' . implode(', ', $removed) . '). Ripristina i blocchi in Setup o usa Applica con conferma esplicita e watchdog.', 'err');
-                    break;
+                    $GLOBALS['apply_notes'] = $GLOBALS['apply_notes'] ?? [];
                 }
                 ipsets_prepare(); [$c,$o,$e]=priv('test',$draftTxt);
                 if ($c) {flash('Non salvo: bozza non valida. '.herr($o.$e),'err');break;}
@@ -486,7 +485,8 @@ case 'manual_convert': {
             }
             break;
         case 'apply':
-            if (apply_result(do_apply((int)($_POST['secs'] ?? ROLLBACK_SECS), '4', false, !empty($_POST['confirm_dns_guard_removal'])))) flash('Regole in prova: conferma manualmente prima della scadenza.');
+            try { $secs = iptm_trial_seconds($_POST['secs'] ?? null); } catch (RuntimeException $e) { flash($e->getMessage(), 'err'); break; }
+            if (apply_result(do_apply($secs, '4', true, true))) flash('Regole applicate in prova: verifica la rete e conferma.');
             $back = 'p=apply'; break;
     
 }

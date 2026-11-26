@@ -4,7 +4,7 @@ function me(): string { return (string)($_SESSION['u'] ?? 'sistema'); }
 function audit(string $m): void {
     // Centralized rotation: iptm-retention.timer + logrotate (copytruncate).
     $f = DATA_DIR . '/audit.log';
-    @file_put_contents($f, date('c') . "\t" . me() . "\t" . ($_SERVER['REMOTE_ADDR'] ?? '-') . "\t" . '[rid=' . iptm_request_id() . '] ' . str_replace(["\t", "\n"], ' ', $m) . "\n", FILE_APPEND | LOCK_EX);
+    @file_put_contents($f, date('c') . "\t" . me() . "\t" . ($_SERVER['REMOTE_ADDR'] ?? '-') . "\t" . '[rid=' . iptm_request_id() . '] ' . str_replace(["\t", "\n", "\r", "\0"], ' ', $m) . "\n", FILE_APPEND | LOCK_EX);
 }
 function users_get(): array {
     $f = DATA_DIR . '/users.json';
@@ -50,7 +50,7 @@ function totp_code(string $secret, ?int $t = null, int $off = 0): string {
     $c = intdiv($t ?? time(), 30) + $off; $h = hash_hmac('sha1', pack('J', $c), b32dec($secret), true); $o = ord($h[19]) & 15;
     $v = ((ord($h[$o]) & 0x7f) << 24) | (ord($h[$o + 1]) << 16) | (ord($h[$o + 2]) << 8) | ord($h[$o + 3]); return str_pad((string)($v % 1000000), 6, '0', STR_PAD_LEFT);
 }
-function totp_ok(string $secret, string $code): bool { $code = preg_replace('/\D/', '', $code); foreach ([-1, 0, 1] as $o) if (hash_equals(totp_code($secret, null, $o), $code)) return true; return false; }
+function totp_ok(string $secret, string $code): bool { if (!preg_match('/^[0-9]{6}$/D', $code)) return false; foreach ([-1, 0, 1] as $o) if (hash_equals(totp_code($secret, null, $o), $code)) return true; return false; }
 function notify_cfg(): array { $n = S_get()['notify'] ?? []; return $n + ['tg_token' => '', 'tg_chat' => '', 'webhook' => '', 'ev' => [], 'rule_on' => 0, 'rule_min' => 20, 'rule_patterns' => 'DROP,REJECT,IPTM-DROP,IPTM-IN,IPTM-OUT,CROWDSEC']; }
 function rule_alerts_write(array $n): void {
     $f = DATA_DIR . '/rule-alerts.conf';
@@ -58,7 +58,7 @@ function rule_alerts_write(array $n): void {
     $min = max(1, min(1000000, (int)($n['rule_min'] ?? 20)));
     $pat = preg_replace('/[^A-Za-z0-9_,\-]/', '', (string)($n['rule_patterns'] ?? 'DROP,REJECT'));
     $txt = "RULE_ALERTS_ON=$on\nRULE_ALERT_MIN=$min\nRULE_ALERT_PATTERNS=$pat\n";
-    file_put_contents($f, $txt, LOCK_EX); @chmod($f, 0640);
+    if (!atomic_data_write($f, $txt, 0640)) throw new RuntimeException('Scrittura configurazione alert fallita');
 }
 function notify(string $ev, string $msg): void {
     $c = notify_cfg();
@@ -81,12 +81,27 @@ function notify(string $ev, string $msg): void {
         $pipes = [];
         $proc = @proc_open($cmd, $descriptors, $pipes, null, null, ['bypass_shell' => true]);
         if (!is_resource($proc)) continue;
-        // JSON encoding provides double-quote escaping for curl config string values.
-        $config = 'url = ' . json_encode($url, JSON_UNESCAPED_SLASHES) . "\n"
-                . "request = \"POST\"\n";
-        foreach ($fields as $key => $value) {
-            $config .= 'data-urlencode = ' . json_encode($key . '=' . $value, JSON_UNESCAPED_SLASHES) . "\n";
+        // curl config strings understand only \\ \" \t \n \r \v: JSON \uXXXX escapes are NOT
+        // decoded, so accented text («», è, à, —) must stay literal UTF-8. Other control
+        // characters are dropped; an unencodable value skips this request instead of
+        // sending a malformed config.
+        $curlQuote = static function (string $text): ?string {
+            $text = preg_replace('/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/', '', $text) ?? '';
+            $q = json_encode($text, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+                | JSON_UNESCAPED_LINE_TERMINATORS | JSON_INVALID_UTF8_SUBSTITUTE);
+            return is_string($q) ? $q : null;
+        };
+        $config = null;
+        $quotedUrl = $curlQuote($url);
+        if ($quotedUrl !== null) {
+            $config = 'url = ' . $quotedUrl . "\n" . "request = \"POST\"\n";
+            foreach ($fields as $key => $value) {
+                $quotedField = $curlQuote($key . '=' . $value);
+                if ($quotedField === null) { $config = null; break; }
+                $config .= 'data-urlencode = ' . $quotedField . "\n";
+            }
         }
+        if ($config === null) { @fclose($pipes[0]); @proc_close($proc); continue; }
         @fwrite($pipes[0], $config);
         @fclose($pipes[0]);
         @proc_close($proc);
@@ -97,7 +112,8 @@ function notify_env(array $c): void {   // letto da helper: rollback, watch, rul
     $f = DATA_DIR . '/notify.env';
     // credenziali sempre se configurate: servono a rollback, watch e alert regole
     $tok = (string)($c['tg_token'] ?? ''); $chat = (string)($c['tg_chat'] ?? ''); $wh = (string)($c['webhook'] ?? '');
-    file_put_contents($f, "TG_TOKEN='" . $tok . "'\nTG_CHAT='" . $chat . "'\nWEBHOOK='" . $wh . "'\n"); @chmod($f, 0600);
+    foreach ([$tok, $chat, $wh] as $value) if (preg_match('/[\x00-\x1f\x7f\x27]/', $value)) throw new InvalidArgumentException('Credenziale di notifica non valida');
+    if (!atomic_data_write($f, "TG_TOKEN='" . $tok . "'\nTG_CHAT='" . $chat . "'\nWEBHOOK='" . $wh . "'\n", 0600)) throw new RuntimeException('Scrittura configurazione notifiche fallita');
 }
 function post_hooks(string $a): void {
     static $AUD = ['rule_save', 'rule_op', 'wizard_add', 'chain_op', 'raw_save', 'settings_save', 'apply', 'confirm', 'revert', 'save_file', 'import_apply', 'import_skip', 'settings_reset', 'backend_set', 'strip_managed', 'rules_cleanup_apply', 'custom_rules_integrate', 'custom_rules_delete', 'chpw',

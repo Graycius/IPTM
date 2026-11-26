@@ -8,6 +8,8 @@ from __future__ import annotations
 import hashlib,json,os,pathlib,re,sys,tarfile,tempfile,subprocess,shutil
 import zapret_manager as classic
 
+from command_transport import capture
+
 API='https://api.github.com/repos/bol-van/zapret2/releases/latest'
 TAG=re.compile(r'v\d+\.\d+(?:\.\d+){0,2}\Z')
 ARCHIVE=re.compile(r'https://github\.com/bol-van/zapret2/releases/download/(v\d+\.\d+(?:\.\d+){0,2})/zapret2-\1\.tar\.gz\Z')
@@ -41,14 +43,9 @@ def base_dir(p,private=False):
 
 def atomic(p,data,mode=0o600):
     base_dir(p.parent,p.parent==CONF_DIR)
-    if p.is_symlink():fail('File simbolico non consentito')
-    fd,name=tempfile.mkstemp(prefix='.iptm-',dir=p.parent)
-    try:
-        with os.fdopen(fd,'wb') as f:
-            os.fchmod(f.fileno(),mode);f.write(data);f.flush();os.fsync(f.fileno())
-        os.replace(name,p)
-    finally:
-        if os.path.exists(name):os.unlink(name)
+    from command_transport import durable_replace
+    durable_replace(p,data,mode=mode)
+
 
 def metadata():
     with classic.github_open(API,timeout=12) as r:
@@ -70,9 +67,13 @@ def metadata():
 
 def config_read():
     if CONF_DIR.exists() and (CONF_DIR.is_symlink() or CONF_DIR.stat().st_uid!=0 or CONF_DIR.stat().st_mode&0o077):fail('Directory config Zapret2 non sicura')
-    if not CONF.is_file():return None
-    if CONF.is_symlink() or CONF.stat().st_uid!=0 or CONF.stat().st_mode&0o077:fail('Config Zapret2 non sicura')
-    return classic.validate(json.loads(CONF.read_text()))
+    if CONF.is_symlink():fail('Config Zapret2 simbolica')
+    if not CONF.exists():return None
+    if not CONF.is_file() or CONF.stat().st_uid!=0 or CONF.stat().st_mode&0o077:fail('Config Zapret2 non sicura')
+    with CONF.open('rb') as stream:
+        raw=stream.read(20*1024*1024+1)
+    if len(raw)>20*1024*1024:fail('Config Zapret2 troppo grande')
+    return classic.validate(json.loads(raw))
 
 def status():
     root();tag=''
@@ -188,9 +189,7 @@ def preview():
         # --dry-run checks syntax and path access only; Lua strategy runtime
         # behavior and real network reachability are not guaranteed.
         try:
-            result=subprocess.run([str(BIN),'--dry-run',*options],stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,
-                                  timeout=8,check=False)
+            result=capture([str(BIN), '--dry-run', *options], timeout=8, text=False, stdout_limit=1048576, stderr_limit=262144)
             dry={'attempted':True,'ok':result.returncode==0,
                  'note':'Validazione CLI senza apertura NFQUEUE; non valida il codice Lua.',
                  'exit_code':result.returncode}
@@ -259,7 +258,12 @@ def main():
         return install(payload) if action=='install-latest' else configure(payload)
     fail('Operazione Zapret2 sconosciuta')
 
+def coordinated_main():
+    from command_transport import driver_admission
+    with driver_admission('zapret2_manager',sys.argv[1:]):
+        return main()
+
 if __name__=='__main__':
-    try:print(json.dumps(main(),ensure_ascii=False))
+    try:print(json.dumps(coordinated_main(),ensure_ascii=False))
     except (classic.ZapretError,OSError,ValueError,KeyError,TypeError,tarfile.TarError) as exc:
         print(json.dumps({'ok':False,'error':str(exc)},ensure_ascii=False));sys.exit(1)

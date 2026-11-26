@@ -56,43 +56,58 @@ function iptm_warden_scrub_model(array $model): array {
     return [$model,$removed];
 }
 function pg_config(): void {
-    $ro=($_SESSION['role']??'')!=='admin';
-    echo '<div class=hero><h2>Configurazione portabile</h2><p>Esporta o importa le impostazioni. Il firewall attivo non cambia.</p></div>';
-    echo '<div class=card><h3>Esporta</h3><p>Contiene reti, regole e impostazioni IPTM. Non include password o chiavi. Custodisci il file.</p>';
-    if (!$ro) echo '<p><a class=btn href="?dl=config-bundle">Scarica configurazione JSON</a></p>';
-    echo '</div><div class=card><h3>Importa in bozza</h3><p>Importa nella bozza e verifica il file. Credenziali e firewall attivo restano invariati. Per attivare, premi Applica.</p>';
-    if (!$ro) echo '<form method=post enctype="multipart/form-data" class="iptm-classic-form">'.fh('p=config').'<input type=hidden name=action value=config_bundle_import><input type=file name=config accept=".json,application/json" required><p><button class=g>Importa e verifica</button></p><progress max=100 class=iptm-progress hidden></progress><span role=status class=mut></span></form>';
-    echo '</div>';
+    $admin=($_SESSION['role']??'')==='admin';
+    iptm_view_start('Esporta la configurazione','Salva reti, impostazioni IPTM e bozze IPv4/IPv6. Il JSON v2 non include credenziali o chiavi e non sostituisce un backup del sistema.');
+    if($admin) echo '<div class="iptm-workspace-actions"><a class="btn g" href="?dl=config-bundle">Scarica configurazione JSON</a></div>';
+    else echo '<p class="mut">Esportazione riservata agli amministratori.</p>';
+    iptm_view_end();
+    iptm_view_start('Importa in bozza','Supporta i formati v1 e v2. Nessuna regola viene applicata automaticamente.');
+    if($admin){
+        echo '<form method="post" enctype="multipart/form-data" class="iptm-classic-form iptm-workspace-form">'.fh('p=config').'<input type="hidden" name="action" value="config_bundle_import">';
+        echo '<label for="iptm-config-file">File di configurazione JSON</label><input id="iptm-config-file" type="file" name="config" accept=".json,application/json" required><progress max="100" class="iptm-progress" hidden></progress><span role="status" class="mut"></span>';
+        iptm_view_submit('Importa e verifica');
+    } else echo '<p class="mut">Importazione riservata agli amministratori.</p>';
+    echo '<p>Passaggio successivo: '.iptm_view_link('apply','Controlla e applica la bozza').'</p>';
+    iptm_view_end();
 }
+
 function pg_dnsaudit(): void {
-    echo '<div class=hero><h2>Diagnosi DNS e privacy</h2><p>Controlla DNS e privacy senza modificare la rete.</p></div>';
-    $j=iptm_security_read('dns-audit');
-    if (empty($j['ok'])) { echo '<div class="msg err">Diagnosi DNS non disponibile.</div>';return; }
-    echo '<div class=card><h3>Stato componenti</h3><table><tr><th>Servizio</th><th>Stato</th></tr>';
-    foreach ((array)($j['services']??[]) as $k=>$v) echo '<tr><td>'.h($k).'</td><td>'.h($v).'</td></tr>';
-    echo '</table><p>Resolver del router: <code>'.h(implode(', ',$j['host_resolver']??[])).'</code></p></div>';
-    echo '<div class=card><h3>Incongruenze / limiti</h3>';
-    foreach (($j['findings']??[]) as $x) echo '<p><strong>'.h(strtoupper($x['level']??'info')).':</strong> '.h($x['message']??'').'</p>';
-    echo '<p class=mut>'.h($j['limits']??'').'</p></div>';
+    $report=iptm_security_read('dns-audit');
+    iptm_view_start('Resolver e servizi','Verifica in sola lettura. Non modifica porte, servizi o regole.');
+    if(empty($report['ok'])) {iptm_view_error('Diagnosi DNS non disponibile.');iptm_view_end();return;}
+    $rows=[];
+    foreach((array)($report['services']??[]) as $name=>$state) $rows[]=[$name,$state];
+    iptm_view_table(['Servizio','Stato'],$rows,'Servizi DNS');
+    $resolvers=array_filter((array)($report['host_resolver']??[]),'is_string');
+    echo '<p>Resolver del router: <code>'.iptm_view_text(implode(', ',$resolvers)).'</code></p>';
+    iptm_view_end();
+    iptm_view_start('Risultati e limiti');
+    $rows=[];foreach(iptm_view_rows($report['findings']??[]) as $f)$rows[]=[strtoupper((string)($f['level']??'info')),$f['message']??null];
+    iptm_view_table(['Livello','Osservazione'],$rows,'Audit privacy');
+    echo '<p class="mut">'.iptm_view_text($report['limits']??null).'</p><div class="iptm-workspace-actions">'.iptm_view_link('piholehealth','Verifica Pi-hole').iptm_view_link('dnsguard','Impostazioni DNS protetto').'</div>';
+    iptm_view_end();
 }
+
 function pg_piholehealth(): void {
-    $j = iptm_security_read('pihole-health');
-    echo '<div class="hero"><div class=hico>🩺</div><div><h2>Accessibilità di Pi-hole</h2><p>Controlla Pi-hole, web e DNS.</p></div></div>';
-    if (empty($j['ok'])) { echo '<div class="msg err">Diagnosi non disponibile: '.h($j['error']??'helper/sudo non raggiungibile').'</div>'; return; }
-    echo '<div class="card"><h3>Servizi e porte</h3><table><tr><th>Controllo</th><th>Stato</th><th>Dettaglio</th></tr>';
-    foreach ((array)($j['checks'] ?? []) as $row) {
-        $s = (string)($row['status'] ?? 'unknown'); $label = $s==='ok'?'OK':($s==='error'?'Da correggere':'Da verificare dalla LAN');
-        echo '<tr><td>'.h($row['name']??'').'</td><td><span class="b '.($s==='ok'?'b-ACCEPT':($s==='error'?'b-DROP':'b-jump')).'">'.h($label).'</span></td><td>'.h($row['detail']??'').'</td></tr>';
+    $report=iptm_security_read('pihole-health');
+    iptm_view_start('Raggiungibilità locale','Distingue i controlli eseguiti sul DietPi dalle prove che richiedono un client LAN.');
+    if(empty($report['ok'])) {iptm_view_error('Diagnosi non disponibile: '.(string)($report['error']??'helper/sudo non raggiungibile'));iptm_view_end();return;}
+    $rows=[];
+    foreach(iptm_view_rows($report['checks']??[]) as $r){
+        $state=match($r['status']??null){'ok'=>'OK','error'=>'Da correggere',default=>'Da verificare dalla LAN'};
+        $rows[]=[$r['name']??null,$state,$r['detail']??null];
     }
-    echo '</table></div><div class="card"><h3>Interpretazione</h3><p>'.h($j['summary']??'').'</p>';
-    foreach ((array)($j['warnings']??[]) as $message) echo '<p class="mut">⚠ '.h($message).'</p>';
-    echo '<p class="mut">Il test locale non verifica l’accesso dalla LAN. Controlla le porte 8089/8489 dal PC.</p>';
-    echo '<details><summary>Come verificare da un dispositivo LAN</summary><p>Non sostituire con un test sul router: usa l’indirizzo reale del DietPi dal tuo PC.</p><pre>dig @IP_DIETPI example.org A
+    iptm_view_table(['Controllo','Stato','Dettaglio'],$rows,'Verifiche Pi-hole');
+    echo '<p>'.iptm_view_text($report['summary']??null).'</p>';
+    foreach((array)($report['warnings']??[]) as $w)echo '<p class="msg warn">'.iptm_view_text($w).'</p>';
+    iptm_view_end();
+    iptm_view_start('Prova da un dispositivo LAN','Sostituisci IP_DIETPI con il vero indirizzo del server. Le porte devono corrispondere alla configurazione effettiva.');
+    echo '<pre>dig @IP_DIETPI example.org A
 curl -I http://IP_DIETPI:8089/admin/
-curl -k -I https://IP_DIETPI:8489/admin/</pre><p>La porta deve essere aperta e il servizio in ascolto.</p></details>';
-    echo '<p><a class="btn s" href="?p=dnsaudit">Audit DNS e privacy</a> <a class="btn s" href="?p=apply">Verifica regole INPUT</a></p></div>';
+curl -k -I https://IP_DIETPI:8489/admin/</pre><p>Un esito locale positivo non prova che il client possa raggiungere il servizio.</p><div class="iptm-workspace-actions">'.iptm_view_link('dnsaudit','Audit DNS').iptm_view_link('apply','Verifica regole INPUT').'</div>';
+    iptm_view_end();
 }
-/** Security-only Preflight & Commit. Deliberately separate from CAKE/QoS. */
+
 function iptm_health_policy_catalog(): array {
     return [
         'spi' => ['Firewall stateful SPI', 'alto', 'DROP INPUT/FORWARD; richiede accesso LAN verificabile', true],
@@ -425,7 +440,7 @@ function iptm_page_update(): void {   // distribuzione nativa modulare
         . '<label><input type=checkbox name=force value=1> Forza reinstallazione della stessa versione <b>o downgrade</b> a una release precedente (verifica backup e regole attive)</label>'
         . '<p><button class=g type=submit >Installa pacchetto completo</button></p></form>';
     if (!$ro) echo '<details class=card><summary><b>Scarica aggiornamento via HTTP / HTTPS</b></summary>'
-        . '<p class=mut>HTTP supportato, anche sulla LAN, con SHA-256 obbligatorio da fonte attendibile. HTTPS disponibile. Nessun downgrade da HTTPS a HTTP.</p>'
+        . '<p class=mut>HTTP supportato, anche sulla LAN, con SHA-256 obbligatorio da fonte attendibile. Firma digitale facoltativa. HTTPS disponibile. Nessun downgrade da HTTPS a HTTP.</p>'
         . '<form method=post action="?p=update" class="iptm-classic-form">' . fh('p=update')
         . '<input type=hidden name=action value=update_url_apply>'
         . '<label class=fl><span>URL HTTP o HTTPS dello ZIP (max 8 MiB)</span><input name=package_url type=url maxlength=1500 placeholder="http://server.lan/releases/IPTM.zip" required></label>'
@@ -438,11 +453,11 @@ function iptm_page_update(): void {   // distribuzione nativa modulare
     if ($rlc === 0) {
         $decoded = json_decode($rlo, true);
         if (is_array($decoded) && !empty($decoded['releases']) && is_array($decoded['releases'])) {
-            $localReleases = array_values(array_filter($decoded['releases'], static fn($v) => is_string($v) && preg_match('/^\d+(?:\.\d+){1,3}$/', $v)));
+            $localReleases = array_values(array_filter($decoded['releases'], static fn($v) => is_string($v) && preg_match('/^\d+(?:\.\d+){1,3}$/D', $v)));
         }
     }
-    echo '<div class="card"><h3>Release locali (max 3)</h3>';
-    echo '<p class="mut">Dopo ogni aggiornamento restano al massimo le tre release più recenti. Puoi ripristinarne una (downgrade/switch) senza ricaricare uno ZIP.</p>';
+    echo '<div class="card"><h3>Archivi locali di ripristino</h3>';
+    echo '<p class="mut">Sono elencati fino a tre archivi completi verificati. La pulizia conserva la release attiva, il ripristino precedente e le versioni ancora utilizzate.</p>';
     if (!$localReleases) {
         echo '<p class="mut">Nessuna release locale elencabile.</p>';
     } else {
@@ -466,6 +481,59 @@ function iptm_page_update(): void {   // distribuzione nativa modulare
     echo '</div>';
 
 echo '<p class=mut>Installazioni precedenti al multi-NIC: nessuna seconda scheda richiesta per installare l’aggiornamento; configurazione WAN, DHCP, indirizzi IP e firewall conservati. Gli updater modulari supportano solo il formato nativo e verificano la unità di recupero prima di confermare il risultato. Le release successive utilizzano un archivio nativo e il journal di recovery. Nessuna regola firewall viene cambiata aprendo questa pagina.</p></div>';
+    echo '<div class="card"><h3>Pulizia cartella web/releases</h3><p>Rimuove esclusivamente release obsolete verificate e non referenziate; conserva almeno le tre più recenti, la release attiva e i ripristini noti. Non cancella gli ZIP, le configurazioni o le directory non riconosciute.</p><p><a class="btn s" href="?p=update&amp;release_preview=1">Calcola anteprima pulizia release</a></p>';
+    if(($_GET['release_preview']??'')==='1'){
+        [$rc,$out,$err]=priv('release-cleanup',null,['preview']);$r=$rc===0?json_decode($out,true):null;
+        if(!is_array($r))echo '<p class="msg err">'.h($err?:$out).'</p>';
+        else{
+            echo '<p>Eliminabili: '.count((array)($r['candidates']??[])).' · protette: '.count((array)($r['preserved']??[])).'</p>';
+            foreach((array)($r['candidates']??[]) as $v)echo '<p>Eliminabile: <code>'.h($v).'</code></p>';
+            foreach((array)($r['preserved']??[]) as $v)echo '<p>Conservata: <code>'.h($v).'</code> · '.h($r['reasons'][$v]??'riferimento o controllo non superato').'</p>';
+            foreach((array)($r['unknown_preserved']??[]) as $v)echo '<p>Directory non riconosciuta conservata: <code>'.h($v).'</code></p>';
+            foreach(array_merge((array)($r['errors']??[]),empty($r['reason'])?[]:[$r['reason']]) as $e)echo '<p class="msg warn">'.h($e).'</p>';
+            if(!$ro&&!empty($r['candidates'])&&empty($r['errors'])&&empty($r['reason']))echo '<form method="post">'.fh('p=update').'<input type="hidden" name="action" value="release_cleanup_run"><label><input type="checkbox" name="release_cleanup_confirm" value="1" required> Confermo la rimozione delle release obsolete (nuova verifica al momento della pulizia)</label><p><button class="d">Pulisci directory release</button></p></form>';
+        }
+    }
+    echo '<h4>Migrazione riferimenti delle release precedenti</h4><p class="mut">Migra le unità systemd IPTM riconosciute e inattive, incluso il recupero DNSCrypt, senza riavviare servizi. Le unità personalizzate, i processi attivi e i journal di recupero restano protetti. Dopo la migrazione ricalcola la pulizia.</p><p><a class="btn s" href="?p=update&amp;release_migrate_preview=1">Analizza unità da migrare</a></p>';
+    if(($_GET['release_migrate_preview']??'')==='1'){
+        [$mr,$mo,$me]=priv('release-cleanup',null,['migrate-preview']);$mp=$mr===0?json_decode($mo,true):null;
+        if(!is_array($mp)||!isset($mp['rows'],$mp['sha256']))echo '<p class="msg err">'.h($me?:$mo).'</p>';
+        else{
+            $migratable=0;
+            echo '<div class="table-wrap"><table><thead><tr><th>Unità</th><th>Release</th><th>Stato</th></tr></thead><tbody>';
+            foreach($mp['rows'] as $row){if(!empty($row['allowed']))$migratable++;echo '<tr><td>'.h($row['unit']??'').'</td><td>'.h($row['from']??'—').'</td><td>'.h($row['reason']??'').'</td></tr>';}
+            echo '</tbody></table></div>';
+            if($migratable&&!$ro)echo '<form method="post">'.fh('p=update').'<input type="hidden" name="action" value="release_cleanup_run"><input type="hidden" name="release_cleanup_mode" value="migrate"><input type="hidden" name="release_plan_sha256" value="'.h($mp['sha256']).'"><label><input type="checkbox" name="release_cleanup_confirm" value="1" required> Confermo la migrazione delle '.$migratable.' unità idonee, con backup.</label><p><button type="submit">Migra unità idonee</button></p></form>';
+        }
+    }
+    echo '<h4>Bonifica copie helper obsolete</h4><p class="mut">Le copie IPTM di backup possono contenere riferimenti a vecchie release. Archivia soltanto copie riconosciute, non richiamate dai servizi o processi, in una directory privata di root. Nessuna modifica all’helper in uso.</p><p><a class="btn s" href="?p=update&amp;release_archive_preview=1">Analizza copie helper obsolete</a></p>';
+    if(($_GET['release_archive_preview']??'')==='1'){
+        [$ar,$ao,$ae]=priv('release-cleanup',null,['archive-preview']);$ap=$ar===0?json_decode($ao,true):null;
+        if(!is_array($ap)||!isset($ap['rows'],$ap['sha256']))echo '<p class="msg err">'.h($ae?:$ao).'</p>';
+        else{
+            $archivable=0;
+            echo '<div class="table-wrap"><table><thead><tr><th>File</th><th>Versione</th><th>Stato</th></tr></thead><tbody>';
+            foreach($ap['rows'] as $row){if(!empty($row['allowed']))$archivable++;echo '<tr><td>'.h($row['file']??'').'</td><td>'.h($row['version']??'—').'</td><td>'.h($row['reason']??'').(!empty($row['references'])?'<details><summary>Riferimenti</summary><ul><li>'.implode('</li><li>',array_map('h',(array)$row['references'])).'</li></ul></details>':'').'</td></tr>';}
+            echo '</tbody></table></div>';
+            if($archivable&&!$ro)echo '<form method="post">'.fh('p=update').'<input type="hidden" name="action" value="release_cleanup_run"><input type="hidden" name="release_cleanup_mode" value="archive"><input type="hidden" name="release_plan_sha256" value="'.h($ap['sha256']).'"><label><input type="checkbox" name="release_cleanup_confirm" value="1" required> Confermo l’archiviazione delle '.$archivable.' copie helper idonee.</label><p><button type="submit">Archivia copie helper idonee</button></p></form>';
+        }
+    }
+    echo '<h4>Rimozione forzata per selezione</h4><p class="mut">Supera la retention delle release recenti e consente di rimuovere anche directory incomplete. Le release attive, referenziate, future e i ripristini indispensabili restano protetti. Gli ZIP e le configurazioni non vengono cancellati.</p><p><a class="btn s" href="?p=update&amp;release_force_preview=1">Seleziona release da rimuovere</a></p>';
+    if(($_GET['release_force_preview']??'')==='1') {
+        [$rc,$out,$err]=priv('release-cleanup',null,['select-preview']);$plan=$rc===0?json_decode($out,true):null;
+        if(!is_array($plan)||!isset($plan['rows'],$plan['sha256']))echo '<p class="msg err">'.h($err?:$out).'</p>';
+        else {
+            echo '<form method="post">'.fh('p=update').'<input type="hidden" name="action" value="release_cleanup_run"><input type="hidden" name="release_cleanup_mode" value="selected"><input type="hidden" name="release_plan_sha256" value="'.h($plan['sha256']).'"><div class="table-wrap"><table><thead><tr><th>Seleziona</th><th>Versione</th><th>Dimensione</th><th>Stato</th></tr></thead><tbody>';
+            $eligible=0;
+            foreach($plan['rows'] as $row){$v=(string)($row['version']??'');$can=!empty($row['allowed'])&&!$ro;if($can)$eligible++;
+                echo '<tr><td>'.($can?'<input type="checkbox" name="release_versions[]" value="'.h($v).'" aria-label="Seleziona release '.h($v).'">':'—').'</td><td><code>'.h($v).'</code></td><td>'.(!empty($row['allowed'])?h(number_format(((int)$row['bytes'])/1048576,2)).' MiB':'—').'</td><td>'.h($row['reason']??'').(!empty($row['archive'])?' · ZIP di ripristino verificato':'').(!empty($row['references'])?'<details><summary>Riferimenti rilevati</summary><ul><li>'.implode('</li><li>',array_map('h',(array)$row['references'])).'</li></ul></details>':'').'</td></tr>';
+            }
+            echo '</tbody></table></div>';
+            if($eligible)echo '<p class="msg warn">Rimozione definitiva delle sole directory selezionate. Seleziona esplicitamente ogni versione.</p><label><input type="checkbox" name="release_cleanup_confirm" value="1" required> Confermo la rimozione forzata delle release selezionate.</label><p><button type="submit" class="d">Rimuovi selezionate</button></p>';
+            echo '</form>';
+        }
+    }
+    echo '</div>';
     [$cr, $co, $ce] = priv('upgrade-cleanup', null, ['report']);
     $clean = $cr === 0 ? json_decode($co, true) : null;
     echo '<div class="card"><h3>Pulizia automatica post-aggiornamento</h3>';
@@ -486,7 +554,21 @@ echo '<p class=mut>Installazioni precedenti al multi-NIC: nessuna seconda scheda
         }
         if (!empty($clean['snapshot'])) echo '<p class="mut">Snapshot protetto: <code>'.h((string)$clean['snapshot']).'</code></p>';
     } else echo '<p class="mut">Nessun rapporto disponibile; il primo aggiornamento nativo genera il rapporto.</p>';
-    if (!$ro) echo '<form method="post">'.fh('p=update').'<button class="s" type="submit" name="action" value="upgrade_cleanup_run">Riesegui pulizia verificata</button></form>';
+    echo '<p><a class="btn s" href="?p=update&amp;cleanup_preview=1">Anteprima bonifica software e servizi</a></p>';
+    if (($_GET['cleanup_preview']??'')==='1') {
+        [$cc,$oo,$ee]=priv('upgrade-cleanup',null,['scan']);$plan=$cc===0?json_decode($oo,true):null;
+        if (!is_array($plan)||empty($plan['ok'])) echo '<p class="msg err">'.h($ee?:$oo).'</p>';
+        else {
+            echo '<table><tr><th>Componente</th><th>Esito</th><th>Motivo</th></tr>';
+            foreach ((array)($plan['entries']??[]) as $e) echo '<tr><td>'.h($e['unit']??'').'</td><td>'.h($e['action']??'').'</td><td>'.h($e['reason']??'').'</td></tr>';
+            foreach ((array)($plan['old_software_backups']??[]) as $e) echo '<tr><td>'.h($e['file']??'').'</td><td>Archivia</td><td>'.h((string)($e['size']??0)).' byte</td></tr>';
+            foreach ((array)($plan['configuration_conversions']??[]) as $e) echo '<tr><td>'.h($e['path']??'').'</td><td>Conversione</td><td>POST_SCRIPT già disattivato</td></tr>';
+            echo '</table>';
+            if (!empty($plan['blocked'])) echo '<p class="msg warn">'.h($plan['blocked']).'</p>';
+            elseif (!$ro && (!empty($plan['removable'])||!empty($plan['old_software_backups'])||!empty($plan['configuration_conversions'])) && preg_match('/^[a-f0-9]{64}$/D',(string)($plan['sha256']??''))) echo '<form method="post">'.fh('p=update').'<input type="hidden" name="cleanup_sha256" value="'.h($plan['sha256']).'"><label><input type="checkbox" name="cleanup_confirm" value="1" required> Confermo la bonifica e il backup dei componenti elencati</label><p><button class="d" name="action" value="upgrade_cleanup_run">Esegui bonifica verificata</button></p></form>';
+            else echo '<p>Nessun intervento confermabile.</p>';
+        }
+    }
     echo '</div>';
     echo '<div class=card><h3>Configurazione di avvio (non toccata dagli aggiornamenti)</h3><p class=mut>Per cambiarla crea <code>' . h(WEB_CONF) . '</code>, ad esempio <code>{"ALLOWED_NETS":["192.168.1.0/24"],"ROLLBACK_SECS":120}</code>. Chiavi ammesse: ALLOWED_NETS, ROLLBACK_SECS, MIN_PW, IDLE_SECS, DATA_DIR, RULES_FILE, HELPER, BIN_IP, BIN_SUDO. Prima di ogni aggiornamento viene salvata anche una copia di impostazioni, utenti e bozza in <code>' . h(DATA_DIR) . '/backups/pre-update-*</code>.</p><table>'
         . '<tr><td>File personalizzato</td><td>' . (is_file(WEB_CONF) ? '✔ presente' : 'non presente (valori predefiniti)') . '</td></tr>'
@@ -612,7 +694,7 @@ function iptm_ip_context_inventory(): array {
             if (is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP)) $cache[$ip]=['mac'=>(string)($d['mac']??''),'vendor'=>$vendor,'kind'=>$classes[strtolower((string)($d['mac']??''))]??'unknown'];
         }
         $mac=strtolower((string)($d['mac']??''));
-        if (preg_match('/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/', $mac)) $vendors[$mac]=$vendor;
+        if (preg_match('/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/D', $mac)) $vendors[$mac]=$vendor;
     }
     foreach (devices() as $d) {
         $ip=(string)($d['ip']??''); $mac=strtolower((string)($d['mac']??''));
@@ -1009,47 +1091,35 @@ function pg_ips() {
     echo '</div>';
 }
 function pg_history() {
-    $ro = ($_SESSION['role'] ?? 'viewer') === 'viewer';
-    // ---- rollback impostazioni ----
-    $prev = DATA_DIR . '/settings.prev.json';
-    $sBack = settings_backup_list(20);
-    echo '<div class=card><h2>Rollback impostazioni</h2>';
-    echo '<p class=mut>Prima di ogni modifica alle impostazioni viene salvata una copia. Puoi tornare all\'ultima versione o a un backup precedente. La bozza viene riallineata; le regole <b>live</b> del kernel cambiano solo dopo «Applica».</p>';
-    if (is_file($prev) && !$ro) {
-        $mt = date('Y-m-d H:i:s', (int)filemtime($prev));
-        echo '<form method=post class=ops data-iptm-layout="ui-016af9a172">'
-            . fh('p=history') . '<input type=hidden name=action value=settings_rollback><input type=hidden name=name value=prev>'
-            . '<button class=g>↩ Ripristina ultime impostazioni</button>'
-            . '<span class=mut>snapshot: ' . h($mt) . '</span></form>';
-    } elseif (!is_file($prev)) {
-        echo '<p class=mut>Nessuno snapshot «prev» ancora (verra creato al prossimo salvataggio impostazioni).</p>';
-    }
-    if ($sBack) {
-        echo '<h3>Backup impostazioni</h3><table><tr><th>Quando</th><th>File</th><th></th></tr>';
-        foreach ($sBack as $f) {
-            $n = basename($f);
-            $when = date('Y-m-d H:i:s', (int)filemtime($f));
-            echo '<tr><td>' . h($when) . '</td><td><code>' . h($n) . '</code></td><td class=ops>';
-            if (!$ro) {
-                echo '<form method=post>'
-                    . fh('p=history') . '<input type=hidden name=action value=settings_rollback><input type=hidden name=name value="' . h($n) . '">'
-                    . '<button class="s sm">↩ ripristina</button></form>';
-            }
-            echo '</td></tr>';
-        }
-        echo '</table>';
-    }
-    echo '</div>';
-    $bk = glob(DATA_DIR . '/backups/rules.v*.*') ?: []; usort($bk, fn($a, $b) => strcmp(substr(basename($b), 9), substr(basename($a), 9)));
-    echo '<div class=card><h2>Storico regole (rules.v4 / v6)</h2><p class=mut>Ogni salvataggio su file crea una versione. Apri una versione per vedere cosa è cambiato rispetto alla precedente e ricaricarla nella bozza.</p>';
-    foreach (array_slice($bk, 0, 25) as $i => $f) { $n = basename($f); $fam = $n[7]; $prev = null; foreach (array_slice($bk, $i + 1) as $g) if (basename($g)[7] === $fam) { $prev = $g; break; }
-        $df = ''; if ($prev) { [, $df] = run(['/usr/bin/diff', '-u', '--label', basename($prev), '--label', $n, $prev, $f]); }
-        echo '<details><summary>IPv' . h($fam) . ' · ' . h(substr($n, 9, 4) . '-' . substr($n, 13, 2) . '-' . substr($n, 15, 2) . ' ' . substr($n, 18, 2) . ':' . substr($n, 20, 2) . ':' . substr($n, 22, 2)) . ' <span class=mut>(' . count(file($f)) . ' righe' . ($prev ? ', ' . (substr_count($df, "\n+") + substr_count($df, "\n-") - 2) . ' modifiche' : '') . ')</span></summary>
-<p class=ops><a href="?dl=' . h($n) . '">⬇ scarica</a><form method=post>' . fh('p=history') . '<input type=hidden name=action value=restore_backup><input type=hidden name=name value="' . h($n) . '"><button class="s sm">↩ carica in bozza</button></form></p><pre>' . h($df ?: ($prev ? 'nessuna differenza' : 'prima versione')) . '</pre></details>'; }
-    echo $bk ? '' : '<p class=mut>Nessuna versione ancora.</p>'; echo '</div>';
-    $f = DATA_DIR . '/audit.log'; $L = is_file($f) ? array_slice(array_reverse(file($f, FILE_IGNORE_NEW_LINES)), 0, 80) : [];
-    echo '<div class=card><h3>Registro delle operazioni</h3><div data-iptm-layout="scroll"><table><tr><th>Quando</th><th>Utente</th><th>IP</th><th>Operazione</th></tr>'; foreach ($L as $l) echo '<tr><td>' . implode('</td><td>', array_map('h', array_pad(explode("\t", $l), 4, ''))) . '</td></tr>'; echo '</table></div></div>';
+    $admin=($_SESSION['role']??'viewer')==='admin';
+    iptm_view_start('Impostazioni','Ripristina soltanto una bozza. Il firewall attivo rimane invariato.');
+    $files=settings_backup_list(20);$prev=DATA_DIR.'/settings.prev.json';
+    if(is_file($prev)&&!is_link($prev))array_unshift($files,$prev);
+    if(!$files)echo '<p class="mut">Nessun backup impostazioni disponibile.</p>';
+    foreach($files as $file){if(!is_file($file)||is_link($file))continue;$name=basename($file);echo '<div class="iptm-backup-row"><span>'.iptm_view_text($name).' · '.iptm_view_text(date('Y-m-d H:i:s',(int)filemtime($file))).'</span>';
+        if($admin){iptm_view_form('history','settings_rollback',['name'=>$file===$prev?'prev':$name]);iptm_view_submit('Ripristina impostazioni','s');}echo '</div>';}
+    iptm_view_end();
+    iptm_view_start('Versioni delle regole','Scarica o ricarica una versione IPv4 o IPv6. La bozza corrente viene salvata prima del ripristino.');
+    $bk=[];foreach(glob(DATA_DIR.'/backups/rules.v*.*')?:[] as $path){$name=basename($path);if(iptm_rules_backup_path($name)!==null)$bk[$name]=$path;}
+    krsort($bk,SORT_STRING);$bk=array_slice($bk,0,100,true);$rev6=hash('sha256',v6_get());
+    if(!$bk)echo '<p class="mut">Nessun backup regole disponibile.</p>';
+    foreach($bk as $name=>$path){echo '<div class="iptm-backup-row"><span>'.iptm_view_text($name).' · '.number_format((int)filesize($path)).' byte</span><div class="ops">';
+        echo iptm_view_link('history','Confronta',['compare'=>$name]);
+        if($admin){echo '<a class="btn s" href="?dl='.h(rawurlencode($name)).'">Scarica</a>';iptm_view_form('history','restore_backup',['name'=>$name,'rev6'=>$rev6]);iptm_view_submit('Carica in bozza','s');}echo '</div></div>';}
+    $compare=$_GET['compare']??null;
+    if(is_string($compare)&&isset($bk[$compare])){
+        echo '<h3>Confronto con la bozza corrente</h3>';
+        try{$old=iptm_rules_backup_read($compare);$current=$compare[7]==='6'?v6_get():get_draft();
+            // Render a single bounded comparison rather than spawning diff for every row.
+            if(strlen($current)>4194304)throw new RuntimeException('Bozza oltre 4 MiB.');
+            if($old===$current)echo '<p>Nessuna differenza.</p>';else{echo '<details open><summary>Backup</summary><pre>'.iptm_view_text(substr($old,0,65536)).'</pre></details><details><summary>Bozza attuale</summary><pre>'.iptm_view_text(substr($current,0,65536)).'</pre></details><p class="mut">Anteprime fino a 64 KiB per versione.</p>';}
+        }catch(Throwable $e){iptm_view_error($e->getMessage());}}
+    iptm_view_end();
+    iptm_view_start('Registro operazioni','Ultime 80 righe disponibili; nessuna modifica ai log.');
+    $rows=[];$file=DATA_DIR.'/audit.log';if(is_file($file)&&!is_link($file)&&($fp=@fopen($file,'rb'))){$size=filesize($file);if($size>131072){fseek($fp,-131072,SEEK_END);fgets($fp);} $tail=stream_get_contents($fp,131072);fclose($fp);foreach(array_slice(array_reverse(explode("\n",trim((string)$tail))),0,80) as $line)if($line!=='')$rows[]=array_pad(explode("\t",$line,4),4,'');}
+    iptm_view_table(['Quando','Utente','IP','Operazione'],$rows,'Operazioni recenti');iptm_view_end();
 }
+
 
 function impact_analyze(): array {
     global $draftTxt;
@@ -1380,24 +1450,28 @@ function pg_impact() {
 }
 
 function pg_tracer() {
-    global $M; $if = array_keys(sys_ifaces()); $g = fn($k, $d = '') => trim((string)($_GET[$k] ?? $d)); $loc = []; foreach (sys_ifaces() as $a) foreach ($a as $x) $loc[] = explode('/', $x)[0];
-    echo '<div class=card><h2>Packet tracer</h2><p class=mut>Simula il percorso di un pacchetto nelle regole della <b>bozza</b> e mostra quale regola decide. Utile per capire «perché non passa» prima di applicare.</p><form method=get class=row><input type=hidden name=p value=tracer>
-<label class=fl><span>Percorso</span>' . sel('flow', ['local' => 'Arriva a questo router (INPUT)', 'forward' => 'Attraversa il router (FORWARD)', 'out' => 'Generato dal router (OUTPUT)'], $g('flow', 'local')) . '</label>
-<label class=fl><span>Interfaccia di ingresso</span>' . sel('in', array_merge(['' => '—'], array_combine($if, $if)), $g('in')) . '</label><label class=fl><span>Interfaccia di uscita</span>' . sel('out', array_merge(['' => '—'], array_combine($if, $if)), $g('out')) . '</label>
-<label class=fl><span>IP origine</span><input name=src value="' . h($g('src')) . '" placeholder="192.168.1.50"></label><label class=fl><span>IP destinazione</span><input name=dst value="' . h($g('dst')) . '" placeholder="192.168.1.2 oppure 8.8.8.8"></label>
-<label class=fl><span>Protocollo</span>' . sel('proto', ['tcp' => 'TCP', 'udp' => 'UDP', 'icmp' => 'ICMP'], $g('proto', 'tcp')) . '</label><label class=fl><span>Porta origine</span><input name=sport value="' . h($g('sport')) . '" placeholder="casuale"></label>
-<label class=fl><span>Porta destinazione</span><input name=dport value="' . h($g('dport')) . '" placeholder="22"></label><label class=fl><span>Stato</span>' . sel('state', ['NEW' => 'Nuova connessione', 'ESTABLISHED' => 'Connessione già stabilita'], $g('state', 'NEW')) . '</label>
-<div class=fl><span>&nbsp;</span><button>🔬 Traccia</button></div></form></div>';
-    if ($g('src') !== '' && $g('dst') !== '') {
-        if (!v_ok('ip', $g('src')) || !v_ok('ip', $g('dst'))) { echo '<div class="msg err">Indirizzi IP non validi.</div>'; return; }
-        $r = trace_packet($M, ['flow' => $g('flow', 'local'), 'in' => $g('in'), 'out' => $g('out'), 'src' => $g('src'), 'dst' => $g('dst'), 'proto' => $g('proto', 'tcp'), 'sport' => $g('sport'), 'dport' => $g('dport'), 'state' => $g('state', 'NEW'), 'local_ips' => $loc, 'local_ip' => $loc[0] ?? '']);
-        $ok = $r['verdict'] === 'ACCEPT'; echo '<div class=card><h3>Esito: <span class="b b-' . ($ok ? 'ACCEPT' : 'DROP') . '">' . ($ok ? 'PASSA' : ($r['verdict'] === 'REJECT' ? 'RIFIUTATO' : 'SCARTATO')) . '</span> ' . ($r['where'] ? '<small class=mut>dove: ' . h($r['where']) . '</small>' : '') . '</h3>';
-        if (!empty($r['k']['dnat'])) echo '<p>🔀 Destinazione tradotta (DNAT) → <b>' . h($r['k']['d'] . ($r['k']['dport'] ? ':' . $r['k']['dport'] : '')) . '</b></p>'; if (!empty($r['k']['snat'])) echo '<p>🔀 Sorgente tradotta (NAT) → <b>' . h($r['k']['snat']) . '</b></p>';
-        echo '<table><tr><th>Tabella / catena</th><th>#</th><th>Regola che corrisponde</th></tr>'; foreach ($r['steps'] as [$t, $c, $n, $raw]) echo '<tr><td>' . h("$t / $c") . '</td><td>' . ($n ?: '—') . '</td><td><code style="display:block">' . h($raw) . '</code></td></tr>';
-        echo $r['steps'] ? '' : '<tr><td colspan=3 class=mut>Nessuna regola corrisponde: vale la policy.</td></tr>'; echo '</table>';
-        foreach (array_unique($r['nt']) as $n) echo '<p class=mut>ℹ ' . h($n) . '</p>'; echo '<p class=mut>Ipotesi: limiti (hashlimit/recent/connlimit) non superati; set ipset e moduli di payload non valutabili.</p></div>';
-    }
+    global $M;$interfaces=sys_ifaces();$options=[''=>'Non specificata'];foreach(array_keys($interfaces) as $name)$options[$name]=$name;
+    $query=fn($key,$default='')=>is_string($_GET[$key]??null)?$_GET[$key]:$default;
+    iptm_view_start('Simula un pacchetto IPv4','Controlla il percorso nella bozza, non nella rete attiva. Non invia pacchetti e non modifica regole.');
+    echo '<form method="get" class="iptm-workspace-form"><input type="hidden" name="p" value="tracer"><div class="row">';
+    foreach(['flow'=>['Percorso',['local'=>'Verso questo host (INPUT)','forward'=>'Attraverso il router (FORWARD)','out'=>'Da questo host (OUTPUT)'],'local'],'in'=>['Ingresso',$options,''],'out'=>['Uscita',$options,''],'proto'=>['Protocollo',['tcp'=>'TCP','udp'=>'UDP','icmp'=>'ICMP'],'tcp'],'state'=>['Stato',['NEW'=>'Nuova connessione','ESTABLISHED'=>'Connessione stabilita'],'NEW']] as $key=>[$label,$choices,$default])echo '<label class="fl"><span>'.iptm_view_text($label).'</span>'.sel($key,$choices,$query($key,$default)).'</label>';
+    foreach(['src'=>['IP origine','192.168.1.50'],'dst'=>['IP destinazione','192.168.1.2'],'sport'=>['Porta origine','50000'],'dport'=>['Porta destinazione','22']] as $key=>[$label,$ph])echo '<label class="fl"><span>'.iptm_view_text($label).'</span><input name="'.$key.'" value="'.h($query($key)).'" placeholder="'.h($ph).'"'.(in_array($key,['src','dst'],true)?' required':'').'></label>';
+    echo '</div><div class="iptm-workspace-actions"><button type="submit" class="g">Esegui simulazione</button></div></form>';iptm_view_end();
+    if(!array_key_exists('src',$_GET)&&!array_key_exists('dst',$_GET))return;
+    iptm_view_start('Risultato teorico');
+    try {$packet=iptm_trace_input($_GET,$interfaces);$result=trace_packet($M,$packet);}catch(Throwable $e){iptm_view_error($e->getMessage());iptm_view_end();return;}
+    $notes=array_unique((array)($result['nt']??[]));$verdict=(string)($result['verdict']??'');
+    echo '<p><strong>'.iptm_view_text(match($verdict){'ACCEPT'=>'Accettato nella simulazione','DROP'=>'Scartato nella simulazione','REJECT'=>'Rifiutato nella simulazione',default=>'Esito non determinato'}).'</strong></p>';
+    if($notes)echo '<p class="msg warn" role="status">Esito condizionato: alcune regole non sono riproducibili nel simulatore.</p>';
+    if(!empty($result['where']))echo '<p>Decisione: '.iptm_view_text($result['where']).'</p>';
+    if(!empty($result['k']['dnat']))echo '<p>DNAT: '.iptm_view_text($result['k']['d'].':'.$result['k']['dport']).'</p>';
+    if(!empty($result['k']['snat']))echo '<p>SNAT: '.iptm_view_text($result['k']['snat']).'</p>';
+    $rows=[];foreach($result['steps'] as [$table,$chain,$n,$rule])$rows[]=[$table.' / '.$chain,$n?:'Policy',$rule];
+    iptm_view_table(['Tabella / catena','Posizione','Regola'],$rows,'Percorso simulato');
+    foreach($notes as $note)echo '<p class="mut">'.iptm_view_text($note).'</p>';
+    echo '<p class="mut">Routing, ipset, limiti dinamici e payload non sono completamente simulati. Verifica la connettività durante la prova reale.</p>';iptm_view_end();
 }
+
 function pg_lists() {
     $S = S_get(); [, $st] = priv('lists-status');
     $arow = fn($i, $a) => '<tr><td><input name="al[' . $i . '][name]" value="' . h($a['name'] ?? '') . '" placeholder="NAS"></td><td><input name="al[' . $i . '][items]" value="' . h($a['items'] ?? '') . '" placeholder="192.168.1.10 192.168.1.11 oppure 80,443"></td><td><label><input type=checkbox name="al[' . $i . '][del]" value=1> elimina</label></td></tr>';
@@ -1423,7 +1497,7 @@ function pg_v6(bool $embedded = false) {
     $S = S_get(); $storedV6 = is_array($S['v6'] ?? null) ? $S['v6'] : []; $V = $storedV6 + v6_def();
     if (!array_key_exists('wg_port', $storedV6)) $V['wg_port'] = (int)($S['wg_port'] ?? 51820);
     if (!array_key_exists('wg_if', $storedV6)) $V['wg_if'] = (string)($S['wg_if'] ?? 'wg0');
-    if (!preg_match('/^[A-Za-z0-9_.-]{1,15}$/', (string)$V['wg_if'])) $V['wg_if'] = 'wg0';
+    if (!preg_match('/^[A-Za-z0-9_.-]{1,15}$/D', (string)$V['wg_if'])) $V['wg_if'] = 'wg0';
     $txt = v6_get(); $v6Rev = hash('sha256', $txt); $if = array_keys(sys_ifaces()); $wgi = wg_info();
     $v6KernelDisabled = trim((string)@file_get_contents('/proc/sys/net/ipv6/conf/all/disable_ipv6')) === '1';
     $V['wg_if'] = wg_preferred_iface($wgi['ifaces'] ?? [], (string)$V['wg_if']);
@@ -1460,9 +1534,9 @@ function pg_v6(bool $embedded = false) {
        . ($v6KernelDisabled ? '<div class="msg warn" role=status>IPv6 è disabilitato nel kernel. Puoi modificare la bozza, ma l’applicazione è bloccata perché non è possibile garantire il salvataggio dello stato IPv6 per il rollback. Non riabilitare IPv6 dalla dashboard senza verificare la connettività.</div>' : '')
        . '<form method=post class=acc>' . fh($embedded ? 'p=apply' : 'p=v6') . '<input type=hidden name=rev6 value=' . h($v6Rev) . '><input type=hidden name=action value=v6_save><h3>Opzioni</h3>' .
         dd('Modo', sel('mode', ['host' => 'Host (non inoltra)', 'router' => 'Router (inoltra LAN → WAN)'], $V['mode'])) . dd('Interfaccia LAN', sel('lan_if', array_merge(['' => '—'], array_combine($if, $if)), $V['lan_if'])) . dd('Interfaccia WAN', sel('wan_if', array_merge(['' => '—'], array_combine($if, $if)), $V['wan_if'])) .
-        dd('Prefissi fidati', '<input name=lan_prefix value="' . h($V['lan_prefix']) . '" data-iptm-layout="mw420">', 'Separati da virgola (es. fe80::/10,2001:db8:1::/64). Da questi prefissi si accede ai servizi.') .
+        dd('Prefissi peer WireGuard IPv6', '<input name=wg_prefix value="' . h($V['wg_prefix'] ?? '') . '" data-iptm-layout="mw420">', 'Necessari per accesso IPv6 dal tunnel; separati da virgola.') . dd('Prefissi fidati', '<input name=lan_prefix value="' . h($V['lan_prefix']) . '" data-iptm-layout="mw420">', 'Separati da virgola (es. fe80::/10,2001:db8:1::/64). Da questi prefissi si accede ai servizi.') .
         dd('Servizi', $ck('icmp', 'ICMPv6 (necessario)') . $ck('dhcp6', 'DHCPv6 client') . $ck('ssh', 'SSH') . $ck('log', 'Log scarti') . $ck('crowdsec', 'CrowdSec IPv6') . $ck('bogon', 'Scarta ULA/documentazione dal WAN') . $ck('ssh_rl', 'Limite tentativi SSH')) . dd('WireGuard IPv6 / NAT66', $ck('wg_on', 'Consenti traffico WireGuard IPv6') . '<label class=fl><span>Interfaccia VPN</span>' . sel('wg_if', $wgOpts, (string)$V['wg_if']) . '</label><label class=fl><span>Porta UDP WireGuard</span><input name=wg_port value="' . h((string)$V['wg_port']) . '" data-iptm-layout="ui-ebb13c75de"></label>' . $ck('wg_input', 'I client raggiungono il router') . $ck('wg_lan', 'I client raggiungono LAN e Internet'), 'Attivala se il server DietPi-WireGuard usa IPv6/NAT66 e il firewall IPv6 IPTM è attivo. La porta deve coincidere con quella del server.') . dd('Set CrowdSec IPv6', '<input name=cs_sets value="' . h($V['cs_sets']) . '" data-iptm-layout="mw420">', 'Set del bouncer (crowdsec6-blacklists-0 … -3). Devono esistere al momento dell\'applicazione.') . dd('Porta SSH', '<input name=ssh_port value="' . h($V['ssh_port']) . '" data-iptm-layout="ui-ebb13c75de">') . dd('Altre porte TCP', '<input name=ports value="' . h($V['ports']) . '" placeholder="80,443" data-iptm-layout="mw240">') .
-        '<p><button>💾 Genera la bozza IPv6</button></p></form><h3>Regole IPv6 (bozza)</h3><form method=post>' . fh($embedded ? 'p=apply' : 'p=v6') . '<input type=hidden name=rev6 value=' . h($v6Rev) . '><input type=hidden name=action value=v6_raw><textarea name=txt rows=18 spellcheck=false>' . h($txt) . '</textarea><p class=ops data-iptm-layout="ui-19678f38f5"><button class=s>Salva testo</button>
+        '<p><button>💾 Genera la bozza IPv6</button></p></form><h3>Regole IPv6 (bozza)</h3><form method=post>' . fh($embedded ? 'p=apply' : 'p=v6') . '<input type=hidden name=rev6 value=' . h($v6Rev) . '><input type=hidden name=action value=v6_raw><textarea name=txt rows=18 spellcheck=false>' . h($txt) . '</textarea>' . iptm_trial_timeout_field('6') . '<p class=ops data-iptm-layout="ui-19678f38f5"><button class=s>Salva testo</button>
 <button class=s name=action value=v6_test>🔎 Verifica sintassi</button><button class=g name=action value=v6_apply>🚀 Applica ora</button><button class=s name=action value=v6_write disabled title="Usa Applica ora">Solo salva su file (bloccato)</button><button class=d name=action value=v6_reset>Scarta bozza</button></p></form></div>';
 }
 /** True if WAN and LAN share a NIC or WAN carries multiple IPv4 addresses. */
@@ -1473,9 +1547,12 @@ function iptm_shared_wan_lan(array $S): bool {
 }
 /** Historical URL kept for bookmarks; the interactive workspace lives in Health. */
 function pg_safeplan(): void {
-    echo '<div class="hero"><h2>Preflight &amp; Commit</h2><p>La procedura interattiva è stata riunificata nella pagina Sistema → Salute DietPi.</p></div>';
-    echo '<div class="card"><a class="btn g" href="?p=health#health-policy">Apri Preflight &amp; Commit in Salute</a><p class="mut">Il collegamento storico resta disponibile per non rompere segnalibri e aggiornamenti esistenti.</p></div>';
+    iptm_view_start('Piano di sicurezza','Verifica la topologia e la raggiungibilità prima di provare una nuova policy. Non applica modifiche da questa pagina.');
+    $tasks=[['setup','1. Reti e interfacce','Conferma LAN, WAN e subnet.'],['vpn','2. VPN e accesso remoto','Verifica accesso SSH, Pi-hole, Home Assistant e servizi autorizzati.'],['piholehealth','3. DNS locale','Controlla risoluzione e listener.'],['health','4. Audit DietPi','Valuta anomalie e prove di sicurezza.'],['apply','5. Differenze e rollback','Applica soltanto una bozza verificata.']];
+    foreach($tasks as [$route,$label,$desc])echo '<div class="iptm-guide-step"><h3>'.iptm_view_text($label).'</h3><p>'.iptm_view_text($desc).'</p>'.iptm_view_link($route,'Apri controllo').'</div>';
+    echo '<p><a class="btn g" href="?p=health#health-policy">Apri Preflight &amp; Commit</a></p>';iptm_view_end();
 }
+
 
 function pg_zero() {
     if (isset($_GET['check']) && is_string($_GET['check']) && preg_match('/^[a-zA-Z0-9_.-]{1,80}$/D', $_GET['check'])) {

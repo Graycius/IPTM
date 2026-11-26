@@ -2,21 +2,22 @@
 // ===================== SCANNER ANTIVIRUS CLOUD (VirusTotal free + ClamAV locale) =====================
 function vt_key(): string {
     $k = trim((string)(ti_cfg()['virustotal'] ?? ''));
-    return preg_match('/^[A-Za-z0-9_\-]{32,128}$/', $k) ? $k : '';
+    return preg_match('/^[A-Za-z0-9_\-]{32,128}$/D', $k) ? $k : '';
 }
 /** POST multipart o form-urlencoded verso VirusTotal; restituisce body o null. */
 function vt_curl_post(string $url, array $headers, array $fields = [], ?string $fileField = null, ?string $filePath = null, int $timeout = 60): ?string {
     return iptm_https_curl($url,$headers,$timeout,$fields,$fileField,$filePath,true);
 }
 function vt_stats_label(array $st): array {
-    $mal = (int)($st['malicious'] ?? 0);
-    $sus = (int)($st['suspicious'] ?? 0);
-    $harm = (int)($st['harmless'] ?? 0);
-    $und = (int)($st['undetected'] ?? 0);
-    $tot = max(1, $mal + $sus + $harm + $und + (int)($st['timeout'] ?? 0) + (int)($st['failure'] ?? 0) + (int)($st['type-unsupported'] ?? 0));
+    $count=static fn($v)=>is_int($v)&&$v>=0?min($v,1000000):0;
+    $mal = $count($st['malicious'] ?? 0);
+    $sus = $count($st['suspicious'] ?? 0);
+    $harm = $count($st['harmless'] ?? 0);
+    $und = $count($st['undetected'] ?? 0);
+    $tot = max(1, $mal + $sus + $harm + $und + $count($st['timeout'] ?? 0) + $count($st['failure'] ?? 0) + $count($st['type-unsupported'] ?? 0) + $count($st['confirmed-timeout']??0));
     if ($mal > 0) $ver = 'malicious';
     elseif ($sus > 0) $ver = 'suspicious';
-    elseif ($harm + $und > 0) $ver = 'clean';
+    elseif ($harm > 0) $ver = 'clean';
     else $ver = 'unknown';
     return [$ver, $mal, $sus, $harm, $und, $tot];
 }
@@ -148,9 +149,9 @@ function clam_scan_file(string $path): array {
     $bin = '';
     foreach (['/usr/bin/clamscan', '/usr/local/bin/clamscan'] as $c) if (is_executable($c)) { $bin = $c; break; }
     if ($bin === '') return ['ok' => false, 'err' => 'ClamAV non installato (pacchetto clamav).'];
-    $o = []; $c = 0;
-    exec(escapeshellcmd($bin) . ' --no-summary --infected ' . escapeshellarg($path) . ' 2>&1', $o, $c);
-    $out = trim(implode("\n", $o));
+    if (!is_file($path)||is_link($path)||!is_readable($path)) return ['ok'=>false,'err'=>'File non leggibile o non regolare.'];
+    [$c,$stdout,$stderr]=run([$bin,'--no-summary','--infected','--',$path],null,120.0,1048576);
+    $out=trim($stdout."\n".$stderr);
     // exit 0 = clean, 1 = infected, 2 = error
     if ($c === 0) return ['ok' => true, 'infected' => false, 'detail' => 'pulito'];
     if ($c === 1) return ['ok' => true, 'infected' => true, 'detail' => $out !== '' ? $out : 'infetto'];

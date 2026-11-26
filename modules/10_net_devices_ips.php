@@ -1,12 +1,30 @@
 <?php
 // ===================== v2: CONNESSIONI, DISPOSITIVI, IPS =====================
 function conn_parse(string $txt): array {
-    $o = [];
-    foreach (explode("\n", $txt) as $l) {
-        $t = preg_split('/\s+/', trim($l)); if (count($t) < 6 || !isset($t[2])) continue; preg_match_all('/\b(src|dst|sport|dport|bytes|packets)=(\S+)/', $l, $m, PREG_SET_ORDER); $kv = []; foreach ($m as $x) $kv[$x[1]][] = $x[2];
-        $o[] = ['proto' => $t[2], 'ttl' => (int)$t[4], 'state' => ($t[2] === 'tcp' ? $t[5] : ''), 'src' => $kv['src'][0] ?? '', 'dst' => $kv['dst'][0] ?? '', 'sport' => $kv['sport'][0] ?? '', 'dport' => $kv['dport'][0] ?? '', 'bytes' => (int)($kv['bytes'][0] ?? 0) + (int)($kv['bytes'][1] ?? 0)];
+    $out = [];
+    foreach (explode("\n", $txt) as $line) {
+        // /proc/net/nf_conntrack includes the family; conntrack -L and
+        // /proc/net/ip_conntrack normally start directly with the protocol.
+        if (!preg_match('/^(?:(?:ipv4|ipv6)\s+[0-9]+\s+)?([a-zA-Z0-9_-]+)\s+[0-9]+\s+([0-9]+)\s+(.*)$/D', trim($line), $head)) continue;
+        $proto = strtolower($head[1]); $tail = $head[3]; $kv = [];
+        preg_match_all('/\b(src|dst|sport|dport|bytes|packets)=(\S+)/', $tail, $pairs, PREG_SET_ORDER);
+        foreach ($pairs as $pair) $kv[$pair[1]][] = $pair[2];
+        $src = $kv['src'][0] ?? ''; $dst = $kv['dst'][0] ?? '';
+        if (!filter_var($src, FILTER_VALIDATE_IP) || !filter_var($dst, FILTER_VALIDATE_IP)) continue;
+        if ((str_contains($src, ':')) !== (str_contains($dst, ':'))) continue;
+        $sport = $kv['sport'][0] ?? ''; $dport = $kv['dport'][0] ?? '';
+        foreach ([$sport, $dport] as $port) if ($port !== '' && (!ctype_digit($port) || (int)$port > 65535)) continue 2;
+        $state = '';
+        if ($proto === 'tcp' && preg_match('/^([A-Z_]+)\s+/', $tail, $match)) $state = $match[1];
+        $bytes = 0;
+        foreach (array_slice($kv['bytes'] ?? [], 0, 2) as $value) {
+            if (!ctype_digit($value)) continue 2;
+            $bytes = (int)min(PHP_INT_MAX, (float)$bytes + (float)$value);
+            if ($bytes < 0) $bytes = PHP_INT_MAX;
+        }
+        $out[] = ['proto'=>$proto,'ttl'=>(int)$head[2],'state'=>$state,'src'=>$src,'dst'=>$dst,'sport'=>$sport,'dport'=>$dport,'bytes'=>$bytes];
     }
-    return $o;
+    return $out;
 }
 function devices(): array {
     $d = []; [, $o] = run([BIN_IP, '-4', 'neigh', 'show']);

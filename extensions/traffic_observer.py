@@ -5,8 +5,10 @@ Suricata app_proto is historical observation, not DPI enforcement. The ss
 process association includes only the gateway's processes, not remote clients.
 """
 from __future__ import annotations
+
+from command_transport import capture, OutputLimitError
 from collections import Counter
-import json,os,pathlib,re,subprocess,time
+import json,os,pathlib,re,stat,subprocess,time
 
 EVE=pathlib.Path('/var/log/suricata/eve.json')
 MAX_TAIL=262144
@@ -43,12 +45,13 @@ def read_eve(path=EVE):
     if path.is_symlink() or not path.is_file():
         return {'available':False,'reason':'Suricata EVE non disponibile','protocols':[]}
     try:
-        size=path.stat().st_size
-        if size>100*1024**3:raise ValueError('EVE eccessivo')
-        with path.open('rb') as f:
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as f:
+            meta=os.fstat(f.fileno());size=meta.st_size
+            if not stat.S_ISREG(meta.st_mode) or size>100*1024**3:raise ValueError('EVE non regolare o eccessivo')
             if size>MAX_TAIL:
-                f.seek(-MAX_TAIL,os.SEEK_END);f.readline()
-            data=f.read(MAX_TAIL)
+                f.seek(size-MAX_TAIL);data=f.read(MAX_TAIL).partition(b'\n')[2]
+            else:data=f.read(MAX_TAIL)
         return {'available':True,'source':'Suricata EVE app_proto',
                 'protocols':parse_eve(data.decode('utf-8',errors='replace')),
                 'window':'ultimi eventi disponibili, non classificazione inline'}
@@ -68,7 +71,7 @@ def parse_ss(text):
 
 
 def local_processes():
-    try:r=subprocess.run(['ss','-H','-tunap'],capture_output=True,text=True,timeout=4,stdin=subprocess.DEVNULL)
+    try:r=capture(['ss','-H','-tunap'],timeout=4,stdout_limit=300000)
     except (OSError,subprocess.TimeoutExpired):return {'available':False,'reason':'ss non disponibile','processes':[]}
     if r.returncode:return {'available':False,'reason':'ss non verificabile','processes':[]}
     return {'available':True,'scope':'soli processi locali del gateway',

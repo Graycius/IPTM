@@ -3,21 +3,26 @@
 
 /** Token API (settings o file in DATA_DIR). Vuoto = API disabilitata. */
 function api_token_get(): string {
-    $S = S_get();
-    $t = trim((string)($S['api_token'] ?? ''));
-    if ($t !== '') return $t;
-    $f = DATA_DIR . '/api.token';
-    if (is_file($f)) return trim((string)@file_get_contents($f));
-    return '';
+    $S=S_get();$t=$S['api_token']??'';
+    if(!is_string($t))return '';
+    $t=trim($t);if($t!=='')return $t;
+    $settings=DATA_DIR.'/settings.json';
+    if(is_file($settings)) {
+        $raw=@file_get_contents($settings,false,null,0,4194305);
+        $stored=is_string($raw)&&strlen($raw)<=4194304?json_decode($raw,true):null;
+        // An explicit empty token is a revocation, not permission to revive a legacy file.
+        if(!is_array($stored)||array_key_exists('api_token',$stored))return '';
+    }
+    $f=DATA_DIR.'/api.token';
+    if(is_link($f)||!is_file($f))return '';
+    $raw=@file_get_contents($f,false,null,0,4097);
+    return is_string($raw)&&strlen($raw)<=4096?trim($raw):'';
 }
-
 function api_token_set(string $t): void {
-    $S = S_get();
-    $S['api_token'] = $t;
-    S_put($S);
-    $f = DATA_DIR . '/api.token';
-    if ($t === '') @unlink($f);
-    else { @file_put_contents($f, $t . "\n", LOCK_EX); @chmod($f, 0600); }
+    if(strlen($t)>4096||preg_match('/[\x00-\x20\x7f]/',$t))throw new InvalidArgumentException('Token API non valido');
+    $S=S_get();$S['api_token']=$t;S_put($S);
+    // settings.json is authoritative; remove the redundant legacy copy.
+    $f=DATA_DIR.'/api.token';if(is_file($f)||is_link($f))@unlink($f);
 }
 
 function api_auth_ok(): bool {
@@ -25,7 +30,7 @@ function api_auth_ok(): bool {
     if ($need === '') return false;
     $got = '';
     $h = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
-    if (preg_match('/^\s*Bearer\s+(\S+)/i', $h, $m)) $got = $m[1];
+    if (preg_match('/^\s*Bearer[ \t]+(\S+)[ \t]*$/iD', $h, $m)) $got = $m[1];
     if ($got === '') $got = (string)($_SERVER['HTTP_X_API_TOKEN'] ?? '');
     return $got !== '' && hash_equals($need, $got);
 }
@@ -264,7 +269,12 @@ function conntrack_live(int $limit = 40): array {
     [$c, $o] = function_exists('priv') ? priv('conns') : [1, ''];
     if ($c !== 0 || trim($o) === '') {
         // fallback
-        $o = @shell_exec('conntrack -L 2>/dev/null') ?: '';
+        $o = '';
+        if (function_exists('run')) {
+            foreach(['/usr/sbin/conntrack','/usr/bin/conntrack','/sbin/conntrack'] as $bin)if(is_executable($bin)){
+                [$rc,$output]=run([$bin,'-L'],null,10.0,2097152);if($rc===0)$o=$output;break;
+            }
+        }
     }
     $src = []; $dst = []; $proto = [];
     foreach (preg_split('/\r?\n/', trim($o)) as $line) {

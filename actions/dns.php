@@ -72,7 +72,7 @@ case 'antidpi_sources': {
             header('Content-Type: application/json; charset=utf-8');
             header('Cache-Control: no-store, private');
             http_response_code($ok?200:422);
-            echo json_encode(array_merge(['ok'=>$ok,'error'=>$ok?'':$message,'message'=>$message],$result),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+            echo json_encode((['ok'=>$ok,'error'=>$ok?'':$message,'message'=>$message]+$result),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
             exit;
         }
         flash($message,$ok?'ok':'err');
@@ -100,7 +100,7 @@ case 'antidpi_sources': {
         if($async && session_status()===PHP_SESSION_ACTIVE)session_write_close();
         [$rc,$out,$stderr]=run([BIN_SUDO,'-n',HELPER,'anti-dpi-sources','start'],$payload,25.0,4096);
         $j=json_decode($out,true);
-        if($rc!==0||!is_array($j)||empty($j['ok']))$respond(false,'Download Anti-DPI: '.herr((string)($j['error']??$out.$stderr)));
+        if($rc!==0||!is_array($j)||($j['ok']??false)!==true||!is_string($j['token']??null)||!preg_match('/^[a-f0-9]{24}$/D',$j['token']))$respond(false,'Download Anti-DPI: '.herr((string)($j['error']??$out.$stderr)));
         else $respond(true,'Job avviato; i domini saranno inseriti nella casella dopo la conclusione dei download.',
             ['token'=>(string)($j['token']??''),'state'=>(string)($j['state']??'queued')]);
     }else{
@@ -311,7 +311,7 @@ case 'antidpi_live': {
                 $msg = $apply ? "Sysctl: $number chiave/i applicate." : "Sysctl: $number chiave/i valide; nessuna modifica eseguita.";
                 if ($skipped) $msg .= ' Non disponibili sul kernel: ' . implode(', ', array_map('strval', $skipped));
             } else {
-                $msg = 'Sysctl non modificato: ' . (is_array($j) ? (string)($j['error'] ?? 'verifica non riuscita') : trim($o . $e));
+                $msg = 'Operazione sysctl non riuscita: ' . (is_array($j) ? (string)($j['error'] ?? 'verifica non riuscita') : trim($o . $e));
             }
             flash($msg, $success ? 'ok' : 'err');
             if ($apply && $success) audit('sysctl maintenance apply');

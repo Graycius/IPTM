@@ -5,7 +5,7 @@ switch ($a) {
             $back='p=multinic';
             if(($_SESSION['role']??'viewer')!=='admin'){flash('Solo amministratore.','err');break;}
             $uuid=(string)($_POST['nm_uuid']??'');$props=(string)($_POST['nm_properties']??'');
-            if(!preg_match('/^[a-fA-F0-9-]{36}$/D',$uuid)||strlen($props)>8192){flash('UUID o JSON troppo grande.','err');break;}
+            if(!preg_match('/^[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}$/D',$uuid)||strlen($props)>8192){flash('UUID o JSON troppo grande.','err');break;}
             try{$values=json_decode($props,true,32,JSON_THROW_ON_ERROR);}
             catch(Throwable $e){flash('Proprietà JSON non valide.','err');break;}
             if(!is_array($values)||array_is_list($values)||count($values)>48){flash('Atteso oggetto JSON di proprietà nmcli.','err');break;}
@@ -26,11 +26,11 @@ switch ($a) {
             [$c,$o,$e]=priv('nm-editor',null,['apply',$hash]);$j=json_decode($o,true);
             if($c===0&&!empty($j['ok'])){unset($_SESSION['iptm_nm_editor']);$_SESSION['iptm_nm_clone']=(string)($j['clone_uuid']??'');}
             flash($c===0&&!empty($j['ok'])?'Clone NM creato inattivo: '.herr((string)($j['clone_uuid']??'')):
-                'Operazione NM respinta: '.herr((string)($j['error']??$e??$o)),$c===0?'ok':'err');break;
+                'Operazione NM respinta: '.herr((string)($j['error']??$e??$o)),($c===0&&($j['ok']??false)===true)?'ok':'err');break;
         }
         case 'nm_activate_trial': {
             $back='p=multinic';$clone=(string)($_SESSION['iptm_nm_clone']??'');$uuid=(string)($_POST['clone_uuid']??'');$iface=(string)($_POST['trial_iface']??'');
-            if(($_SESSION['role']??'viewer')!=='admin'||!preg_match('/^[a-fA-F0-9-]{36}$/D',$uuid)||
+            if(($_SESSION['role']??'viewer')!=='admin'||!preg_match('/^[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}$/D',$uuid)||
                 !hash_equals($clone,$uuid)||!preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$/D',$iface)){
                 flash('Clone o interfaccia non verificabili.','err');break;
             }
@@ -51,7 +51,7 @@ switch ($a) {
             [$c,$o,$e]=priv('nm-editor',null,[$op,$token]);$j=json_decode($o,true);
             if($c===0&&!empty($j['ok']))unset($_SESSION['iptm_nm_trial']);
             flash($c===0&&!empty($j['ok'])?'Transazione NetworkManager '.($op==='confirm-trial'?'confermata':'ripristinata').'.':
-                'Checkpoint non finalizzato: '.herr((string)($j['error']??$e??$o)),$c===0?'ok':'err');break;
+                'Checkpoint non finalizzato: '.herr((string)($j['error']??$e??$o)),($c===0&&($j['ok']??false)===true)?'ok':'err');break;
         }
         case 'nm_profile_save': case 'nm_bond_port': {
             $back='p=multinic';
@@ -213,7 +213,7 @@ switch ($a) {
                     flash('Validazione ok ma applicazione non confermata: ' . herr((string)($result['error'] ?? 'esito sconosciuto')), 'err');
                 } else {
                     audit('dhcp-reservations applied n=' . (int)($result['hosts_written'] ?? $result['count'] ?? 0));
-                    flash('Prenotazioni Pi-hole verificate: ' . (int)($result['hosts_written'] ?? $result['count'] ?? 0) . ' totali, ' . (int)($result['hosts_preserved'] ?? 0) . ' precedenti preservate e ' . (int)($result['hosts_added'] ?? 0) . ' aggiunte. Backup root-only creato se è stata eseguita una modifica.');
+                    flash('Reservation applicate su Pi-hole: ' . (int)($result['hosts_written'] ?? $result['count'] ?? 0) . ' host (dhcp.hosts).');
                 }
             } else {
                 $warnN = count((array)($result['warnings'] ?? []));
@@ -296,19 +296,19 @@ switch ($a) {
 
 case 'wg_init': {
             $pt = trim((string)($_POST['port'] ?? '')); $net = trim((string)($_POST['net'] ?? '')); $ep = trim((string)($_POST['ep'] ?? '')); $dns = trim((string)($_POST['dns'] ?? ''));
-            if (!v_ok('port', $pt) || $pt === '' || !preg_match('~^(\d{1,3}\.){3}0/24$~', $net) || !preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]{0,98}$/', $ep) || ($dns !== '' && !v_ok('ip', $dns))) { flash('Parametri non validi (rete /24 del tipo 10.8.0.0/24).', 'err'); break; }
+            if (!v_ok('port', $pt) || $pt === '' || !preg_match('~^(\d{1,3}\.){3}0/24$~D', $net) || !preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]{0,98}$/D', $ep) || ($dns !== '' && !v_ok('ip', $dns))) { flash('Parametri non validi (rete /24 del tipo 10.8.0.0/24).', 'err'); break; }
             [$c, $o, $e] = priv('wg-init', null, [$pt, $net, $ep, $dns]); audit('wireguard: creazione server');
             if ($c === 0) { $S = S_get(); $S['wg_port'] = (int)$pt; $S['wg_net'] = $net; S_put($S); }
             flash($c === 0 ? 'Server WireGuard creato. Attiva le regole firewall qui sotto e applica.' : herr($o . $e), $c === 0 ? 'ok' : 'err'); break;
         }
         case 'wg_add': {
             $n = trim((string)($_POST['name'] ?? '')); $mode = ($_POST['mode'] ?? '') === 'lan' ? 'lan' : 'full'; $lan = preg_replace('/\s+/', '', (string)($_POST['lan'] ?? ''));
-            if (!preg_match('/^[a-z0-9_-]{1,20}$/', $n) || ($mode === 'lan' && !v_ok('nets', $lan))) { flash('Nome o reti non validi.', 'err'); break; }
+            if (!preg_match('/^[a-z0-9_-]{1,20}$/D', $n) || ($mode === 'lan' && !v_ok('nets', $lan))) { flash('Nome o reti non validi.', 'err'); break; }
             [$c, $o, $e] = priv('wg-peer-add', null, array_merge([$n, $mode], $mode === 'lan' ? [$lan] : [])); audit("wireguard: nuovo client $n");
             flash($c === 0 ? trim($o) . ' — apri «Configurazione / QR» per consegnarlo.' : herr($o . $e), $c === 0 ? 'ok' : 'err'); break;
         }
-        case 'wg_del': { $n = trim((string)($_POST['name'] ?? '')); if (!preg_match('/^[a-z0-9_-]{1,20}$/', $n)) { flash('Nome non valido.', 'err'); break; } [$c, $o, $e] = priv('wg-peer-del', null, [$n]); audit("wireguard: client $n eliminato"); flash($c === 0 ? trim($o) : herr($o . $e), $c === 0 ? 'ok' : 'err'); break; }
-        case 'wg_svc': { $act = (string)($_POST['act'] ?? ''); $iface = (string)($_POST['iface'] ?? 'wg0'); if (!in_array($act, ['start', 'stop', 'restart'], true) || !preg_match('/^[A-Za-z0-9_.-]{1,15}$/', $iface)) { flash('Richiesta non valida.', 'err'); break; } [$c, $o, $e] = priv('wg-svc', null, [$act, $iface]); audit("wireguard: $act $iface"); flash($c === 0 ? "WireGuard $iface: $act eseguito." : herr($o . $e), $c === 0 ? 'ok' : 'err'); break; }
+        case 'wg_del': { $n = trim((string)($_POST['name'] ?? '')); if (!preg_match('/^[a-z0-9_-]{1,20}$/D', $n)) { flash('Nome non valido.', 'err'); break; } [$c, $o, $e] = priv('wg-peer-del', null, [$n]); audit("wireguard: client $n eliminato"); flash($c === 0 ? trim($o) : herr($o . $e), $c === 0 ? 'ok' : 'err'); break; }
+        case 'wg_svc': { $act = (string)($_POST['act'] ?? ''); $iface = (string)($_POST['iface'] ?? 'wg0'); if (!in_array($act, ['start', 'stop', 'restart'], true) || !preg_match('/^[A-Za-z0-9_.-]{1,15}$/D', $iface)) { flash('Richiesta non valida.', 'err'); break; } [$c, $o, $e] = priv('wg-svc', null, [$act, $iface]); audit("wireguard: $act $iface"); flash($c === 0 ? "WireGuard $iface: $act eseguito." : herr($o . $e), $c === 0 ? 'ok' : 'err'); break; }
         case 'wg_mgmt_nets': {
             $S = S_get();
             $S['ui_nets'] = wg_mgmt_nets_suggest($S);

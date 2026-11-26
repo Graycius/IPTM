@@ -12,6 +12,7 @@ case 'qos_postinstall_ensure': {
 
 case 'qos_policy_stage': {
     $back='p=sqm';if(($_SESSION['role']??'viewer')!=='admin'){flash('Admin richiesto','err');break;}
+    unset($_SESSION['iptm_qos_policy_stage']);
     $iface=(string)($_POST['interface']??'');$raw=(string)($_POST['policy_rules']??'');$rules=[];
     if(strlen($raw)>4000||!preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$/D',$iface)){flash('WAN o lunghezza policy non valida','err');break;}
     $presets=iptm_qos_dscp_recommendations();
@@ -27,7 +28,7 @@ case 'qos_policy_stage': {
     }
     foreach(preg_split('/\r?\n/',$raw) as $line){
         $line=trim($line);if($line==='')continue;$parts=array_map('trim',explode(',',$line));
-        if(count($parts)<3||count($parts)>5||!in_array($parts[0],['tcp','udp'],true)||!ctype_digit($parts[1])||
+        if(count($parts)<3||count($parts)>5||!in_array($parts[0],['tcp','udp'],true)||!ctype_digit($parts[1])||(int)$parts[1]<1||(int)$parts[1]>65535||
            !in_array($parts[2],['realtime','interactive','normal','background'],true)){
             flash('Regola non valida: '.herr($line),'err');break 2;
         }

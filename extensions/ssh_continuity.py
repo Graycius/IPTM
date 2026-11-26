@@ -6,6 +6,8 @@ rules are transient and disappear on the next managed ruleset replacement.
 The actual generator fix is the permanent solution.
 """
 from __future__ import annotations
+
+from command_transport import capture
 import ipaddress
 import json
 import os
@@ -29,8 +31,7 @@ def trusted_ipv4(value):
 
 def run(args,check=True):
     try:
-        r=subprocess.run(args,stdin=subprocess.DEVNULL,capture_output=True,
-                         text=True,timeout=9)
+        r=capture(args,timeout=9)
     except (OSError,subprocess.TimeoutExpired) as exc:
         raise RecoveryError('iptables non disponibile: '+type(exc).__name__) from exc
     if check and r.returncode:
@@ -51,6 +52,7 @@ def has_value(tokens,key,value):
 def allowed_existing_login(rules,addr):
     address=ipaddress.ip_address(addr)
     for tokens in rules:
+        if '!' in tokens or '-g' in tokens or '--goto' in tokens:continue
         if not has_value(tokens,'-j','ACCEPT') or not has_value(tokens,'-p','tcp'):
             continue
         try:source=tokens[tokens.index('-s')+1]
@@ -81,7 +83,7 @@ def safe_existing_ssh(rules):
 def safe_rule_spec(ip,kind):
     spec=['-p','tcp','--dport','22','-m','conntrack']
     if kind=='est':
-        spec+=['--ctstate','ESTABLISHED,RELATED']
+        spec+=['--ctstate','ESTABLISHED,RELATED','-s',ip+'/32']
         tag=TAG_EST
     else:
         spec+=['--ctstate','NEW','--syn','-s',ip+'/32']

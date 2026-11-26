@@ -111,7 +111,7 @@ function sys_propose(?array $S = null): array {
 
     // --- WireGuard ---
     $wg = false;
-    foreach ($ifNames as $n) if (preg_match('/^wg\d+$/', $n)) $wg = true;
+    foreach ($ifNames as $n) if (preg_match('/^wg\d+$/D', $n)) $wg = true;
     if ($wg || is_file('/usr/bin/wg') || !empty($S['wg_on'])) {
         $add('vpn:wg', 'VPN', 'WireGuard',
             $wg ? 'Interfaccia wg* attiva: apri la porta UDP e accetta traffico da wg.' : 'WireGuard installato: abilita le regole dedicate (pagina VPN).',
@@ -177,8 +177,7 @@ function sys_propose_apply(array $S, array $selectedIds): array {
     foreach (sys_propose($S) as $p) $byId[$p['id']] = $p;
     $nKeys = 0; $apps = array_values((array)($S['apps'] ?? []));
     foreach ($selectedIds as $id) {
-        $id = (string)$id;
-        if (!isset($byId[$id])) continue;
+        if (!is_string($id)||!isset($byId[$id])) continue;
         $p = $byId[$id];
         foreach ($p['keys'] as $k => $v) {
             if (($S[$k] ?? null) !== $v) { $S[$k] = $v; $nKeys++; }
@@ -191,65 +190,33 @@ function sys_propose_apply(array $S, array $selectedIds): array {
     return [$S, $nKeys, count($apps)];
 }
 
-function pg_advise() {
-    $S = S_get();
-    $ro = ($_SESSION['role'] ?? 'viewer') === 'viewer';
-    $props = sys_propose($S);
-    $todo = array_values(array_filter($props, fn($p) => !$p['active'] && ($p['keys'] || $p['apps'])));
-    $done = array_values(array_filter($props, fn($p) => $p['active']));
-    $info = array_values(array_filter($props, fn($p) => !$p['active'] && !$p['keys'] && !$p['apps']));
-
-    echo '<div class=card><h2>Analisi sistema → opzioni consigliate</h2>';
-    echo '<p class=mut>Scansione di interfacce, IP forwarding, software installato, porte in ascolto, CrowdSec/Docker/WireGuard e confronto con le impostazioni attuali. '
-        . 'Seleziona le proposte e salva: si aggiornano le impostazioni e la <b>bozza</b>; il kernel cambia solo dopo <b>Applica</b>.</p>';
-    echo '<p>Proposte attivabili: <b>' . count($todo) . '</b> · Già attive: <b>' . count($done) . '</b>'
-        . ' · LAN: <code>' . h(trim((string)($S['lan_nets'] ?? '')) ?: '—') . '</code>'
-        . ' · WAN: <code>' . h(trim((string)($S['wan_if'] ?? '')) ?: '—') . '</code></p>';
-    echo '<p class=ops><a class=s href="?p=advise&refresh=1">🔄 Riesegui analisi</a> '
-        . '<a class=s href="?p=system">Rilevamento tecnico</a> '
-        . '<a class=s href="?p=apps">Porte software</a></p>';
-    echo '</div>';
-
-    if ($ro) {
-        echo '<div class=card><p class=mut>Solo lettura (viewer).</p></div>';
-        return;
+function pg_advise(): void {
+    $settings=S_get();$admin=($_SESSION['role']??'viewer')==='admin';
+    $groups=['todo'=>[],'active'=>[],'info'=>[]];
+    foreach(sys_propose($settings) as $proposal) {
+        $group=!empty($proposal['active'])?'active':((!empty($proposal['keys'])||!empty($proposal['apps']))?'todo':'info');
+        $groups[$group][]=$proposal;
     }
-
-    if (!$todo) {
-        echo '<div class=card><p>✅ Nessuna nuova opzione ovvia da attivare. Il sistema risulta già allineato alle rilevazioni, oppure completa Setup (LAN/WAN).</p></div>';
-    } else {
-        echo '<form method=post>' . fh('p=advise') . '<input type=hidden name=action value=advise_apply>';
-        echo '<div class=card><h3>Da attivare</h3>';
-        echo '<p><button type=button class=s onclick="document.querySelectorAll(\'.pcb\').forEach(c=>c.checked=true)">Seleziona tutto</button> '
-            . '<button type=button class=s onclick="document.querySelectorAll(\'.pcb\').forEach(c=>c.checked=false)">Nessuna</button></p>';
-        echo '<table><tr><th></th><th>Priorità</th><th>Categoria</th><th>Opzione</th><th>Perché</th></tr>';
-        $prioLab = [1 => 'alta', 2 => 'media', 3 => 'bassa'];
-        foreach ($todo as $p) {
-            $pr = $prioLab[$p['priority']] ?? (string)$p['priority'];
-            // default: seleziona priorità alta
-            $chk = $p['priority'] <= 1 ? ' checked' : '';
-            echo '<tr><td><input type=checkbox class=pcb name="sel[]" value="' . h($p['id']) . '"' . $chk . '></td>'
-                . '<td>' . h($pr) . '</td><td>' . h($p['cat']) . '</td>'
-                . '<td><b>' . h($p['title']) . '</b><br><small class=mut><code>' . h($p['id']) . '</code></small></td>'
-                . '<td>' . h($p['why']) . '</td></tr>';
+    iptm_view_start('Analisi e suggerimenti','Le proposte derivano dalle rilevazioni locali. Il salvataggio modifica la bozza, non il firewall attivo.');
+    iptm_view_table(['Indicatore','Valore'],[['Proposte disponibili',count($groups['todo'])],['Già attive',count($groups['active'])],['LAN',$settings['lan_nets']??''],['WAN',$settings['wan_if']??'']],'Riepilogo');
+    echo '<div class="iptm-workspace-actions">'.iptm_view_link('advise','Riesegui analisi',['refresh'=>'1']).iptm_view_link('system','Rilevamento tecnico').iptm_view_link('apps','Porte software').'</div>';
+    iptm_view_end();
+    iptm_view_start('Proposte disponibili','Seleziona solo le modifiche che intendi effettuare. Nessuna è preselezionata.');
+    if($admin&&$groups['todo']) {
+        iptm_view_form('advise','advise_apply');
+        echo '<div class="iptm-table-scroll"><table><thead><tr><th>Selezione</th><th>Priorità</th><th>Categoria</th><th>Opzione e motivazione</th></tr></thead><tbody>';
+        foreach($groups['todo'] as $p) {
+            $title=(string)($p['title']??'');
+            echo '<tr><td>'.iptm_edit_check('sel[]','Seleziona '.$title,false,(string)$p['id']).'</td><td>'.iptm_view_text([1=>'Alta',2=>'Media',3=>'Bassa'][$p['priority']]??$p['priority']).'</td><td>'.iptm_view_text($p['cat']).'</td><td><strong>'.iptm_view_text($title).'</strong><p>'.iptm_view_text($p['why']).'</p></td></tr>';
         }
-        echo '</table>';
-        echo '<p class=sticky><button>💾 Attiva selezionate (bozza)</button> '
-            . '<button class=g name=apply value=1>🚀 Attiva e applica</button> '
-            . '<span class=mut>Le opzioni finiscono in impostazioni + blocchi IPTM; le porte software in apps[].</span></p>';
-        echo '</div></form>';
+        echo '</tbody></table></div><div class="iptm-workspace-actions"><button type="submit" class="g">Salva selezione nella bozza</button><button type="submit" class="s" name="apply" value="1">Salva e prova con rollback</button></div></form>';
+    } else {
+        $rows=[];foreach($groups['todo'] as $p)$rows[]=[$p['title'],$p['cat'],$p['why']];
+        iptm_view_table(['Opzione','Categoria','Motivazione'],$rows,'Proposte in consultazione');
     }
-
-    if ($done) {
-        echo '<details class=card><summary><b>Già attive</b> <span class=mut>(' . count($done) . ')</span></summary><ul>';
-        foreach ($done as $p) echo '<li><b>' . h($p['title']) . '</b> <span class=mut>— ' . h($p['cat']) . '</span></li>';
-        echo '</ul></details>';
-    }
-    if ($info) {
-        echo '<details class=card><summary><b>Note informative</b></summary><ul>';
-        foreach ($info as $p) echo '<li><b>' . h($p['title']) . '</b> — ' . h($p['why']) . '</li>';
-        echo '</ul></details>';
+    iptm_view_end();
+    foreach(['active'=>'Già attive','info'=>'Note informative'] as $key=>$title) {
+        iptm_view_start($title);$rows=[];foreach($groups[$key] as $p)$rows[]=[$p['title'],$p['cat'],$p['why']];
+        iptm_view_table(['Opzione','Categoria','Motivazione'],$rows,$title);iptm_view_end();
     }
 }
-
-

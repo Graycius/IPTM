@@ -6,6 +6,8 @@ Network-risk checks are read-only and explicitly opt-in. There is no
 virtual rollback: the simulator never mutates live state.
 """
 from __future__ import annotations
+
+from command_transport import capture, OutputLimitError
 import collections, datetime as dt, fcntl, hashlib, ipaddress, itertools, json, math, os, pathlib, re, stat, subprocess, sys, tempfile, time, uuid, shutil, tomllib
 
 ROOT=pathlib.Path('/var/lib/iptm-diagnostics')
@@ -41,36 +43,26 @@ def ensure():
     if st.st_uid!=0 or not stat.S_ISDIR(st.st_mode) or st.st_mode&0o077:raise ValueError('Directory diagnostica non protetta')
 
 def locked():
-    """Serialize start/clear; isolated from simulated state and never touches network."""
+    """Serialize start/clear; isolated from simulated state."""
     ensure()
-    lock=ROOT/".ops.lock"
-    flags=os.O_CREAT|os.O_RDWR|getattr(os,"O_NOFOLLOW",0)
-    fd=os.open(lock,flags,0o600)
-    if os.fstat(fd).st_uid!=0 or os.fstat(fd).st_mode&0o077:
-        os.close(fd);raise ValueError("Lock diagnostica non protetto")
-    fcntl.flock(fd,fcntl.LOCK_EX)
-    return fd
+    from command_transport import acquire_domain_lock
+    return acquire_domain_lock(ROOT/'.ops.lock')
 
 def atomic(p,data):
     ensure()
-    if p.is_symlink():raise ValueError('File diagnostico simbolico')
-    fd,temp=tempfile.mkstemp(dir=ROOT,prefix='.iptm-')
-    try:
-        with os.fdopen(fd,'w',encoding='utf-8') as f:
-            os.fchmod(f.fileno(),0o600);json.dump(data,f,ensure_ascii=False,sort_keys=True);f.flush();os.fsync(f.fileno())
-        os.replace(temp,p)
-    finally:
-        if os.path.exists(temp):os.unlink(temp)
+    from command_transport import durable_json
+    durable_json(p,data,ensure_ascii=False)
+
 
 def read(p):
-    if p.is_symlink() or not p.is_file() or p.stat().st_size>2_000_000:return None
-    if p.stat().st_uid!=0 or p.stat().st_mode&0o077:return None
-    try:return json.loads(p.read_text(encoding='utf-8'))
-    except (OSError,ValueError):return None
+    from command_transport import read_private_json
+    try:return read_private_json(p,limit=2000000)
+    except (OSError,ValueError,UnicodeError):return None
+
 
 def probe(args,timeout=3,maxsize=2400):
     try:
-        p=subprocess.run(args,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=timeout,env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C'})
+        p=capture(args,timeout=timeout,env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C'})
         return {'exit':p.returncode,'output':clean((p.stdout+'\n'+p.stderr)[:maxsize],maxsize)}
     except (OSError,subprocess.TimeoutExpired) as e:return {'exit':124,'output':clean(type(e).__name__)}
 
@@ -427,7 +419,7 @@ def _command(argv, timeout=5, content=None, maxsize=1000):
               'env':{'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C'}}
         if content is None:args['stdin']=subprocess.DEVNULL
         else:args['input']=content
-        result=subprocess.run(argv,**args)
+        result=capture(argv,timeout=timeout,input_data=content,text=False,env=args['env'],stdout_limit=1048576,stderr_limit=262144)
         message=(result.stdout+b'\n'+result.stderr)[:maxsize].decode('utf-8','replace')
         return result.returncode,clean(message,maxsize)
     except subprocess.TimeoutExpired:return 124,'Timeout del controllo non distruttivo'

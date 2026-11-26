@@ -6,10 +6,10 @@ function norm_extra(string $x): string {   // stesso significato = stessa string
         if ($w[$i] === '-m' && in_array($w[$i + 1] ?? '', ['tcp', 'udp', 'icmp'], true)) { $i++; continue; }
         // default xt_recent: mask host e rsource
         if ($w[$i] === '--mask' && ($w[$i + 1] ?? '') === '255.255.255.255') { $i++; continue; }
-        if ($w[$i] === '--rsource' || $w[$i] === '--rdest') continue;
+        if ($w[$i] === '--rsource') continue; // --rdest changes the key used by recent and must remain
         if ($w[$i] === '--log-level' && ($w[$i + 1] ?? '') === '4') { $i++; continue; }
         if ($w[$i] === '--connlimit-saddr') continue;
-        if ($w[$i] === '--tarpit') continue;
+        // TARPIT mode options must not be discarded.
         $t[] = $w[$i];
     }
     $segs = [[]]; foreach ($t as $k) { if ($k === '-m') $segs[] = []; $segs[count($segs) - 1][] = $k; }
@@ -83,7 +83,7 @@ function rules_cleanup_scan(array $M): array {
         if (($b['k'] ?? '') !== 'table') continue;
         $tn = $b['name'];
         $items = $b['items'];
-        $seen = []; // chain => key => first idx
+        $seen = []; // chain => previous active rule (conservative, adjacent only)
         $term = []; // chain => true after catchall terminal
         foreach ($items as $i => $it) {
             if ($it['t'] !== 'rule') continue;
@@ -102,12 +102,15 @@ function rules_cleanup_scan(array $M): array {
             }
 
             // duplicate exact (canonical key)
-            $key = $ch . '|' . rkey($raw);
-            if (isset($seen[$key])) {
+            $key = trim($raw);
+            $pure = in_array($tg, ['ACCEPT','DROP','REJECT'], true)
+                && !preg_match('/(?:^|\s)(?:-m\s+(?!(?:tcp|udp|icmp|multiport|conntrack|state|comment)(?:\s|$))|--(?:set|update|remove|rcheck|limit|hashlimit|statistic)\b)/', $raw);
+            $duplicate = $pure && ($seen[$ch] ?? null) === $key;
+            $seen[$ch] = $pure ? $key : null;
+            if ($duplicate) {
                 $findings[] = $base + ['cat' => 'duplicate', 'sev' => 'warn', 'why' => 'Duplicato esatto di una regola precedente nella stessa catena'];
                 continue;
             }
-            $seen[$key] = $i;
 
             // unreachable after terminal catch-all in same chain
             if (!empty($term[$ch])) {
@@ -170,6 +173,8 @@ function rules_cleanup_scan(array $M): array {
             if ($it['t'] !== 'rule' || empty($it['on'])) continue;
             $f = rule_parse($it['r']);
             if ($f['target'] !== '') $jumped[$b['name']][$f['target']] = 1;
+            if (preg_match_all('/(?:^|\s)(?:-g|--goto|--jump)\s+([A-Za-z0-9_.:-]{1,28})(?:\s|$)/', $it['r'], $targets))
+                foreach ($targets[1] as $target) $jumped[$b['name']][$target] = 1;
         }
     }
     foreach ($M as $ti => $b) {
@@ -214,6 +219,7 @@ function rules_cleanup_apply(array &$M, array $cats, bool $includeManaged = fals
         if (!empty($f['managed']) && !$includeManaged) continue;
         // non eliminare definizioni chain built-in
         if (($f['cat'] ?? '') === 'orphan_chain' && in_array($f['c'] ?? '', BUILTIN[$f['t']] ?? [], true)) continue;
+        if (in_array($f['i'], $del[$f['ti']] ?? [], true)) continue;
         $del[$f['ti']][] = $f['i'];
         $done[] = $f;
     }

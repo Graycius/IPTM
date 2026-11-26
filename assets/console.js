@@ -60,6 +60,7 @@
    if(e.key==='Enter'&&matched[selected]){e.preventDefault();location.assign(matched[selected].href);}
  });
  dialog?.addEventListener('click',e=>{if(e.target===dialog)close();});
+ dialog?.addEventListener('close',()=>{search?.setAttribute('aria-expanded','false');search?.removeAttribute('aria-activedescendant');$('#iptm-open-search')?.focus();});
  doc.addEventListener('keydown',e=>{
    if(e.defaultPrevented||e.isComposing||e.altKey)return;
    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();open();}

@@ -78,29 +78,22 @@ function required_tools(array $S): array {
 }
 function tools_status(): array {
     return kc('tools', function () {
-        [$c, $o, $e] = priv('tool-status');
-        $r = []; $GLOBALS['_iptm_tools_status_error'] = '';
-        if ($c !== 0) {
-            $detail = trim((string)($e !== '' ? $e : $o));
-            $GLOBALS['_iptm_tools_status_error'] = 'Comando tool-status non riuscito (exit ' . $c . '). ' . substr($detail, 0, 400);
-            return [];
+        [$c,$o,$e]=priv('tool-status');
+        $r=[];$problems=[];$defs=tool_defs();
+        $unknown=['inst'=>false,'partial'=>false,'known'=>false,'svc'=>'n/d','cand'=>false,'cand_known'=>false,'run'=>false,'run_known'=>false];
+        if($c!==0)$problems[]='Comando tool-status (exit '.$c.'): '.substr(trim($e!==''?$e:$o),0,400);
+        // Retain individually valid rows, even when another probe fails. Never infer absence from missing rows.
+        $seen=[];
+        foreach(explode("\n",trim($o)) as $line){
+            if(trim($line)==='')continue;$x=preg_split('/\s+/',trim($line));$k=$x[0]??'';
+            if(!isset($defs[$k]))continue;
+            if(isset($seen[$k])){$r[$k]=$unknown;$problems[]='Riga duplicata: '.$k;continue;}$seen[$k]=true;
+            if(count($x)!==5||!in_array($x[1],['installed','absent','partial','unknown'],true)||!in_array($x[3],['yes','no','unknown'],true)||!in_array($x[4],['idle','running','unknown'],true)){$problems[]='Riga non valida: '.$k;continue;}
+            // On transport failure only positive evidence of installation survives; never authorize installation from partial output.
+            $r[$k]=['inst'=>$x[1]==='installed','partial'=>$x[1]==='partial','known'=>$c===0?$x[1]!=='unknown':$x[1]==='installed','svc'=>$x[2],'cand'=>$x[3]==='yes','cand_known'=>$c===0&&$x[3]!=='unknown','run'=>$x[4]==='running','run_known'=>$c===0&&$x[4]!=='unknown'];
         }
-        foreach (explode("\n", trim($o)) as $l) {
-            if (trim($l) === '') continue;
-            $x = preg_split('/\s+/', trim($l));
-            if (count($x) !== 5 || !isset(tool_defs()[$x[0]]) || !in_array($x[1], ['installed', 'absent', 'partial', 'unknown'], true)
-                || !in_array($x[3], ['yes', 'no', 'unknown'], true) || !in_array($x[4], ['idle', 'running', 'unknown'], true) || isset($r[$x[0]])) {
-                $GLOBALS['_iptm_tools_status_error'] = 'Risposta tool-status non valida: helper non aggiornato o output inatteso.';
-                return [];
-            }
-            $r[$x[0]] = ['inst' => $x[1] === 'installed', 'partial' => $x[1] === 'partial', 'known' => $x[1] !== 'unknown',
-                'svc' => $x[2], 'cand' => $x[3] === 'yes', 'cand_known' => $x[3] !== 'unknown',
-                'run' => $x[4] === 'running', 'run_known' => $x[4] !== 'unknown'];
-        }
-        if (array_diff(array_keys(tool_defs()), array_keys($r))) {
-            $GLOBALS['_iptm_tools_status_error'] = 'Elenco dei programmi incompleto: controlla versioni app/helper o timeout.';
-            return [];
-        }
+        foreach($defs as $k=>$_)if(!isset($r[$k])){$r[$k]=$unknown;$problems[]='Stato mancante: '.$k;}
+        $GLOBALS['_iptm_tools_status_error']=implode('; ',array_unique($problems));
         return $r;
     });
 }
@@ -119,9 +112,8 @@ function pg_progs() {
     if(!$ro) echo '<form method=post>'.fh('p=progs').'<input type=hidden name=action value=modules_repair><button type=submit class=s>Verifica/ripara moduli PHP dopo aggiornamento</button></form>';
     echo '<div class=card><h2>Programmi di sicurezza e monitoraggio</h2><p class=mut>Installazione e configurazione guidate (apt). Ogni configurazione viene verificata prima dell\'attivazione. I servizi con catene proprie (fail2ban, bouncer CrowdSec) vengono riavviati dopo ogni «Applica».</p>';
     if ($why = ($GLOBALS['_iptm_tools_status_error'] ?? '')) {
-        echo '<div class="msg err"><b>Rilevamento non disponibile.</b> Non significa che i programmi siano assenti. Aggiorna la diagnosi dal wizard prima di installare. ' . h($why) . '</div>';
-        echo '<p class=mut>Verifica via SSH: sudo /usr/local/sbin/iptm-helper version; sudo /usr/local/sbin/iptm-helper tool-status. Verifica anche permessi sudo dell’utente web. Nessuna installazione viene avviata da questa pagina finché lo stato è ignoto.</p></div>';
-        return;
+        echo '<div class="msg err"><b>Rilevamento parziale o non disponibile.</b> Non significa che i programmi siano assenti. Aggiorna la diagnosi dal wizard prima di installare. ' . h($why) . '</div>';
+        echo '<p class=mut>Verifica via SSH: sudo /usr/local/sbin/iptm-helper version; sudo /usr/local/sbin/iptm-helper tool-status. Verifica anche permessi sudo dell’utente web. Nessuna installazione viene avviata da questa pagina finché lo stato è ignoto.</p>';
     }
     // Repository discovery and systemd are independent probes.  Unknown repository
     // state is not proof that an APT installation is impossible.  An explicit
@@ -182,13 +174,13 @@ function pg_progs() {
         }
         if ($sug) $state = '<span class="b b-jump">richiesto</span> ' . $state;
         echo '<tr id="tool-' . h($k) . '"' . ($sug ? ' data-iptm-layout="ui-5a53d8fdf9"' : '') . '>';
-        if (!$ro && !$running) echo '<td><input type=checkbox form=qform name="tools[]" value="' . h($k) . '"' . ($sug ? ' checked' : '') . (!empty($t['inst']) || (!empty($t['cand_known']) && empty($t['cand'])) ? ' disabled' : '') . '></td>';
+        if (!$ro && !$running) echo '<td><input type=checkbox form=qform name="tools[]" value="' . h($k) . '"' . ($sug ? ' checked' : '') . (empty($t['known']) || empty($t['run_known']) || !empty($t['inst']) || (!empty($t['cand_known']) && empty($t['cand'])) ? ' disabled' : '') . '></td>';
         echo '<td>';
-        if (!$ro && !$running && empty($t['inst']) && (!empty($t['cand']) || empty($t['cand_known'])) && $arg==='') {
+        if (!$ro && !$running && !empty($t['known']) && !empty($t['run_known']) && empty($t['inst']) && (!empty($t['cand']) || empty($t['cand_known'])) && $arg==='') {
             echo '<form method=post style="display:inline">'.fh('p=progs').'<input type=hidden name=action value=tool_install><input type=hidden name=tool value="'.h($k).'"><button class="s sm" title="Installa programma">'.h($name).'</button></form>';
         } else echo '<a href="?p=progs#tool-' . h($k) . '"><b>' . h($name) . '</b></a>';
         echo '<br><span class=mut>' . h($desc) . '</span></td><td>' . $state . '</td><td>';
-        if (!$ro && !$t['run'] && (!empty($t['inst']) || !empty($t['cand']) || empty($t['cand_known']))) {
+        if (!$ro && !empty($t['known']) && !empty($t['run_known']) && !$t['run'] && (!empty($t['inst']) || !empty($t['cand']) || empty($t['cand_known']))) {
             if ($k === 'wireguard' && $t['inst']) {
                 echo '<a class="btn s sm" href="?p=vpn">Apri gestione VPN</a>';
             } else {
@@ -202,8 +194,10 @@ function pg_progs() {
                 };
                 echo '<button class="' . ($t['inst'] ? 's' : 'g') . ' sm">' . h($toolActionLabel) . '</button></form>';
             }
-            if ($t['inst'] && $t['svc'] !== '-' && $k !== 'wireguard') echo ' <form method=post class=ops style="display:inline">' . fh('p=progs') . '<input type=hidden name=action value=tool_svc><input type=hidden name=tool value="' . h($k) . '">' . sel('act', ['restart' => 'Riavvia', 'start' => 'Avvia', 'stop' => 'Ferma']) . ' <button class="s sm">Esegui</button></form>';
+            if ($t['inst'] && !in_array($t['svc'],['-','n/d','unknown','?'],true) && $k !== 'wireguard') echo ' <form method=post class=ops style="display:inline">' . fh('p=progs') . '<input type=hidden name=action value=tool_svc><input type=hidden name=tool value="' . h($k) . '">' . sel('act', ['restart' => 'Riavvia', 'start' => 'Avvia', 'stop' => 'Ferma']) . ' <button class="s sm">Esegui</button></form>';
         }
+        $toolLinks=['unbound'=>['dns','DNS e profili'],'dnscrypt'=>['dns','DNS e profili'],'wireguard'=>['vpn','Gestione VPN'],'crowdsec'=>['crowdsec','Gestione CrowdSec']];
+        if(isset($toolLinks[$k])){[$route,$label]=$toolLinks[$k];echo ' <a class="btn s sm" href="?p='.h($route).'">'.h($label).'</a>';}
         echo '</td></tr>';
         $lg = $logs[$k] ?? ''; if (trim($lg) !== '') echo '<tr><td colspan=' . (!$ro && !$running ? 4 : 3) . '><details' . ($t['run'] ? ' open' : '') . '><summary>Registro di ' . h($name) . '</summary><pre data-iptm-layout="ui-e9391a53f7">' . h($lg) . '</pre></details></td></tr>';
     }
@@ -271,10 +265,10 @@ function wg_info(): array {
         return $r; });
 }
 function wg_preferred_iface(array $detected, string $saved = 'wg0'): string {
-    $valid = array_values(array_unique(array_filter($detected, fn($x) => is_string($x) && preg_match('/^[A-Za-z0-9_.-]{1,15}$/', $x))));
+    $valid = array_values(array_unique(array_filter($detected, fn($x) => is_string($x) && preg_match('/^[A-Za-z0-9_.-]{1,15}$/D', $x))));
     if (in_array($saved, $valid, true)) return $saved;
     if ($valid) return $valid[0];
-    return preg_match('/^[A-Za-z0-9_.-]{1,15}$/', $saved) ? $saved : 'wg0';
+    return preg_match('/^[A-Za-z0-9_.-]{1,15}$/D', $saved) ? $saved : 'wg0';
 }
 function pg_vpn() {
     $S = S_get(); $w = wg_info(); $ro = ($_SESSION['role'] ?? 'viewer') === 'viewer'; $show = (string)($_GET['show'] ?? '');
@@ -309,10 +303,9 @@ function pg_vpn() {
     $wgOpts = array_combine($wgIfaces, $wgIfaces);
     if (!$ro) echo '<form method=post class=ops>' . fh('p=vpn') . '<input type=hidden name=action value=wg_svc>' . sel('iface', $wgOpts, $wgSelected) . ' ' . sel('act', ['restart' => 'Riavvia', 'start' => 'Avvia', 'stop' => 'Ferma']) . ' <button class="s sm">Esegui</button></form>';
     if (!empty($w['dietpi_tool']) && $w['dietpi_list']) echo '<details class=card><summary><b>Client rilevati da DietPi</b> <span class=mut>dietpi-wireguard list</span></summary><pre>' . h(implode("\n", $w['dietpi_list'])) . '</pre><p class=mut>Per creare, disabilitare, abilitare o rimuovere client usa il gestore nativo <code>dietpi-wireguard</code>; IPTM lascia intatti file e chiavi esterni.</p></details>';
-    echo '<form method=post class=acc data-iptm-layout="mt12">' . fh('p=vpn') . '<input type=hidden name=action value=settings_save><input type=hidden name=sec value=vpn><h3>Regole firewall della VPN</h3>'
+    echo '<form method=post class=acc data-iptm-layout="mt12">' . fh('p=vpn') . '<input type=hidden name=action value=settings_save><input type=hidden name=sec value=vpn><h3>Regole firewall della VPN</h3><p class=mut>1. Seleziona interfaccia e subnet peer. 2. Scegli servizi locali e destinazioni inoltrate. 3. Salva la bozza, verifica e applica con rollback. La lista di servizi non annulla altre regole.</p>'
         . dd('Interfaccia WireGuard', sel('wg_if', $wgOpts, $wgSelected), 'Scegli wg0, wg1 o l’interfaccia rilevata da DietPi. Le regole generate useranno questa interfaccia.')
-        . '<div class=msg warn><b>Accesso VPN ai servizi locali:</b> Internet tramite VPN non implica accesso alla LAN. Per SSH/Pi-hole sul DietPi configura una riga <a href="?p=router">Servizi del router (INPUT)</a>; per Home Assistant su un altro host una riga <a href="?p=router">Regole di transito (FORWARD)</a>. Imposta <code>interfaccia ingresso=wg0</code>, subnet sorgente del tunnel verificata (<code>ip -4 addr show wg0</code>), IP destinazione e porte TCP necessarie (es. 22 o 8123). Per i dispositivi LAN serve anche una rotta di risposta verso la subnet WireGuard tramite il gateway VPN; altrimenti una regola ACCEPT non basta. Le opzioni generali «raggiungono router/LAN» aprono tutte le porte/host da wg0: preferisci regole granulari e conserva isolamenti IoT/VLAN.</div>'
-        . opt_rows($S, [['wg_on', 'r', 'Apri la porta UDP WireGuard', 'Genera le regole nella bozza (poi applica).'], ['wg_port', 't', 'Porta UDP', 'Deve coincidere con quella del server.', '110px'], ['wg_lan', 'r', 'I client raggiungono LAN e Internet'], ['wg_input', 'r', 'I client raggiungono anche il router (SSH, interfaccia web)'], ['wg_lan_to_vpn', 'r', 'Consenti LAN → peer WireGuard', 'Disattivo in sicurezza: senza questo consenso, nuove connessioni verso wg0 non sono aperte. Se attivo le sorgenti restano limitate alle subnet LAN.']]) . '<p class=sticky><button>Salva nella bozza</button></p></form>';
+        . opt_rows($S, [['wg_on', 'r', 'Apri la porta UDP WireGuard', 'Genera le regole nella bozza (poi applica).'], ['wg_port', 't', 'Porta UDP', 'Deve coincidere con quella del server.', '110px'], ['wg_lan', 'r', 'Inoltro generale LAN e Internet', 'Disattiva per usare le autorizzazioni selettive. Altre regole e policy possono comunque consentire o bloccare traffico.'], ['wg_internet', 'r', 'Inoltro tramite WAN dedicata', 'Richiede LAN/WAN distinte; disattiva inoltro generale. Non limita altre regole né destinazioni raggiungibili via WAN.'], ['wg_fwd_nets', 't', 'Destinazioni IPv4 inoltrate', 'IP o subnet separati da virgola, es. 192.168.1.20/32. Richiede subnet peer VPN.', '260px'], ['wg_fwd_tcp', 't', 'Porte TCP inoltrate', 'Esempio 22,8123. Non apre servizi sul router.', '260px'], ['wg_fwd_udp', 't', 'Porte UDP inoltrate', 'Esempio 53. Non modifica routing, NAT, IPv6 o isolamento.', '260px'], ['wg_input', 'r', 'I client raggiungono anche il router (SSH, interfaccia web)'], ['wg_net', 't', 'Subnet IPv4 dei peer VPN', 'Necessaria per limitare i servizi locali ai peer autorizzati.', '260px'], ['wg_local_tcp', 't', 'Porte TCP locali (accesso selettivo)', 'Esempio 22,8123,8089. Disattiva accesso completo al router per usare questa lista.', '260px'], ['wg_local_udp', 't', 'Porte UDP locali (accesso selettivo)', 'Esempio 53 per DNS locale. Non modifica isolamento o FORWARD.', '260px'], ['wg_lan_to_vpn', 'r', 'Consenti LAN → peer WireGuard', 'Disattivo in sicurezza: senza questo consenso, nuove connessioni verso wg0 non sono aperte. Se attivo le sorgenti restano limitate alle subnet LAN.']]) . '<p class=sticky><button>Salva nella bozza</button></p></form>';
     echo '<h3>Client</h3><div data-iptm-layout="scroll"><table><tr><th>Nome</th><th>IP VPN</th><th>Ultimo contatto</th><th>Traffico</th><th></th></tr>';
     foreach ($w['peers'] as $p) { $lv = $w['live'][$p['pub']] ?? null; $hs = $lv && $lv['hs'] > 0 ? date('Y-m-d H:i:s', $lv['hs']) : '—';
         echo '<tr><td><b>' . h($p['name']) . '</b></td><td>' . h($p['ip']) . '</td><td>' . h($hs) . '</td><td>' . ($lv ? '↓ ' . hb($lv['rx']) . ' ↑ ' . hb($lv['tx']) : '—') . '</td><td class=ops>';
@@ -320,17 +313,35 @@ function pg_vpn() {
         echo '</td></tr>'; }
     echo '</table></div>' . ($w['peers'] ? '' : '<p class=mut>Nessun client.</p>');
     if (!$ro && ($w['source'] ?? 'iptm') === 'iptm') echo '<form method=post class=row data-iptm-layout="mt10">' . fh('p=vpn') . '<input type=hidden name=action value=wg_add><label class=fl><span>Nome client</span><input name=name pattern="[a-z0-9_-]{1,20}" required placeholder="telefono" data-iptm-layout="ui-eb9e070a2e"></label><label class=fl><span>Traffico</span>' . sel('mode', ['full' => 'Tutto attraverso la VPN', 'lan' => 'Solo VPN e LAN']) . '</label><label class=fl><span>Reti LAN (se «Solo VPN e LAN»)</span><input name=lan value="' . h($S['lan_nets'] ?? '') . '" data-iptm-layout="mw220"></label><button class=g>Aggiungi client</button></form>';
-    if ($show !== '' && !$ro && ($w['source'] ?? 'iptm') === 'iptm' && preg_match('/^[a-z0-9_-]{1,20}$/', $show)) { [$c, $cf] = priv('wg-peer-conf', null, [$show]); [$c2, $qr] = priv('wg-peer-qr', null, [$show]);
+    if ($show !== '' && !$ro && ($w['source'] ?? 'iptm') === 'iptm' && preg_match('/^[a-z0-9_-]{1,20}$/D', $show)) { [$c, $cf] = priv('wg-peer-conf', null, [$show]); [$c2, $qr] = priv('wg-peer-qr', null, [$show]);
         if ($c === 0) { echo '<div class=card><h3>Configurazione di ' . h($show) . '</h3><p class=mut>Contiene la chiave privata del client: mostrala solo al diretto interessato.</p>' . ($c2 === 0 && trim($qr) !== '' ? '<img alt="QR" data-iptm-layout="ui-d3daf13173" src="data:image/svg+xml;base64,' . base64_encode($qr) . '">' : '<p class=mut>QR non disponibile (qrencode).</p>') . '<pre>' . h($cf) . '</pre></div>'; } }
     echo '</div>';
 }
+/** Decode the DNS wire protocol. A legacy helper may send configured and actual listener under the same key. */
+function iptm_parse_dns_status(int $code,string $out,string $err=''): array {
+    $r=[];$warnings=[];$seen=[];
+    if($code!==0)$warnings[]='Diagnostica DNS incompleta (exit '.$code.'): '.substr(trim($err),0,240);
+    foreach(explode("\n",$out) as $line){
+        $pos=strpos($line,"\t");if($pos===false)continue;
+        $key=substr($line,0,$pos);$value=rtrim(substr($line,$pos+1),"\r");
+        if(!preg_match('/^[a-z][a-z0-9_]{0,63}$/D',$key)||strlen($value)>4096)continue;
+        if(isset($seen[$key])){
+            if($key==='dnscrypt_listen'&&$seen[$key]===1&&str_ends_with($value,' (socket effettivo)')){
+                $r['dnscrypt_config_listen']=$r[$key];$r[$key]=substr($value,0,-strlen(' (socket effettivo)'));$seen[$key]++;continue;
+            }
+            unset($r[$key]);$warnings[]='Campo ambiguo: '.$key;$seen[$key]++;continue;
+        }
+        $seen[$key]=1;$r[$key]=$value;
+    }
+    foreach(['pihole','unbound','dnscrypt'] as $svc){
+        $key=$svc.'_installed';
+        if(!in_array($r[$key]??null,['yes','no'],true)||($code!==0&&$r[$key]!=='yes')){$r[$key]='unknown';$warnings[]='Rilevamento '.$svc.' incompleto';}
+    }
+    if($warnings)$r['error']=implode('; ',array_unique($warnings));
+    return $r;
+}
 function dns_info(): array {
-    return kc('dns_status', function () {
-        [$c, $o] = priv('dns-status'); $r = [];
-        if ($c !== 0) return ['error' => trim($o)];
-        foreach (explode("\n", trim($o)) as $l) { $p = strpos($l, "\t"); if ($p !== false) $r[substr($l, 0, $p)] = substr($l, $p + 1); }
-        return $r;
-    });
+    return kc('dns_status',function(){[$c,$o,$e]=priv('dns-status');return iptm_parse_dns_status($c,$o,$e);});
 }
 /** Disegna il percorso DNS per una modalita' (unbound|dnscrypt|layered|external|none) con lo stato reale di ogni servizio. */
 function dns_flow_html(string $mode, array $d, array $st, bool $hidden): string {
@@ -350,6 +361,7 @@ function dns_flow_html(string $mode, array $d, array $st, bool $hidden): string 
         'layered'  => [$c, $p, $ub, $dc, $node('Resolver cifrati', 'DNSCrypt / DoH')],
         'external' => [$c, $p, $node('Upstream esterno', $up !== '' ? substr($up, 0, 60) : 'non rilevato')],
         'none'     => [$c, $node('Pi-hole non rilevato', 'nessun filtro DNS locale')],
+        'unknown' => [$c, $node('Stato DNS non verificato','Ripeti la diagnosi')],
     ];
     return '<div class="dns-flow" data-mode="' . h($mode) . '"' . ($hidden ? ' hidden' : '') . '>' . implode($ar, $chains[$mode] ?? $chains['none']) . '</div>';
 }
@@ -464,21 +476,22 @@ function pg_dns() {
     // Configurazione EFFETTIVA: dagli upstream realmente impostati in Pi-hole e dal forward Unbound -> DNSCrypt
     $upNow = (string)($d['pihole_upstreams'] ?? '');
     $has5335 = (bool)preg_match('/[#:]5335\b/', $upNow); $has5053 = (bool)preg_match('/[#:]5053\b/', $upNow);
-    $actual = !$pi ? 'none' : ($has5335 ? ((($d['unbound_dnscrypt_forward'] ?? '') === 'yes') ? 'layered' : 'unbound') : ($has5053 ? 'dnscrypt' : 'external'));
-    $stOf = function (bool $inst, string $act, bool $ready): array {
-        if (!$inst) return ['ok' => false, 'label' => 'non installato'];
+    $actual = ($d['pihole_installed']??'unknown')==='unknown' ? 'unknown' : (!$pi ? 'none' : ($has5335 ? ((($d['unbound_dnscrypt_forward'] ?? '') === 'yes') ? 'layered' : 'unbound') : ($has5053 ? 'dnscrypt' : 'external')));
+    $stOf = function (string $inst, string $act, bool $ready): array {
+        if ($inst==='unknown') return ['ok'=>false,'label'=>'non verificato'];
+        if ($inst!=='yes') return ['ok' => false, 'label' => 'non installato'];
         $a = $act === 'active' ? 'attivo' : ($act === '' ? 'stato n/d' : 'non attivo');
         if ($act === 'active' && !$ready) $a .= ' · da verificare';
         return ['ok' => $act === 'active' && $ready, 'label' => $a];
     };
-    $st = ['pi' => $stOf($pi, (string)($d['pihole_active'] ?? ''), true), 'ub' => $stOf($ub, (string)($d['unbound_active'] ?? ''), $ubReady), 'dc' => $stOf($dc, (string)($d['dnscrypt_state'] ?? ''), $dcReady)];
+    $st = ['pi' => $stOf($d['pihole_installed']??'unknown', (string)($d['pihole_active'] ?? ''), true), 'ub' => $stOf($d['unbound_installed']??'unknown', (string)($d['unbound_active'] ?? ''), $ubReady), 'dc' => $stOf($d['dnscrypt_installed']??'unknown', (string)($d['dnscrypt_state'] ?? ''), $dcReady)];
     echo '<div class="hero ' . (($pi && ($d['pihole_active'] ?? '') === 'active') ? 'ok' : 'warn') . '"><div class=hico>🌐</div><div><h2>DNS &amp; Privacy</h2><p>Un solo centro di controllo per Pi-hole, Unbound e DNSCrypt-Proxy. Le configurazioni sono validate e salvate con backup prima dei riavvii.</p></div></div>';
     if (isset($d['error'])) echo '<div class="msg err">' . h($d['error']) . '</div>';
-    echo '<nav class="iptm-dns-shortcuts" aria-label="Funzioni DNS"><a href="?p=piholehealth"><strong>Diagnostica Pi-hole</strong><span>Web e listener</span></a><a href="?p=piholelists"><strong>Liste e whitelist</strong><span>Adlist e regex</span></a><a href="?p=unbound"><strong>Hardening Unbound</strong><span>Profili e rollback</span></a><a href="?p=dnsaudit"><strong>Privacy DNS</strong><span>Verifica perdite DNS</span></a></nav>';
+    echo '<nav class="iptm-dns-shortcuts" aria-label="Funzioni DNS"><a href="?p=piholehealth"><strong>Diagnostica Pi-hole</strong><span>Web e listener</span></a><a href="?p=piholelists"><strong>Liste e whitelist</strong><span>Adlist e regex</span></a><a href="?p=unbound"><strong>Hardening Unbound</strong><span>Profili e rollback</span></a><a href="?p=dnsaudit"><strong>Privacy DNS</strong><span>Verifica perdite DNS</span></a><a href="?p=dnsguard"><strong>DNSCrypt, TLS e Anti-DPI</strong><span>Wizard e protezioni avanzate</span></a></nav>';
     echo '<div class=tiles iptm-dns-metrics>'
-        . tile('Pi-hole / FTL', $pi ? h($d['pihole_active'] ?? 'installato') : 'non installato', h(($d['pihole_version'] ?? '') ?: 'Filtro DNS locale'))
-        . tile('Unbound', $ub ? h($d['unbound_active'] ?? 'installato') : 'non installato', h(($d['unbound_version'] ?? '') ?: 'Resolver ricorsivo'))
-        . tile('DNSCrypt-Proxy', $dc ? h($d['dnscrypt_state'] ?? 'installato') : 'non installato', h(($d['dnscrypt_version'] ?? '') ?: 'DNS cifrato'))
+        . tile('Pi-hole / FTL', $pi ? h($d['pihole_active'] ?? 'installato') : (($d['pihole_installed']??'unknown')==='no'?'non installato':'non verificato'), h(($d['pihole_version'] ?? '') ?: 'Filtro DNS locale'))
+        . tile('Unbound', $ub ? h($d['unbound_active'] ?? 'installato') : (($d['unbound_installed']??'unknown')==='no'?'non installato':'non verificato'), h(($d['unbound_version'] ?? '') ?: 'Resolver ricorsivo'))
+        . tile('DNSCrypt-Proxy', $dc ? h($d['dnscrypt_state'] ?? 'installato') : (($d['dnscrypt_installed']??'unknown')==='no'?'non installato':'non verificato'), h(($d['dnscrypt_version'] ?? '') ?: 'DNS cifrato'))
         . tile('DNSSEC Unbound', h($d['unbound_dnssec'] ?? 'n/d'), h(($d['unbound_anchor'] ?? '') ?: 'Trust anchor non rilevato'))
         . tile('DNSSEC Pi-hole / FTL', h(($d['pihole_dnssec'] ?? 'n/d') === 'yes' ? 'attivo' : (($d['pihole_dnssec'] ?? 'n/d') === 'no' ? 'non attivo' : 'n/d')), h(($d['pihole_dnssec_env'] ?? '') === 'yes' ? 'gestito da FTLCONF_*' : 'validazione FTL'))
         . tile('Upstream Pi-hole', h(($d['pihole_upstreams'] ?? '') ?: 'non rilevato'), h(($d['pihole_env_override'] ?? '') === 'yes' ? 'gestito da FTLCONF_*' : 'gestione locale'))
@@ -486,19 +499,19 @@ function pg_dns() {
     echo '<div class="card iptm-dns-health"><h2>Pi-hole non raggiungibile?</h2><p>Se il DNS funziona ma la dashboard Pi-hole non si apre, controlla i listener 8089/8489 e il reindirizzamento HTTP senza modificare FTL.</p><p><a class="btn s" href="?p=piholehealth">Apri diagnosi accessibilità Pi-hole</a></p></div>';
     echo '<div class=card><h2>Pi-hole · Gestione liste</h2><p>Importa whitelist TXT/CSV/JSON, regex allow/deny e scegli anche tutte le 50 adlist (oltre 10 vengono aggiunte disabilitate, senza aggiornare Gravity) dal catalogo. Il modulo è separato dai test DNS per essere più rapido.</p><p><a class="btn g" href="?p=piholelists">Apri gestione whitelist e adlist</a></p></div>';
     echo '<div class=card id=dns-architecture><h2>Architettura DNS</h2><p class=mut>Seleziona uno dei tre percorsi. Il servizio DNS per i client rimane Pi-hole sulla porta 53; gli upstream restano confinati al loopback.</p>';
-    $flowNames = ['unbound' => 'Pi-hole → Unbound', 'dnscrypt' => 'Pi-hole → DNSCrypt-Proxy', 'layered' => 'Pi-hole → Unbound → DNSCrypt-Proxy', 'external' => 'Pi-hole → upstream esterno (nessuna delle tre architetture è applicata)', 'none' => 'Pi-hole non rilevato'];
+    $flowNames = ['unbound' => 'Pi-hole → Unbound', 'dnscrypt' => 'Pi-hole → DNSCrypt-Proxy', 'layered' => 'Pi-hole → Unbound → DNSCrypt-Proxy', 'external' => 'Pi-hole → upstream esterno (nessuna delle tre architetture è applicata)', 'none' => 'Pi-hole non rilevato', 'unknown'=>'Stato non verificato'];
     echo '<div id=dns-flow-wrap data-actual="' . h($actual) . '" data-flow-labels="' . h(json_encode($flowNames, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)) . '"><p class=mut id=dns-flow-cap>Configurazione effettiva rilevata: <b>' . h($flowNames[$actual]) . '</b>' . (($d['pihole_env_override'] ?? '') === 'yes' ? ' (upstream governato da FTLCONF_*: il valore reale potrebbe differire dal file)' : '') . '</p>';
-    foreach (['unbound', 'dnscrypt', 'layered', 'external', 'none'] as $fm) { if (in_array($fm, ['external', 'none'], true) && $fm !== $actual) continue; echo dns_flow_html($fm, $d, $st, $fm !== $actual); }
+    foreach (['unbound', 'dnscrypt', 'layered', 'external', 'none', 'unknown'] as $fm) { if (in_array($fm, ['external', 'none', 'unknown'], true) && $fm !== $actual) continue; echo dns_flow_html($fm, $d, $st, $fm !== $actual); }
     echo '</div>';
-    if ($pi && !$ro) {
-        $blocked = (($d['pihole_env_override'] ?? '') === 'yes') || (($d['pihole_toml_valid'] ?? '') === 'no') || (($d['pihole_config'] ?? '') !== '/etc/pihole/pihole.toml');
+    if (!$ro) {
+        $blocked = !$pi || !empty($d['error']) || (($d['pihole_env_override'] ?? '') === 'yes') || (($d['pihole_toml_valid'] ?? '') !== 'yes') || (($d['pihole_config'] ?? '') !== '/etc/pihole/pihole.toml');
         if ($blocked) {
             echo '<div class="msg warn">Pi-hole non è modificabile da IPTM: configurazione non standard, TOML non valido oppure upstream governato da <code>FTLCONF_*</code>. Le opzioni sono mostrate sotto ma l’applicazione va effettuata dalla fonte di configurazione originale.</div>';
         }
         $currentMode = in_array($actual, ['unbound', 'dnscrypt', 'layered'], true) ? $actual : ($ubReady ? 'unbound' : 'dnscrypt');   // se nessuna delle tre e' applicata, preseleziono la prima pronta
         $profiles = [
-            'unbound' => ['1 · Ricorsivo con DNSSEC', 'Pi-hole → Unbound. Ricorsione DNS e validazione DNSSEC con trust anchor locale.', $ubReady, $ub ? 'Richiede Unbound attivo, profilo IPTM, configurazione valida e DNSSEC verificato.' : 'Unbound non installato. Installalo da Programmi prima di applicare.'],
-            'dnscrypt' => ['2 · DNS cifrato', 'Pi-hole → DNSCrypt-Proxy. Trasporto DNS cifrato e validazione DNSSEC di Pi-hole FTL.', $dcDirectReady, !$dc ? 'DNSCrypt-Proxy non installato.' : (($d['pihole_dnssec_env'] ?? '') === 'yes' && in_array(strtolower((string)($d['pihole_dnssec'] ?? '')), ['false','0','no'], true) ? 'Pi-hole DNSSEC è disabilitato da FTLCONF_dns_dnssec.' : 'Richiede DNSCrypt attivo su 127.0.0.1:5053 (TCP/UDP, socket systemd o listener nativo), profilo IPTM, TOML valido e FTL attivo.')],
+            'unbound' => ['1 · Ricorsivo con DNSSEC', 'Pi-hole → Unbound. Ricorsione DNS e validazione DNSSEC con trust anchor locale.', $ubReady, $ub ? 'Richiede Unbound attivo, profilo IPTM, configurazione valida e DNSSEC verificato.' : (($d['unbound_installed']??'unknown')==='no'?'Unbound non installato.':'Stato Unbound non verificato.')],
+            'dnscrypt' => ['2 · DNS cifrato', 'Pi-hole → DNSCrypt-Proxy. Trasporto DNS cifrato e validazione DNSSEC di Pi-hole FTL.', $dcDirectReady, !$dc ? (($d['dnscrypt_installed']??'unknown')==='no'?'DNSCrypt-Proxy non installato.':'Stato DNSCrypt non verificato.') : (($d['pihole_dnssec_env'] ?? '') === 'yes' && in_array(strtolower((string)($d['pihole_dnssec'] ?? '')), ['false','0','no'], true) ? 'Pi-hole DNSSEC è disabilitato da FTLCONF_dns_dnssec.' : 'Richiede DNSCrypt attivo su 127.0.0.1:5053 (TCP/UDP, socket systemd o listener nativo), profilo IPTM, TOML valido e FTL attivo.')],
             'layered' => ['3 · Doppio livello', 'Pi-hole → Unbound → DNSCrypt-Proxy. Trasporto cifrato upstream e validazione DNSSEC Unbound.', $ubReady && $dcReady, 'Richiede Unbound e DNSCrypt entrambi configurati, attivi e verificati.'],
         ];
         if (!isset($profiles[$currentMode])) $currentMode = $ubReady ? 'unbound' : 'dnscrypt';
@@ -512,11 +525,11 @@ function pg_dns() {
         }
         echo '</div></fieldset><p class=mut>Puoi selezionare anche un profilo non ancora pronto: l’applicazione verrà rifiutata con il prerequisito mancante, senza cambiare l’upstream. Prima del cambio IPTM crea un backup, valida servizi e listener, verifica DNSSEC e risoluzione; in caso di errore esegue il rollback.</p>';
         if (!$blocked) echo '<button class=g>Allinea e applica configurazione selezionata</button>';
-        else echo '<p class=msg warn>Selezione in sola lettura: correggi prima la variabile FTLCONF_* o la configurazione esterna di Pi-hole.</p>';
+        else echo '<p class=msg warn>Selezione in sola lettura: verifica rilevamento, configurazione e variabili FTLCONF_* di Pi-hole.</p>';
         echo '</form>';
     } else {
         echo '<div class=grid data-iptm-layout="ui-c53ea1da23"><div class=card><h3>1 · Ricorsivo con DNSSEC</h3><p>Pi-hole → Unbound. Ricorsione DNS e validazione DNSSEC con trust anchor locale.</p></div><div class=card><h3>2 · DNS cifrato</h3><p>Pi-hole → DNSCrypt-Proxy. Trasporto cifrato e DNSSEC FTL.</p></div><div class=card><h3>3 · Doppio livello</h3><p>Pi-hole → Unbound → DNSCrypt. DNSSEC Unbound e trasporto cifrato.</p></div></div>';
-        if (!$pi) echo '<div class=msg>Pi-hole non rilevato. Installa Pi-hole tramite DietPi-Software o Programmi prima di scegliere la catena.</div>';
+        if (!$pi && ($d['pihole_installed']??'unknown')==='no') echo '<div class=msg>Pi-hole non rilevato. Installa Pi-hole tramite DietPi-Software o Programmi prima di scegliere la catena.</div>';
     }
     echo '</div>';
     echo '<div class=card><h2>Pi-hole / FTL</h2>';
@@ -525,7 +538,7 @@ function pg_dns() {
         if (($d['pihole_env_override'] ?? '') === 'yes') echo '<div class="msg warn">L’upstream è sovrascritto da <code>FTLCONF_dns_upstreams</code>. Pi-hole considera il valore in sola lettura: modifica Docker/ambiente di servizio, non il TOML.</div>';
         if (($d['pihole_toml_valid'] ?? '') === 'no') echo '<div class="msg err">Il file pihole.toml non supera il parser TOML; IPTM non tenterà di correggerlo automaticamente.</div>';
         if (!$ro) echo '<form method=post class=ops>' . fh('p=dns') . '<input type=hidden name=action value=dns_service><input type=hidden name=service value=pihole-FTL><button class=s>Riavvia FTL</button></form>';
-    } else echo '<p class=mut>Pi-hole non installato. Il rilevamento si basa su FTL e sui percorsi standard Pi-hole v6.</p>';
+    } else echo '<p class=mut>'.(($d['pihole_installed']??'unknown')==='no'?'Pi-hole non installato.':'Stato Pi-hole non verificato.').' Il rilevamento si basa su FTL e sui percorsi standard Pi-hole v6.</p>';
     echo '</div>';
     echo '<div class=card><h2>Unbound · resolver DNSSEC</h2>';
     if ($ub) {
@@ -533,16 +546,16 @@ function pg_dns() {
         echo '<p>Config check: <b>' . h($d['unbound_check'] ?? 'n/d') . '</b> · DNSSEC: <b>' . h($d['unbound_dnssec'] ?? 'n/d') . '</b></p>';
         if (($d['unbound_check'] ?? '') !== 'ok') echo '<div class="msg err">unbound-checkconf non ha superato il controllo. La catena DNS non verrà modificata finché non è corretto.</div>';
         if (($d['unbound_dnssec'] ?? '') !== 'yes') echo '<div class="msg warn">Trust anchor DNSSEC non rilevato o non leggibile. La validazione DNSSEC non è considerata attiva.</div>';
-        if (!$ro && (($d['unbound_profile'] ?? '') !== 'yes' || ($d['unbound_check'] ?? '') !== 'ok' || ($d['unbound_dnssec'] ?? '') !== 'yes')) echo '<form method=post class=ops>' . fh('p=dns') . '<input type=hidden name=action value=dns_unbound_profile><button class=g>Configura profilo Unbound</button></form>';
+        if (!$ro) echo '<form method=post class=ops>' . fh('p=dns') . '<input type=hidden name=action value=dns_unbound_profile><button class=g>Configura/ripristina profilo Unbound</button></form>';
         if (!$ro) echo '<form method=post class=ops>' . fh('p=dns') . '<input type=hidden name=action value=dns_service><input type=hidden name=service value=unbound><button class=s>Riavvia Unbound</button></form>';
     } else {
-        echo '<p>Unbound non installato.</p><a class=btn href="?p=progs">Apri Programmi per installare Unbound</a>';
+        echo '<p>'.(($d['unbound_installed']??'unknown')==='no'?'Unbound non installato.':'Stato Unbound non verificato.').'</p><a class=btn href="?p=progs">Apri Programmi per installare Unbound</a>';
     }
     echo '</div>';
     echo '<div class=card><h2>DNSCrypt-Proxy · DNS cifrato</h2>';
     if ($dc) {
         $dcMode = (string)($d['dnscrypt_mode'] ?? 'auto');
-        echo '<p>Versione: <b>' . h($d['dnscrypt_version'] ?? 'n/d') . '</b> · Stato: <b>' . h($d['dnscrypt_state'] ?? 'n/d') . '</b> · Ascolto: <code>' . h($d['dnscrypt_listen'] ?? 'non rilevato') . '</code></p><p>Protocollo: <b>' . h($d['dnscrypt_protocol'] ?? 'n/d') . '</b> · Resolver: <code>' . h(($d['dnscrypt_servers'] ?? '') ?: 'pool automatico · filtri DNSSEC/no-log/no-filter') . '</code> · Config check: <b>' . h($d['dnscrypt_check'] ?? 'n/d') . '</b> · Profilo IPTM (' . (($d['dnscrypt_socket'] ?? '') === 'yes' ? 'socket systemd' : 'listener nativo') . '): <b>' . (($d['dnscrypt_managed'] ?? '') === 'yes' ? 'sì' : 'no') . '</b></p>';
+        echo '<p>Versione: <b>' . h($d['dnscrypt_version'] ?? 'n/d') . '</b> · Stato: <b>' . h($d['dnscrypt_state'] ?? 'n/d') . '</b> · Ascolto: <code>' . h(($d['dnscrypt_listen']??'')?:'non rilevato') . '</code></p><p>Protocollo: <b>' . h($d['dnscrypt_protocol'] ?? 'n/d') . '</b> · Resolver: <code>' . h(($d['dnscrypt_servers'] ?? '') ?: 'pool automatico · filtri DNSSEC/no-log/no-filter') . '</code> · Config check: <b>' . h($d['dnscrypt_check'] ?? 'n/d') . '</b> · Profilo IPTM (' . (($d['dnscrypt_socket'] ?? '') === 'yes' ? 'socket systemd' : 'listener nativo') . '): <b>' . (($d['dnscrypt_managed'] ?? '') === 'yes' ? 'sì' : 'no') . '</b></p>';
         if (($d['dnscrypt_check'] ?? '') !== 'ok') echo '<div class="msg warn">Il file DNSCrypt non supera il controllo. Correggi la configurazione prima di allineare Pi-hole.</div>';
         if (($d['dnscrypt_managed'] ?? '') !== 'yes') echo '<div class="msg warn">' . (($d['dnscrypt_socket'] ?? '') === 'yes' ? 'La socket systemd non è ancora configurata su 127.0.0.1:5053. Salva il profilo DNSCrypt qui sotto per creare un drop-in loopback verificato.' : 'Il profilo IPTM non è ancora applicato. Su questo sistema DNSCrypt-Proxy non ha una socket systemd: IPTM lo lega direttamente a 127.0.0.1:5053 nel file di configurazione. Salva il profilo DNSCrypt qui sotto per applicarlo con backup e verifica.') . '</div>';
         if (($d['dnscrypt_listener_safe'] ?? '') !== 'yes') echo '<div class="msg err">I listener TCP e UDP su 5053 non risultano entrambi limitati al loopback (127.0.0.1; ::1 è ammesso) oppure il servizio non è attivo. IPTM non userà DNSCrypt come upstream finché il profilo non sarà applicato e verificato: usa «Salva e valida DNSCrypt».</div>';
@@ -551,9 +564,10 @@ function pg_dns() {
             echo '<form method=post class=ops>' . fh('p=dns') . '<input type=hidden name=action value=dns_service><input type=hidden name=service value=dnscrypt-proxy><button class=s>Riavvia DNSCrypt</button></form>';
         }
     } else {
-        echo '<p>DNSCrypt-Proxy non installato. IPTM lo configura solo su loopback, sulla porta 5053; non apre porte DNS sulla WAN.</p><a class=btn href="?p=progs">Apri Programmi per installare DNSCrypt-Proxy</a>';
+        echo '<p>'.(($d['dnscrypt_installed']??'unknown')==='no'?'DNSCrypt-Proxy non installato.':'Stato DNSCrypt non verificato.').' IPTM lo configura solo su loopback, sulla porta 5053; non apre porte DNS sulla WAN.</p><a class=btn href="?p=progs">Apri Programmi per installare DNSCrypt-Proxy</a>';
     }
     echo '</div>';
+    echo '<div class=card><h3>Altre impostazioni DNS</h3><p><a class="btn s" href="?p=unbound">Hardening Unbound</a> <a class="btn s" href="?p=dnsguard#dns-resolver-advanced">DNSCrypt avanzato e fallback</a> <a class="btn s" href="?p=dnsguard">Wizard DNS e TLS/SNI</a></p></div>';
     $dnsBody = dd_radio($S, 'dns_redirect', 'Forza i client LAN al DNS locale', 'Reindirizza le query DNS porta 53 al server indicato.')
         . dd_in($S, 'dns_ip', 'IP del DNS locale', '192.168.1.165', 'Indica l’indirizzo LAN di Pi-hole o altro resolver.', '220px')
         . dd_radio($S, 'dot_block', 'Blocca DNS-over-TLS (porta 853)', 'Riduce l’elusione del resolver locale via DoT; non blocca DoH su HTTPS né VPN.')
@@ -574,28 +588,30 @@ function pg_dns() {
 }
 
 function pg_system() {
-    global $M; $inv = ipset_inventory(); $L = live_dump(); $S = S_get(); $txt = ser($M); $used = $inv['ok'] ? draft_sets($txt) : []; $det = cs_detect(); $cst = cs_status(); $prob = [];
-    if ($inv['ok']) foreach (sets_missing($txt, $inv['sets']) as $m) $prob[] = "Il set «{$m}» è usato dalla bozza ma non esiste nel sistema.";
-    [, $fx, $ms] = fix_chain_decls($txt); foreach ($fx as $f) $prob[] = "La catena $f esiste nel kernel (creata da un programma) ma non è dichiarata nella bozza: verrà dichiarata in automatico all'applicazione."; foreach ($ms as $m) $prob[] = "La bozza salta alla catena $m che non esiste né nel kernel né nella bozza.";
-    if ($S['crowdsec']) {
-        foreach (array_filter(explode(',', $S['cs_set'])) as $x) if ($inv['ok'] && !isset($inv['sets'][$x])) $prob[] = "CrowdSec: il set diretto «{$x}» non esiste (i set numerati compaiono solo con decisioni attive): svuota il campo, basta il bouncer.";
-        if ($L['ok'] && !isset($L['chains']['filter'][CS_CHAIN]) && ($cst['svc'] ?? '') === 'active') $prob[] = "CrowdSec: il bouncer è attivo ma la catena " . CS_CHAIN . " non esiste (la ricrea al riavvio: «Applica» lo fa in automatico; se persiste controlla la chiave API con cscli bouncers list).";
-    }
-    echo compat_card($txt);
-    echo '<div class=card><h2>Rilevamento sistema</h2><p class=mut><a href="?p=advise"><b>🔎 Analisi sistema</b></a> — proposte automatiche di opzioni da attivare. · Catene e ipset presenti ora nel kernel, confrontati con la bozza. Dopo un riavvio di CrowdSec, Docker o dei tuoi script i nomi possono cambiare.</p>';
-    if (!$L['ok'] && !$inv['ok']) echo '<div class="msg err">Kernel non leggibile (helper/sudo?).</div>';
-    echo $prob ? '<div class="msg err">' . implode('<br>', array_map('h', $prob)) . '</div>' : '<p>✅ Nessuna incongruenza tra bozza, ipset e catene del sistema.</p>';
-    if ($det['sets'] || $det['chain']) {
-        echo '<h3>CrowdSec rilevato</h3><p>Servizio: <b>' . h($cst['svc'] ?: '?') . '</b> · Set IPv4: <b>' . h(implode(', ', $det['sets']) ?: 'nessuno') . '</b> · Set IPv6: <b>' . h(implode(', ', $det['sets6']) ?: 'nessuno') . '</b> · Catena: <b>' . h($det['chain'] ?: 'nessuna') . '</b></p><form method=post>' . fh('p=system') . '<input type=hidden name=action value=cs_autodetect><button>🔧 Collega il firewall a CrowdSec</button></form>';
-    }
-    echo '</div><div class=card><h3>ipset presenti (' . count($inv['sets']) . ')</h3><div data-iptm-layout="scroll"><table><tr><th>Nome</th><th>Tipo</th><th>Voci</th><th>Riferimenti</th><th>Nella bozza</th><th>Origine</th></tr>';
-    foreach ($inv['sets'] as $n => $x) { $og = own_set($n) ? 'iptables-manager' : (stripos($n, 'crowdsec') !== false ? 'CrowdSec' . (isset($cst['origin'][$n]) ? ' (' . $cst['origin'][$n] . ')' : '') : (stripos($n, 'f2b') !== false ? 'fail2ban' : '—'));
-        echo '<tr><td><b>' . h($n) . '</b></td><td>' . h($x['type']) . '</td><td>' . number_format($x['n']) . '</td><td>' . $x['refs'] . '</td><td>' . (in_array($n, $used, true) ? '✔' : '—') . '</td><td>' . $og . '</td></tr>'; }
-    echo $inv['sets'] ? '' : '<tr><td colspan=6 class=mut>Nessun ipset (o ipset non installato).</td></tr>'; echo '</table></div></div>';
-    $cnt = []; foreach ($L['rules'] ?? [] as $r) $cnt[$r['t'] . '|' . $r['c']] = ($cnt[$r['t'] . '|' . $r['c']] ?? 0) + 1; $dc = []; foreach ($M as $b) if ($b['k'] === 'table') foreach ($b['items'] as $it) if ($it['t'] === 'chain') $dc[$b['name']][$it['n']] = 1;
-    echo '<div class=card><h3>Catene nel kernel</h3><div data-iptm-layout="scroll"><table><tr><th>Tabella</th><th>Catena</th><th>Regole</th><th>Gestore</th><th>Dichiarata nella bozza</th></tr>';
-    foreach ($L['chains'] ?? [] as $t => $cs) foreach (array_keys($cs) as $c) { if (in_array($c, BUILTIN[$t] ?? [], true)) continue; echo '<tr><td>' . h($t) . '</td><td><b>' . h($c) . '</b></td><td>' . ($cnt[$t . '|' . $c] ?? 0) . '</td><td>' . h(dyn_owner($c) ?: (str_starts_with($c, 'IPTM-') ? 'iptables-manager' : '—')) . '</td><td>' . (!empty($dc[$t][$c]) ? '✔' : '—') . '</td></tr>'; }
-    echo '</table></div></div>';
+    global $M;$inventory=ipset_inventory();$live=live_dump();$settings=S_get();$text=ser($M);$det=cs_detect();$state=cs_status();$sets=(array)($inventory['sets']??[]);
+    echo compat_card($text);
+    iptm_view_start('Rilevamento kernel','Controllo in sola lettura di catene e set, confrontati con la bozza.');
+    $ready=!empty($inventory['ok'])&&!empty($live['ok']);$issues=[];
+    if(empty($inventory['ok']))$issues[]='Inventario ipset non disponibile.';
+    if(empty($live['ok']))$issues[]='Catene runtime non disponibili.';
+    if(!empty($inventory['ok']))foreach(sets_missing($text,$sets) as $set)$issues[]='Set usato nella bozza ma assente: '.$set;
+    if(!empty($live['ok'])){[, $fixed,$missing]=fix_chain_decls($text);foreach($fixed as $chain)$issues[]='Catena dinamica da dichiarare: '.$chain;foreach($missing as $chain)$issues[]='Destinazione catena non risolta: '.$chain;}
+    if(!empty($settings['crowdsec'])){foreach(array_filter(explode(',',(string)($settings['cs_set']??''))) as $set)if(!empty($inventory['ok'])&&!isset($sets[$set]))$issues[]='CrowdSec: set diretto assente: '.$set;
+        if(!empty($live['ok'])&&!isset($live['chains']['filter'][CS_CHAIN])&&($state['svc']??'')==='active')$issues[]='Bouncer CrowdSec attivo ma catena non rilevata.';}
+    if($issues)foreach($issues as $issue)echo '<p class="msg warn">'.iptm_view_text($issue).'</p>';elseif($ready)echo '<p>Non sono emerse incongruenze nei controlli eseguiti.</p>';
+    echo iptm_view_link('advise','Analisi e suggerimenti');iptm_view_end();
+    iptm_view_start('CrowdSec','Rilevamento dei set e della catena, senza riavviare il servizio.');
+    iptm_view_table(['Indicatore','Valore'],[['Servizio',$state['svc']??null],['Set IPv4',implode(', ',(array)($det['sets']??[]))],['Set IPv6',implode(', ',(array)($det['sets6']??[]))],['Catena',$det['chain']??null]],'CrowdSec');
+    if((!empty($det['sets'])||!empty($det['chain']))&&($_SESSION['role']??'')==='admin'){iptm_view_form('system','cs_autodetect');iptm_view_submit('Collega CrowdSec');}iptm_view_end();
+    iptm_view_start('Set IP');$rows=[];$used=!empty($inventory['ok'])?draft_sets($text):[];
+    foreach($sets as $name=>$set)if(is_array($set)){$owner=own_set($name)?'IPTM':(stripos($name,'crowdsec')!==false?'CrowdSec':(stripos($name,'f2b')!==false?'fail2ban':'Non identificato'));$rows[]=[$name,$set['type']??null,$set['n']??null,$set['refs']??null,in_array($name,$used,true)?'Sì':'No',$owner];}
+    if(empty($inventory['ok']))iptm_view_error('Lettura set non riuscita.');else iptm_view_table(['Nome','Tipo','Voci','Riferimenti','Bozza','Gestore'],$rows,'Set rilevati');iptm_view_end();
+    iptm_view_start('Catene dinamiche');$count=[];$declared=[];$rows=[];
+    foreach((array)($live['rules']??[]) as $rule)$count[$rule['t'].'|'.$rule['c']]=($count[$rule['t'].'|'.$rule['c']]??0)+1;
+    foreach($M as $block)if($block['k']==='table')foreach($block['items'] as $it)if($it['t']==='chain')$declared[$block['name']][$it['n']]=true;
+    foreach((array)($live['chains']??[]) as $table=>$chains)foreach(array_keys((array)$chains) as $chain)if(!in_array($chain,BUILTIN[$table]??[],true))$rows[]=[$table,$chain,$count[$table.'|'.$chain]??0,dyn_owner($chain)?: (str_starts_with($chain,'IPTM-')?'IPTM':'Non identificato'),isset($declared[$table][$chain])?'Sì':'No'];
+    if(empty($live['ok']))iptm_view_error('Lettura catene non riuscita.');else iptm_view_table(['Tabella','Catena','Regole','Gestore','Bozza'],$rows,'Catene del kernel');iptm_view_end();
 }
+
 
 
