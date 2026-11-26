@@ -1,0 +1,19 @@
+# Reviewed historical false positives only (PR #14, run 45899751784).
+# All 23 findings occur inside sha256 maps in 12 immutable historical manifests.
+# Full commit-specific fingerprints only: do not use path-wide or line-only ignores.
+# New commits, new rule matches and other files remain subject to the scan.
+200ce63b2352c1725d6910695179821bec003aac:native-manifest.json:generic-api-key:50
+200ce63b2352c1725d6910695179821bec003aac:native-manifest.json:generic-api-key:91
+298867e1f73b194dfafc71c45f76e658a13cdb2a:native-manifest.json:generic-api-key:1
+3e5009211e60a785ba199e7c3d65a4314f089323:native-manifest.json:generic-api-key:49
+3e5009211e60a785ba199e7c3d65a4314f089323:native-manifest.json:generic-api-key:90
+51ae6700d72a744b54b5dcdaa3c31c3a9fb160d6:native-manifest.json:generic-api-key:47
+51ae6700d72a744b54b5dcdaa3c31c3a9fb160d6:native-manifest.json:generic-api-key:85
+6426cb2c462ecf980698cf0a54255983c0084d0c:native-manifest.json:generic-api-key:1
+6b16e6491eb69a5aad0fc053257dbb26a700fa96:native-manifest.json:generic-api-key:1
+6d04d4e9126861e9db8dfbcedb701046aa78fb57:native-manifest.json:generic-api-key:1
+7856dbd78e7558ca93ae4ac98a67c1e062662afb:native-manifest.json:generic-api-key:1
+871dba2a0ede523011be7454397f6b5456b5ca0f:native-manifest.json:generic-api-key:1
+b50a72da74093b3ce414534378b66b446224997b:native-manifest.json:generic-api-key:1
+de87bcc8d251502195fe68a16b6d6b7f886fc5f2:native-manifest.json:generic-api-key:90
+f8bd29c4de1ff4cf70939d261a6fbf8e53136fa5:native-manifest.json:generic-api-key:1
