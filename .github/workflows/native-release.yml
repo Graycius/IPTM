@@ -1,0 +1,74 @@
+name: Build and publish IPTM Native Update
+
+on:
+  push:
+    branches: [main]
+    paths: [native-manifest.json]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a new release (unchecked = build and validate only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iptm-native-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate syntax
+        run: |
+          set -euo pipefail
+          find modules actions loader -type f -name '*.php' -print0 | xargs -0 -r -n1 php -l
+          python -m compileall -q extensions runtime
+          find assets -type f -name '*.js' -print0 | xargs -0 -r -n1 node --check
+          bash -n runtime/iptm-helper
+      - name: Build and verify archive
+        run: python tools/build_native_update.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iptm-native-update
+          path: dist/
+          if-no-files-found: error
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: iptm-native-update
+          path: dist/
+      - name: Create versioned release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import json; print(json.load(open("native-manifest.json"))["version"])')
+          tag="v$version"
+          archive="IPTM_${version}_UPDATE.zip"
+          (cd dist && sha256sum -c "$archive.sha256")
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::Release $tag already exists; bump version for a new publication. Existing releases are never overwritten."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::Tag $tag already exists; review manually."
+            exit 1
+          fi
+          gh release create "$tag" "dist/$archive" "dist/$archive.sha256" --target "$GITHUB_SHA" --title "IPTM $version" --generate-notes

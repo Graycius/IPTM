@@ -1,61 +1,260 @@
-# IPTM — Firewall, rete e qualità del traffico
+# IPTM — Firewall, rete e sicurezza per Linux
 
-IPTM è un'interfaccia web per la gestione di firewall iptables, protezione delle reti locali, configurazione DNS e qualità del traffico su DietPi e Debian Linux. Usa PHP, Python, Bash e JavaScript per interagire con il sistema e i servizi disponibili.
+[![Versione](https://img.shields.io/github/v/release/Graycius/IPTM?label=release)](https://github.com/Graycius/IPTM/releases/latest) [![Licenza](https://img.shields.io/badge/licenza-GPL--3.0-blue)](LICENSE) [![Controlli](https://github.com/Graycius/IPTM/actions/workflows/security-ci.yml/badge.svg)](https://github.com/Graycius/IPTM/actions/workflows/security-ci.yml)
 
-## Funzionalità
+**IPTM (iptables-manager)** è una console web per amministrare un gateway Linux Debian/DietPi: firewall, routing, segmentazione della rete, DNS, qualità del traffico e sicurezza dei dispositivi. Riunisce configurazione, osservazione e manutenzione in una sola interfaccia, utilizzabile anche da browser su smartphone.
 
-- **Firewall:** gestione delle regole IPv4/IPv6, catene, liste IP, NAT, controlli di precedenza e anteprime prima dell'applicazione.
-- **Protezione dell’accesso:** controllo delle regole SSH distinto per interfaccia d’ingresso quando verificabile (LAN, VLAN, VPN), verifiche di continuità e ripristino watchdog dopo applicazioni non confermate.
-- **Audit delle policy:** verifica in sola lettura della bozza per aperture duplicate, sorgenti LAN senza interfaccia, rischio di bypass delle protezioni SSH, accessi WireGuard troppo ampi e incoerenze MAC/IoT. Rigenerazione controllata dei soli blocchi IPTM.
-- **Topologia WAN/LAN:** vincoli d’ingresso per i servizi locali, anti-spoofing RFC1918 automatico solo su una WAN pubblica distinta e verificata; nessun blocco indiscriminato delle LAN condivise o in doppio NAT.
-- **Reti e IoT:** inventario interfacce, segmentazione e impostazioni di isolamento, protezioni DNS e politiche di accesso. Le policy MAC gestite dalla UI restano attive durante la rigenerazione, con controllo di coerenza tra preferenze e regole generate.
-- **DNS e privacy:** integrazione con Pi-hole, Unbound e DNSCrypt; diagnosi e gestione delle configurazioni disponibili.
-- **Qualità del traffico:** gestione CAKE bidirezionale e IFB quando la topologia è compatibile, policy DSCP, misure RTT e ricalibrazione manuale della banda con limiti CAKE temporaneamente sospesi e ripristino automatico.
-- **Sicurezza e diagnostica:** integrazione opzionale CrowdSec e Suricata, audit delle regole, monitoraggio dello stato e classificazione applicativa diagnostica.
-- **Aggiornamenti e archivi:** importazione/export delle impostazioni, pacchetti di aggiornamento nativi verificati, rotazione conservativa dei backup e log IPTM.
+[Scarica l'ultima release](https://github.com/Graycius/IPTM/releases/latest) · [Pacchetto 6.0.8](release/IPTM_6.0.8_UPDATE.zip) · [Guida di installazione](installer/LEGGIMI_INSTALLAZIONE.md) · [Licenza](LICENSE)
 
-## Ambiente
+![Schema illustrativo del pannello IPTM](docs/images/dashboard-overview.svg)
 
-Linux Debian/DietPi, PHP 8+, Python 3, Bash, systemd e iptables. Le funzionalità avanzate richiedono i relativi pacchetti e moduli kernel. La console usa principalmente iptables; gli altri servizi sono opzionali e gestiti separatamente.
+*Illustrazione schematica della console, non una cattura di una rete reale.*
 
-- **Ingress LAN e anti-spoof:** collegamento delle subnet alle interfacce reali o alle associazioni esplicite, vincoli su INPUT/FORWARD/DNS NAT e protezione RFC1918 soltanto sulle interfacce esterne pubbliche verificate; anteprima nella pagina WAN, LAN e NAT.
+## A cosa serve
 
+IPTM può essere utilizzato per gestire un firewall locale o un router Linux che instrada il traffico tra Internet, reti fidate, VLAN, dispositivi IoT e tunnel VPN. Le funzioni si adattano alla topologia rilevata e alla disponibilità dei componenti del sistema. Le impostazioni possono essere preparate in bozza e verificate prima di essere applicate.
 
-## Release 5.30.22 — sicurezza e integrazioni
+![Architettura di rete](docs/images/network-architecture.svg)
 
-La 5.30.22 introduce protezioni per la sessione e l'accesso web, controlli incrociati delle impostazioni e riconoscimento CrowdSec anche in ambienti nftables/ipset. Include le evoluzioni dalla 5.30.12: retention/ripristino release, prestazioni UI, ricalibrazione, applicazione, e prenotazioni DHCP Pi-hole.
+*Esempio di topologia: i segmenti e i servizi effettivi dipendono dall'installazione.*
 
-- **Pacchetto nativo:** [IPTM_5.30.22_UPDATE.zip](release/IPTM_5.30.22_UPDATE.zip).
-- **Note e limiti della release:** [IPTM 5.30.22 — note di rilascio](release/IPTM_5.30.22_RELEASE_NOTES.md).
-- Squid rimane escluso dalle funzionalità; è presente soltanto il ritiro sicuro dei residui di installazioni precedenti.
+## Indice
 
-**Avvertenza per gateway remoti:** nella 5.30.22 l'applicazione firewall può confermare automaticamente la transazione senza una verifica manuale della raggiungibilità SSH/LAN. Inoltre, la sincronizzazione DHCP Pi-hole può sostituire l'intero elenco `dhcp.hosts`. Prima dell'installazione effettuare backup e collaudo in ambiente di prova. La suite CI esegue test offline, **non** convalida la continuità della rete sul DietPi reale.
+- [Panoramica e monitoraggio](#panoramica-e-monitoraggio)
+- [Connessione e rete](#connessione-e-rete)
+- [Rete locale e dispositivi](#rete-locale-e-dispositivi)
+- [DNS e privacy](#dns-e-privacy)
+- [Protezione e firewall](#protezione-e-firewall)
+- [Sistema e strumenti](#sistema-e-strumenti)
+- [Esempi operativi](#esempi-operativi)
+- [Installazione e aggiornamento](#installazione-e-aggiornamento)
+- [Requisiti e limiti](#requisiti-e-limiti)
 
-## Novità IPTM 5.30.23 — rollback firewall, Pi-hole DHCP e VPN→LAN
+## Panoramica e monitoraggio
 
-Questa release corregge due rischi della 5.30.22: (1) `do_apply()` non conferma più automaticamente le regole nel kernel: il watchdog resta attivo per la finestra configurata, e una sessione amministrativa deve premere **Conferma e salva** dopo il collaudo SSH, LAN, DNS e VPN; (2) le prenotazioni `dhcp.hosts` vengono **aggiunte senza eliminare quelle esistenti**, con rifiuto dei conflitti MAC/IP, backup root-only (0600) e verifica post-scrittura su `pihole.toml`.
+| Pagina | Utilizzo |
+| --- | --- |
+| **Stato generale** | Quadro sintetico della configurazione, stato del firewall, interfacce, indicatori di protezione, servizi rilevati e collegamenti alle operazioni principali. |
+| **Mappa della rete** | Esplora nodi e collegamenti, seleziona dispositivi, consulta indirizzi, zone e avvisi di incoerenza. |
+| **Statistiche** | Consulta contatori di pacchetti e byte delle regole, blocchi e andamento del traffico disponibile. |
+| **Connessioni** | Esamina connessioni attive, indirizzi, porte, protocolli e stato quando rilevabili. |
+| **Monitoraggio** | Verifica attività, eventi e indicatori operativi della rete. |
 
-- [Aggiornamento nativo IPTM 5.30.23](release/IPTM_5.30.23_UPDATE.zip)
-- [Guida VPN→LAN: SSH, Home Assistant, routing e policy](docs/VPN_ACCESS_53023.md)
-- Protezioni DoT/DNS e policy `FORWARD DROP` preservate; nessuna nuova apertura indiscriminata su `wg0`.
-- Finestra di rollback predefinita: **180 s**, personalizzabile in `/etc/iptables-manager.web.json` (se già definita, prevale la configurazione esistente).
+Il menu raggruppa le operazioni per area; la ricerca laterale permette di trovare una funzione anche attraverso sinonimi. L'accesso amministrativo permette le modifiche; la modalità di sola lettura consente di consultare le informazioni disponibili.
 
-**Collaudo richiesto su DietPi:** la CI verifica offline sintassi e regressioni, ma non prova firewall, raggiungibilità SSH e Home Assistant reali né il demone FTL reale. Su Pi-hole che usa array DHCP di formato non interpretabile, IPTM rifiuta l'operazione senza sovrascrivere nulla. Non applicare da remoto senza una console di recupero.
+## Connessione e rete
 
-## Novità 5.30.12 — sola diagnostica prestazionale, nessun proxy HTTP
+### Interfacce, VLAN e DHCP
 
-La cache HTTP LAN è stata eliminata dall’interfaccia, dal controller, dalla gestione dei programmi e dall’helper: non esistono più attivazione, configurazione né reindirizzamenti HTTP gestiti dall’applicazione. L’aggiornamento nativo dismette prima della sostituzione dell’helper soltanto i componenti con ownership IPTM verificabile, usando le regole di rimozione exact-match del motore già installato. Se i redirect NAT non sono verificabili o i file sono stati modificati, **l’aggiornamento viene bloccato** prima del cambio di runtime: nessun flush di `nat`, `filter` o riduzione di `FORWARD DROP`.
+- **Schede e collegamenti:** identifica schede, indirizzi IPv4, profili NetworkManager, stato, MTU e metrica.
+- **Bond e porte:** consulta aggregazioni e prepara profili per le porte disponibili. Le operazioni che possono interrompere il collegamento richiedono il percorso di attivazione indicato dalla pagina.
+- **VLAN:** prepara segmenti separati su una scheda parent e associa ID VLAN, subnet e indirizzo del gateway; la rete fisica deve supportare la configurazione.
+- **DHCP:** gestisce le informazioni del server Pi-hole e prepara un servizio DHCP dedicato a una seconda rete. Le prenotazioni statiche associano MAC, IP e hostname; il controllo rileva conflitti e sovrapposizioni.
+- **NetworkManager:** editor delle proprietà di un profilo, clonazione e prova con checkpoint temporaneo quando supportato. Le attivazioni che richiedono la console locale sono indicate esplicitamente.
 
-I pacchetti Debian non vengono disinstallati automaticamente: potrebbero essere usati fuori da IPTM. Se un’applicazione esegue un proxy esterno configurato nei browser, è necessario disattivare manualmente anche le preferenze client. Le eventuali regole `IPTM:cache-proxy-allow` salvate manualmente in `rules.v4` o in una bozza **non** vengono eliminate automaticamente: eliminarle solo dopo controllo delle differenze e applicazione con watchdog, per non modificare alla cieca regole personali. Le protezioni IoT, DNS/DoT, SSH, VLAN, anti-spoofing e CAKE rimangono indipendenti.
+### WAN, LAN e NAT
 
-**Alternative a basso impatto:** analisi overhead iptables nella pagina Prestazioni (solo lettura), regolazione misurata CAKE/fq_codel nelle pagine SQM, verifica cache DNS Pi-hole/Unbound e analisi della latenza sotto carico. Nessuna accelerazione è promessa senza misure pre/post né vengono cambiati automaticamente i limiti di banda.
+| Opzione | Funzione |
+| --- | --- |
+| Interfaccia WAN | Identifica il collegamento verso modem o Internet. |
+| Interfaccia LAN / associazione subnet-ingresso | Collega reti locali e VLAN alle interfacce da cui devono arrivare i pacchetti. |
+| WAN e LAN sulla stessa interfaccia | Supporta topologie a singola scheda o bond, nelle quali la distinzione dipende dalle subnet configurate. |
+| Reti LAN | Definisce le reti IPv4 locali, in notazione CIDR. |
+| NAT / masquerade | Permette alle subnet configurate di utilizzare l'indirizzo di uscita della WAN. |
+| Interfacce di uscita NAT | Limita l'applicazione del masquerade alle uscite specificate. |
+| Clamp MSS | Adatta la dimensione TCP al percorso, utile ad esempio con PPPoE e VPN. |
+| IP forwarding | Consente al kernel Linux di instradare pacchetti fra interfacce. |
+| Forza DNS locale / IP DNS | Reindirizza le richieste DNS TCP/UDP 53 delle LAN configurate al resolver scelto. |
+| Blocca DNS-over-TLS | Filtra la porta 853 secondo la policy; non equivale a bloccare tutto il DNS-over-HTTPS. |
 
-## Recupero regole DoT e DNS (da 5.30.11)
+**Routing e servizi** raccoglie le funzioni di rete del gateway. **Porte inoltrate** permette di preparare regole NAT per pubblicare un servizio interno attraverso una porta esterna, definendo destinazione e protocollo. L'inoltro deve essere accompagnato da una policy di accesso coerente.
 
-**Problema corretto:** in 5.30.9–5.30.10 il form Setup non includeva i controlli `dns_redirect`, `dot_block`, `dns_ip` benché il controller potesse azzerare le prime due opzioni. Riaprendo e salvando Setup si potevano perdere i blocchi `IPTM:dot` (FORWARD TCP/UDP 853) e `IPTM:dns-redir` (PREROUTING TCP/UDP 53) dalla bozza, perfino senza chiedere di disattivarli. Il messaggio «ingresso non verificato» è informativo e non deve essere interpretato come richiesta di eliminazione.
+### VPN e IPv6
 
-La pagina **Setup → Protezione DNS LAN** espone nuovamente i tre controlli. In caso di mismatch fra file persistente e bozza, appare il pulsante **Ripristina DoT/DNS dal file su disco (solo bozza)**: il recupero controlla il numero, i protocolli, i CIDR LAN, l'IP DNS di destinazione e le azioni di tutte le regole. Se non coincidono, non modifica nulla. Sincronizza opzioni e bozza, non tocca il kernel né `rules.v4`. La rigenerazione preserva i blocchi presenti in bozza anche se i flag salvati risultano inattivi; un'eventuale rimozione intenzionale richiede una conferma esplicita.
+**VPN e tunnel** mostra i tunnel rilevati e le impostazioni WireGuard. Le autorizzazioni per le reti dei peer, l'accesso alle LAN, il forwarding e il NAT vanno configurati in base al ruolo del tunnel. Consentire la navigazione via VPN non implica consentire l'accesso a ogni servizio locale.
 
-La pagina **Applica** impedisce di applicare o scrivere permanentemente una bozza priva dei blocchi DoT/DNS ancora presenti in `rules.v4` senza una conferma separata. Nessuna modifica alla policy `FORWARD DROP`, alle eccezioni IoT/MAC o all'anti-spoofing. Se l'ingresso LAN non è verificato, i vincoli per subnet sorgente rimangono, ma non sono una misura completa contro lo spoofing; usare le interfacce LAN verificate quando possibile. Questo aggiornamento non aggiunge un blocco DoH sulla 443 e non modifica la configurazione Pi-hole/Unbound/DNSCrypt.
+**IPv6** permette di gestire il ruleset IPv6 e le relative protezioni. **Conversione IPv6** prepara una proposta partendo da regole IPv4 e da una mappatura delle reti; NAT IPv4, ICMPv4 e moduli incompatibili non vengono convertiti automaticamente. La proposta deve essere verificata separatamente.
 
-Test offline: `php tests/test_dns_guard_preservation_5311.php`, oltre alle suite di regressione firewall, IoT, ingress e QoS. Prima di applicare sul gateway verificare **bozza → differenze**, eseguire il preflight e applicare con watchdog/rollback SSH.
+### Qualità del traffico — SQM / CAKE
+
+![Pipeline di gestione del traffico](docs/images/qos-pipeline.svg)
+
+SQM riduce l'accumulo di pacchetti nelle code del collegamento (bufferbloat) mediante il controllo della banda e la gestione delle code.
+
+| Opzione | Funzione |
+| --- | --- |
+| WAN e velocità download/upload | Selezionano l'interfaccia da controllare e i limiti di shaping. |
+| Calibrazione manuale | Misura la capacità del collegamento; lo shaping CAKE viene temporaneamente sospeso quando la procedura lo consente e poi ripristinato. |
+| Controllo orario | Osserva la qualità del collegamento; non va confuso con uno speedtest continuo. |
+| Regolatore RTT adattivo | Usa misure di latenza per il controllo adattivo opzionale. |
+| Diffserv | Seleziona la modalità best effort, diffserv3, diffserv4 o diffserv8 per la gestione delle classi. |
+| NAT, Wash DSCP, ACK filter | Opzioni CAKE per riconoscimento dei flussi dietro NAT, trattamento delle marcature DSCP e filtraggio degli ACK. |
+| Priorità applicative | Regole DSCP IPv4 per protocollo, porta, classe, rete opzionale e direzione (upload/download). |
+| Proprietà qdisc | Mostra la disciplina di coda attiva e le condizioni per IFB e shaping bidirezionale. |
+
+Il riconoscimento Layer 7 consulta i protocolli applicativi osservati nei log Suricata EVE; l'analisi dei processi usa i socket locali Linux. Queste due viste sono diagnostiche, non classificatori DPI inline dei client LAN. La disponibilità di CAKE/IFB e della classificazione in download dipende dal kernel e dalla topologia.
+
+**Prestazioni firewall** consente di analizzare l'overhead delle regole e gli indicatori disponibili senza modificare automaticamente le policy.
+
+## Rete locale e dispositivi
+
+![Segmentazione della rete e accessi](docs/images/zones-access.svg)
+
+| Pagina | Utilizzo |
+| --- | --- |
+| **Dispositivi** | Inventario dei dispositivi riconosciuti, associazione delle identità e accesso alle relative impostazioni. |
+| **Zone e isolamento** | Definisce separazioni tra reti e dispositivi, regole IoT e accessi fra zone. |
+| **Permessi di accesso** | Configura le autorizzazioni tra dispositivi, reti e servizi disponibili. |
+| **Attività dispositivi** | Visualizza i flussi osservati dal router; non rappresenta necessariamente tutti i byte o le richieste DNS del dispositivo. |
+| **Servizi e porte** | Consulta servizi e porte e gestisce le opzioni di accesso disponibili. |
+
+**Zone e isolamento** offre modalità di protezione basate su MAC per traffico instradato e modalità VLAN per segmenti distinti. Per una rete IoT instradata sono disponibili la scelta dell'interfaccia, della subnet, del DNS locale, del comportamento IPv6 (blocco del forwarding o routing con isolamento), dei resolver noti da bloccare, del filtro QUIC e di un profilo di uscita restrittivo HTTP/HTTPS. Questi filtri possono interferire con alcune applicazioni e non garantiscono di eliminare ogni tunnel su HTTPS. Due dispositivi nella stessa rete di livello 2 possono comunicare senza attraversare IPTM: per separarli occorre una configurazione coerente di switch o access point.
+
+## DNS e privacy
+
+![Percorso delle richieste DNS](docs/images/dns-flow.svg)
+
+### Resolver DNS e Pi-hole
+
+- **Resolver DNS:** informazioni e impostazioni dei resolver locali e dei componenti rilevati.
+- **Filtri Pi-hole:** gestione delle liste di blocco, autorizzazioni e importazioni supportate; richiede Pi-hole disponibile.
+- **Salute Pi-hole:** verifica dello stato e della raggiungibilità locale, distinguendo i controlli sul router dalle prove da un client LAN.
+- **Unbound:** profili bilanciato, restrittivo e compatibile; opzioni di minimizzazione QNAME, hardening DNSSEC, privacy dell'identità e riduzione dei log. Le modifiche gestite sono validate e accompagnate da backup.
+- **Audit DNS:** controlli in sola lettura sui resolver e sulla configurazione di privacy.
+
+### DNS, TLS e Anti-DPI
+
+La procedura guidata permette di preparare una catena DNS con i componenti disponibili e controllare la configurazione prima dell'attivazione.
+
+| Opzione | Funzione |
+| --- | --- |
+| DNSCrypt-proxy | Resolver cifrati, configurazione del primario/secondario, stamp DNS e bootstrap facoltativo. |
+| Prova con rollback | Verifica di una configurazione DNSCrypt con possibilità di recupero. |
+| TLS/SNI osservato | Diagnostica degli eventi TLS disponibili e, se configurato, osservazione mediante regole Suricata per domini selezionati. |
+| Anti-DPI | Gestione dei componenti Zapret2 e Zapret classico quando rilevati, con configurazioni e controlli dedicati. |
+| Protezione DNS LAN | Le regole di reindirizzamento DNS e di blocco DoT si configurano nella pagina WAN, LAN e NAT. |
+
+Pi-hole, Unbound e DNSCrypt possono svolgere ruoli differenti (filtraggio, risoluzione ricorsiva o inoltro cifrato). La concatenazione dipende da porte e configurazione effettive: lo schema illustrativo non prescrive un percorso obbligatorio.
+
+## Protezione e firewall
+
+### Firewall: policy di sicurezza
+
+Le opzioni della pagina Firewall sono organizzate in gruppi:
+
+| Gruppo | Cosa permette di configurare |
+| --- | --- |
+| Protezione firewall | Policy di base, controllo dello stato delle connessioni (SPI), filtraggio di pacchetti anomali e anti-spoofing. |
+| Perimetro WAN e rate limit | Filtri WAN, ping, multicast, IDENT e limiti per traffico o connessioni anomale. |
+| LAN, segmentazione e dispositivi | Reti ospiti, isolamento delle subnet, politiche MAC e quarantena. |
+| Controllo avanzato e ALG | Controlli aggiuntivi, limiti e helper NAT disponibili. |
+| Accesso alla gestione web | Restrizione delle reti autorizzate a raggiungere la console. |
+| ICMP, flood e servizi LAN | Gestione del traffico ICMP, protezioni contro flood e regole per i servizi locali. |
+| Accesso servizi e anti brute-force | Impostazioni di accesso, SSH e protezioni dei tentativi ripetuti; opzioni di port knocking se configurate. |
+| Chiusura e policy finale | Comportamento per traffico e porte non autorizzati. |
+| Anti-lockout e hardening avanzato | Reti amministrative distinte, continuità dell'accesso e protezioni aggiuntive dell'host. |
+
+La rete amministrativa deve essere identificabile e non coincidere automaticamente con tutte le reti di transito. In presenza di più LAN impostare esplicitamente le reti che devono amministrare il gateway.
+
+### Editor e revisione delle regole
+
+| Pagina | Funzione |
+| --- | --- |
+| **Regole firewall** | Consulta e filtra le regole per tabella e catena; gestisci l'ordine e le modifiche in bozza. |
+| **Nuova regola** | Definisci protocollo, sorgente e destinazione, interfacce, porte, stato conntrack, target, posizione e commenti; supporta anche opzioni iptables avanzate. |
+| **Procedura guidata** | Prepara regole mediante una sequenza guidata di parametri. |
+| **Catene** | Gestisci catene e policy di default ACCEPT/DROP. |
+| **Analizza rules.v4** | Analizza le regole persistenti e propone correzioni, ridondanze e incoerenze senza applicarle automaticamente. |
+| **Editor regole** | Modifica il testo in formato iptables-restore nella bozza. |
+| **Conversione manuale** | Strumenti di conversione delle regole e preparazione del formato utilizzabile dall'editor. |
+
+INPUT regola i pacchetti destinati al gateway; FORWARD quelli che lo attraversano; OUTPUT il traffico originato dal gateway. L'ordine delle regole è fondamentale: una decisione definitiva precedente può rendere irraggiungibile quella successiva.
+
+### Sicurezza integrata
+
+| Componente / pagina | Funzioni disponibili |
+| --- | --- |
+| **CrowdSec** | Stato motore e bouncer, decisioni, alert, metriche, scenari, collezioni, feed, simulazione e integrazione firewall. L'effettivo blocco richiede un bouncer configurato e operativo. |
+| **Suricata** | Stato del motore e consultazione delle rilevazioni; l'azione preventiva dipende dalla modalità e dal punto di aggancio effettivi. |
+| **Liste e GeoIP** | Gestione di liste di indirizzi da filtrare e opzioni geografiche disponibili; verificare le fonti e l'aggiornamento dei dati. |
+| **Hardening** | Verifica dei parametri sysctl di rete e configurazione controllata delle protezioni del kernel. |
+| **Antivirus** | Verifica hash, URL e scansioni di file mediante servizi configurati; ClamAV locale e VirusTotal richiedono i rispettivi componenti/credenziali. Il caricamento di file verso servizi esterni può condividere il contenuto. |
+| **Analisi HTTPS** | Integrazione con proxy esplicito mitmproxy/ClamAV per soli client e reti autorizzati; non intercetta automaticamente tutto il traffico. Richiede configurazione dedicata e fiducia del client nel certificato. |
+| **Attacchi** | Aggrega pattern rilevati dai log, sorgenti sospette e porte colpite; può arricchire gli indicatori tramite fonti esterne opzionali. |
+
+## Sistema e strumenti
+
+### Applicazione sicura
+
+![Flusso di verifica, applicazione e recupero](docs/images/safe-apply.svg)
+
+La pagina **Applica configurazione** confronta bozza e regole persistenti, esegue controlli preliminari e consente l'applicazione con watchdog e rollback. Confermare il salvataggio definitivo soltanto dopo aver verificato che l'accesso amministrativo e la connettività necessaria siano disponibili. Le regole create dinamicamente da altri programmi possono richiedere il ripristino tramite i rispettivi servizi.
+
+### Centro operativo e manutenzione
+
+| Pagina | Funzione |
+| --- | --- |
+| Centro operativo | Stato dei processi e collegamenti ai controlli principali. |
+| Diagnostica / Salute sistema | Errori, preflight, componenti, permessi, audit DietPi e strumenti di verifica disponibili (incluso Lynis se installato). |
+| Log / Cronologia | Eventi firewall e operazioni registrate. |
+| Controllo dopo apply | Verifiche successive all'applicazione. |
+| Analisi pacchetti | Analisi del percorso previsto dai criteri delle regole; non sostituisce una cattura del traffico reale. |
+| Impatto regole / Consigli | Confronto e indicazioni sulle configurazioni. |
+| Servizi / Programmi | Stato e gestione dei componenti supportati. |
+| Ricerca avanzata | Ricerca di regole e informazioni disponibili. |
+| Configurazione iniziale / Piano di sicurezza | Preparazione di un profilo di base o di un piano di protezione, con verifica prima di applicarlo. |
+| Importa regole | Importazione delle regole da elaborare e verificare. |
+| Utenti | Gestione degli accessi alla console. |
+| Nuove opzioni / Guida | Configurazione guidata delle funzioni disponibili e guida integrata. |
+
+### Backup, aggiornamenti e pulizia
+
+**Backup, importazione e ripristino** esporta le impostazioni IPTM e le bozze IPv4/IPv6; l'importazione prepara i dati in bozza. L'esportazione JSON v2 non comprende credenziali o chiavi e non sostituisce il backup dei servizi o del sistema operativo.
+
+**Pulizia** configura la politica di conservazione dei backup e delle release, l'anteprima degli elementi eliminabili e la rotazione periodica. Configurazioni attive, recuperi in corso e backup protetti non sono candidati alla normale rotazione.
+
+**Aggiornamenti** installa pacchetti Native Update compatibili, verificando versione, struttura e integrità. Supporta il caricamento ZIP e il download tramite URL, anche HTTP con SHA-256 esterno attendibile. La firma digitale è facoltativa; quando è presente e verificabile viene controllata. L'hash non autentica da solo l'autore del pacchetto.
+
+## Esempi operativi
+
+### 1. Separare una rete IoT
+
+1. In **Interfacce, VLAN e DHCP**, individua la scheda e la VLAN, oppure prepara il segmento dedicato.
+2. In **WAN, LAN e NAT**, associa la subnet all'interfaccia corretta.
+3. In **Zone e isolamento**, definisci il DNS locale, la policy verso le reti fidate e il comportamento IPv6.
+4. Controlla la bozza e applicala con rollback. Verifica navigazione, DNS e impossibilità di raggiungere le risorse locali non autorizzate da un dispositivo IoT reale.
+
+### 2. Migliorare la latenza sotto carico
+
+1. Apri **Qualità del traffico**, seleziona la WAN ed esegui la calibrazione a collegamento libero.
+2. Imposta i limiti download/upload e un profilo CAKE compatibile.
+3. Prepara eventuali priorità DSCP; verifica qdisc, IFB e condizioni di attivazione.
+4. Misura latenza e throughput con traffico reale prima e dopo l'applicazione.
+
+### 3. Consentire un servizio dalla VPN
+
+1. Verifica tunnel e subnet peer in **VPN e tunnel**.
+2. Identifica indirizzo e porta del servizio interno.
+3. Prepara un permesso limitato a sorgente VPN, destinazione e servizio necessari.
+4. Verifica il forwarding e il percorso di ritorno, quindi prova l'accesso senza aprire la gestione alle altre reti.
+
+## Installazione e aggiornamento
+
+IPTM richiede un gateway Linux Debian/DietPi con systemd, Python 3, PHP 8 o superiore, Bash, sudo e iptables, oltre a un server web già configurato per eseguire PHP. Il kernel e i pacchetti opzionali devono supportare le funzioni che si vogliono utilizzare.
+
+- **Prima installazione:** consulta la [guida dell'installer](installer/LEGGIMI_INSTALLAZIONE.md). Utilizza un pacchetto di prima installazione compatibile; un Native Update non è un installer completo.
+- **Installazione esistente:** dalla pagina **Sistema e strumenti → Aggiornamenti**, carica il pacchetto Native Update dell'[ultima release](https://github.com/Graycius/IPTM/releases/latest). In alternativa usa l'URL del pacchetto e, per HTTP, lo SHA-256 ottenuto da una fonte attendibile indipendente.
+- **Accesso:** apri `http://IP_DEL_SERVER/iptables-manager.php` sulla porta del server PHP configurato. Mantieni la console accessibile soltanto da reti amministrative fidate; HTTP non cifra le credenziali.
+
+Prima di modificare una configurazione di rete conserva un backup e un percorso di recupero locale.
+
+## Requisiti e limiti
+
+IPTM utilizza PHP per la console, JavaScript per l'interfaccia e componenti Python/Bash con helper privilegiato per interagire con Linux. Le integrazioni (NetworkManager, Pi-hole, Unbound, DNSCrypt, WireGuard, CrowdSec, Suricata e altre) dipendono dall'installazione e dalla configurazione reali. La gestione IPv4 e IPv6 non è integralmente equivalente; le policy IPv6 richiedono verifica dedicata. Il firewall controlla il traffico che lo attraversa, non quello scambiato direttamente fra client sullo stesso segmento L2. I controlli offline del codice non sostituiscono il collaudo sul gateway.
+
+## Licenza e risorse
+
+- [Licenza GNU GPL](LICENSE)
+- [Release e pacchetti](https://github.com/Graycius/IPTM/releases)
+- [Segnalazioni e problemi](https://github.com/Graycius/IPTM/issues)
+- [Politica di sicurezza](SECURITY.md)
