@@ -46,10 +46,23 @@ $bad['svc_in']=[['on'=>1,'proto'=>'','ports'=>'','act'=>'ACCEPT','src'=>'172.16.
 [$sec,$warn]=gen_sections($bad);must(!getsec($sec,'svc-in-a'),'wildcard protocol accepted');
 $tpl='*filter\n:INPUT DROP [0:0]\n:FORWARD DROP [0:0]\n:OUTPUT ACCEPT [0:0]\nCOMMIT\n';
 $M=parse_rules(str_replace('\\n',"\n",$tpl));$s=S_def();$s['lan_nets']='192.168.50.0/24,10.77.0.0/24';$s['wan_if']='bond0';$s['single_nic']=1;$s['spi']=1;$s['lan_out_fwd']=1;$s['dot_block']=1;$s['ssh_acc']=1;$s['ssh_nets']=$s['lan_nets'];$s['lockout_on']=1;
+// Multiple LANs must not silently become management networks.
+[$ambiguous,$ambiguousWarnings]=gen_sections($s);
+must(!getsec($ambiguous,'lockout'),'Ambiguous LANs implicitly granted management access');
+$s['mgmt_nets']='192.168.50.0/24';
 regen($M,$s);$serialized=ser($M);
 $positions=array_map(fn($x)=>strpos($serialized,'# >>> IPTM:'.$x),['dot','lan-out','ssh-acc','lockout']);
 must($positions[0]!==false&&$positions[1]!==false&&$positions[0]<$positions[1],'DoT shadowed by lan-out after regen');
 must($positions[2]!==false&&$positions[3]!==false&&$positions[2]<$positions[3],'SSH rate limits bypassed by unrestricted lockout');
+[$explicit]=gen_sections($s);
+$lockRules=getsec($explicit,'lockout')['rules']??[];
+must(count($lockRules)>0,'Explicit management network has no lockout rules');
+foreach($lockRules as $rule){
+    must(str_contains($rule,'-s 192.168.50.0/24 '),'Lockout escaped explicit management network');
+    if(preg_match('/--dports?\s+(\S+)/',$rule,$ports))
+        must(!in_array((string)$s['ssh_acc_port'],explode(',',$ports[1]),true),'SSH port bypasses rate limits through lockout');
+    else must(false,'Lockout missing port constraint');
+}
 must(str_contains($serialized,':IPTM-LAN-EGRESS -'),'no custom egress chain');
 $again=$M;regen($again,$s);must(ser($again)===$serialized,'regen not idempotent');
 // Exhaustive 4-state combinations for every pair in the extended option list.
