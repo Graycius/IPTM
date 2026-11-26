@@ -79,7 +79,7 @@ jobs:
           report_dir="$(mktemp -d "$RUNNER_TEMP/iptm-gitleaks.XXXXXX")"
           trap 'rm -rf "$report_dir"' EXIT
           status=0
-          docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$report_dir:/report" ghcr.io/gitleaks/gitleaks:v8.30.0 git /repo --redact=100 --no-banner --log-opts=--all --report-format=json --report-path=/report/findings.json || status=$?
+          docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$report_dir:/report" ghcr.io/gitleaks/gitleaks:v8.30.0 git /repo --gitleaks-ignore-path=/repo/.gitleaksignore --ignore-gitleaks-allow --redact=100 --no-banner --log-opts=--all --report-format=json --report-path=/report/findings.json || status=$?
           if [ -f "$report_dir/findings.json" ]; then
             python3 - "$report_dir/findings.json" <<'PY'
           import json, re, sys
