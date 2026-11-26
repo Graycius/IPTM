@@ -75,7 +75,32 @@ jobs:
           persist-credentials: false
       - name: Gitleaks Git history scan (redacted; blocking)
         run: |
-          docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:v8.30.0 git /repo --redact=100 --no-banner --log-opts=--all
+          set -euo pipefail
+          report_dir="$(mktemp -d "$RUNNER_TEMP/iptm-gitleaks.XXXXXX")"
+          trap 'rm -rf "$report_dir"' EXIT
+          status=0
+          docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$report_dir:/report" ghcr.io/gitleaks/gitleaks:v8.30.0 git /repo --redact=100 --no-banner --log-opts=--all --report-format=json --report-path=/report/findings.json || status=$?
+          if [ -f "$report_dir/findings.json" ]; then
+            python3 - "$report_dir/findings.json" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          findings = json.loads(Path(sys.argv[1]).read_text()) or []
+          print("Gitleaks metadata only:", len(findings), "findings")
+          for finding in findings:
+              rule = str(finding.get("RuleID", "unknown"))
+              file = str(finding.get("File", "unknown"))
+              commit = str(finding.get("Commit", ""))
+              if not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,240}", file):
+                  file = "[nonstandard path]"
+              if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", rule):
+                  rule = "[unknown rule]"
+              if not re.fullmatch(r"[a-fA-F0-9]{40,64}", commit):
+                  commit = "[unknown commit]"
+              line = finding.get("StartLine")
+              print("Finding metadata:", rule, file, line if isinstance(line, int) else "?", commit)
+          PY
+          fi
+          exit "$status"
   dependencies:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -116,6 +141,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Diagnose manifest mismatches (read-only)
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          manifest = json.loads(pathlib.Path("native-manifest.json").read_text())["sha256"]
+          names = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\\0")
+          prefixes = ("actions/", "assets/", "extensions/", "loader/", "modules/", "runtime/")
+          tracked = {name for name in names if name == "CHANGELOG.md" or name.startswith(prefixes)}
+          for name in sorted(tracked - set(manifest)):
+              print("Unlisted source:", name)
+          for name in sorted(set(manifest) - tracked):
+              print("Missing source:", name)
+          for name in sorted(tracked & set(manifest)):
+              if hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() != manifest[name]:
+                  print("SHA-256 mismatch:", name)
+          PY
       - name: Build and verify native package (no release publication)
         run: |
           python tools/build_native_update.py
