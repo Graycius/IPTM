@@ -1,0 +1,76 @@
+name: Publish IPTM 6.0.8
+on:
+  push:
+    branches: [main]
+    paths: ['release/IPTM_6.0.8_UPDATE.zip']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: iptm-publish-6-0-8
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Validate and import original package
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, re, zipfile, stat
+          root = pathlib.Path.cwd()
+          archive = root / 'release/IPTM_6.0.8_UPDATE.zip'
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert digest == '9cf42513802c05a16b87969125d76d730e3b20d63f61e913ce14ae45071c1150', 'Unexpected archive SHA256'
+          def allowed(name):
+              return name == 'CHANGELOG.md' or bool(re.fullmatch(r'(actions|assets|extensions|loader|modules|runtime)/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*', name)) and all(x not in ('.','..') for x in name.split('/'))
+          with zipfile.ZipFile(archive) as z:
+              names = z.namelist()
+              assert len(names) == len(set(names)), 'Duplicate ZIP entries'
+              manifest_bytes = z.read('native-manifest.json')
+              manifest = json.loads(manifest_bytes)
+              assert manifest['version'] == '6.0.8'
+              files = manifest['sha256']
+              assert set(names) == set(files) | {'native-manifest.json'}
+              for name, expected in files.items():
+                  assert allowed(name), name
+                  info = z.getinfo(name)
+                  assert not stat.S_ISLNK(info.external_attr >> 16), name
+                  assert hashlib.sha256(z.read(name)).hexdigest() == expected, name
+              old = json.loads((root/'native-manifest.json').read_text())['sha256']
+              for name in set(old) - set(files):
+                  assert allowed(name), name
+                  (root/name).unlink(missing_ok=True)
+              for name in files:
+                  dest = root/name
+                  dest.parent.mkdir(parents=True, exist_ok=True)
+                  dest.write_bytes(z.read(name))
+                  if (z.getinfo(name).external_attr >> 16) & 0o111:
+                      dest.chmod(0o755)
+              (root/'native-manifest.json').write_bytes(manifest_bytes)
+              (root/'release/IPTM_6.0.8_UPDATE.zip.sha256').write_text(digest+'  '+archive.name+'\n')
+          PY
+      - name: Commit imported source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- CHANGELOG.md native-manifest.json actions assets extensions loader modules runtime release/IPTM_6.0.8_UPDATE.zip.sha256
+          if ! git diff --cached --quiet; then
+            git commit -m 'Release IPTM 6.0.8: HTTP updates with optional signatures'
+            git push origin HEAD:main
+          fi
+      - name: Publish release and original ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          if gh release view v6.0.8 >/dev/null 2>&1; then
+            test "$(git rev-parse 'v6.0.8^{commit}' 2>/dev/null || git ls-remote origin 'refs/tags/v6.0.8^{}' | cut -f1)" = "$sha" || { echo 'Existing tag differs; manual review needed'; exit 1; }
+            gh release upload v6.0.8 release/IPTM_6.0.8_UPDATE.zip release/IPTM_6.0.8_UPDATE.zip.sha256
+          else
+            gh release create v6.0.8 release/IPTM_6.0.8_UPDATE.zip release/IPTM_6.0.8_UPDATE.zip.sha256 --target "$sha" --title 'IPTM 6.0.8' --notes 'Aggiornamenti HTTP senza firma obbligatoria, controllo SHA-256 mantenuto. Include le correzioni firewall 6.0.7.'
+          fi
