@@ -10,6 +10,10 @@ Aprire una pull request interna verso main. Nella scheda Actions si trovano i co
 
 Il workflow richiede una revisione per le PR interne non in bozza. Il token GitHub Actions può essere non idoneo (HTTP 422 ACTOR_INELIGIBLE). Se l'account dispone di Copilot Code Review, creare un fine-grained personal access token limitato a IPTM, con Pull requests: Read and write, scadenza breve. Inserirlo come repository secret IPTM_COPILOT_TOKEN. Non inserirlo nel repository o in chat. In alternativa, abilitare la revisione nativa in Settings se disponibile. Un errore rimane visibile: non viene simulata una revisione riuscita.
 
+## CodeRabbit e Qodo (facoltativi)
+
+Sono già presenti i file di configurazione `.coderabbit.yaml` e `.pr_agent.toml`. Per rendere operative queste integrazioni, autorizzare rispettivamente [CodeRabbit](https://github.com/marketplace/coderabbitai) e [Qodo Merge](https://github.com/marketplace/qodo-merge-pro-for-open-source) limitando l'accesso a Graycius/IPTM e verificando le condizioni del piano. La sola presenza dei file non prova che le app siano installate. Non sono richieste se si preferiscono i workflow API qui sotto.
+
 ## OpenAI, Gemini, Claude (facoltativi)
 
 Aprire Settings > Secrets and variables > Actions. In Secrets aggiungere solo le chiavi dei provider desiderati:
