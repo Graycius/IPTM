@@ -29,7 +29,7 @@ def shared_transport():
     if source.parent.name == 'runtime':
         module=source.parent.parent/'extensions'/'command_transport.py'
     else:
-        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/command_transport.py')
+        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.9/extensions/command_transport.py')
     if not module.is_file() or module.is_symlink():
         raise OSError('Trasporto IPTM assente o non sicuro')
     cached=getattr(shared_transport,'_module',None)

@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   request-review:
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.type != 'Bot'
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.author_association == 'OWNER' && github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -36,8 +36,12 @@ jobs:
               "X-GitHub-Api-Version": "2026-03-10",
               "User-Agent": "IPTM-advisory-review",
           })
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          opener = urllib.request.build_opener(NoRedirect())
           try:
-              with urllib.request.urlopen(request, timeout=30) as response:
+              with opener.open(request, timeout=30) as response:
                   if response.status != 201:
                       raise SystemExit(f"Unexpected HTTP status: {response.status}")
               message = "Copilot review requested; results will appear on the pull request."

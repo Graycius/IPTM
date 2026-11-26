@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   review:
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.author_association == 'OWNER'
+    if: github.event.repository.private == false && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.author_association == 'OWNER'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -81,7 +81,7 @@ jobs:
               if (pr["head"]["sha"] != os.environ["HEAD_SHA"] or
                   pr["head"]["repo"]["full_name"] != repo or
                   pr["author_association"] != "OWNER" or pr["draft"] or
-                  pr["base"]["ref"] != "main" or pr["state"] != "open"):
+                  pr["base"]["ref"] != "main" or pr["base"]["repo"]["private"] or pr["state"] != "open"):
                   summary("NOT RUN: PR changed or is no longer eligible.")
                   raise SystemExit(0)
               files = request(base + "/files?per_page=50", gh)

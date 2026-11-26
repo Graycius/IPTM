@@ -1,3 +1,9 @@
+## 6.0.9 — Verifiche di sicurezza e integrità
+
+- Ripristinati i controlli obbligatori di sicurezza nelle operazioni firewall IPv4/IPv6 e nelle impostazioni.
+- Pi-hole: unione non distruttiva delle prenotazioni DHCP, backup e verifica del ripristino.
+- Manifest riallineato ai sorgenti e riferimenti della release aggiornati. Compatibilità HTTP invariata.
+
 ## 6.0.8 — Aggiornamenti HTTP senza firma obbligatoria
 
 - ZIP non firmati ammessi anche con chiave Ed25519 configurata. Le firme presenti vengono verificate quando la chiave attendibile è disponibile; firme malformate o non valide non vengono accettate.
