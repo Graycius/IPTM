@@ -164,7 +164,7 @@ jobs:
       - name: Confirm source manifest unchanged
         run: git diff --exit-code -- native-manifest.json
   exhaustive:
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.exhaustive == true)
+    if: github.event_name == 'schedule' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && inputs.exhaustive == true)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
