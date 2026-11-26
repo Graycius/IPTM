@@ -10,14 +10,14 @@ concurrency:
   cancel-in-progress: true
 jobs:
   request-review:
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.type != 'Bot'
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.author_association == 'OWNER' && github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
       # Do not checkout or execute code from the pull request.
       - name: Request advisory Copilot review
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.IPTM_COPILOT_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         shell: bash
@@ -36,8 +36,12 @@ jobs:
               "X-GitHub-Api-Version": "2026-03-10",
               "User-Agent": "IPTM-advisory-review",
           })
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          opener = urllib.request.build_opener(NoRedirect())
           try:
-              with urllib.request.urlopen(request, timeout=30) as response:
+              with opener.open(request, timeout=30) as response:
                   if response.status != 201:
                       raise SystemExit(f"Unexpected HTTP status: {response.status}")
               message = "Copilot review requested; results will appear on the pull request."
@@ -52,7 +56,7 @@ jobs:
                           reason = " (" + value + ")"
                   except (ValueError, AttributeError):
                       pass
-                  message = f"Copilot review not requested: HTTP {exc.code}{reason}. Check eligibility, quota and repository permissions."
+                  message = f"Copilot review not requested: HTTP {exc.code}{reason}. Check eligibility, quota and repository permissions. For an eligible user, configure IPTM_COPILOT_TOKEN with Pull requests: write."
                   print("::warning::" + message)
                   with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
                       summary.write(message + "\n")
