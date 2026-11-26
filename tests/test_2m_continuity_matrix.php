@@ -2,7 +2,7 @@
 /**
  * Deterministic 2,097,152-scenario regression for IPTM rule generator.
  * Only builds memory models. NEVER invokes iptables or modifies rules.v4.
- * php -d memory_limit=256M tests/test_2m_matrix.php
+ * php -d memory_limit=256M tests/test_2m_continuity_matrix.php
  */
 declare(strict_types=1);
 require __DIR__ . '/bootstrap.php';
@@ -69,8 +69,11 @@ foreach ($profiles as $pi=>$top) {
             'Input conntrack return missing', $cases,$top['name'],$mask);
         if ($returnFw) check2m(in_array('-A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT',$returnFw['rules'],true),
             'Forward conntrack return missing', $cases,$top['name'],$mask);
-        if ($safeOn && $top['okLan'] > 0) check2m($lockout !== null,
-            'Admin LAN access not generated', $cases,$top['name'],$mask);
+        // Current security policy: fallback administration is allowed only for one
+        // unambiguous LAN. Multiple LANs require explicit management CIDRs.
+        $needsMgmt = $safeOn || !empty($s['spi']) || !empty($s['final_drop']) || !empty($s['lockout_on']);
+        check2m(($lockout !== null) === ($needsMgmt && $top['okLan'] === 1),
+            'Implicit management scope differs from single-LAN policy', $cases,$top['name'],$mask);
         check2m(!in_array('lan-tcp',$names,true) && !in_array('docker-net',$names,true),'Legacy wildcard INPUT generated',$cases,$top['name'],$mask);
         check2m(!in_array('raw-lo-pre',$names,true) && !in_array('raw-lo-out',$names,true),'Raw no-track unexpectedly enabled',$cases,$top['name'],$mask);
         check2m((bool)$raw === (bool)($s['raw_drop'] && $top['okWan']),'Raw drop wrong interface scope',$cases,$top['name'],$mask);
@@ -105,8 +108,23 @@ $bad['ssh_acc']=1;$bad['lockout_on']=1;$bad['raw_drop']=1;$bad['wan_if']='eth0 -
 [$sec,$warn]=gen_sections($bad);
 check2m(sec2m($sec,'raw-drop')===null,'Invalid WAN created raw drop',$cases,'attack',0);
 $ssh=sec2m($sec,'ssh-acc');
-check2m($ssh!==null && count($ssh['rules'])===3,'Unsafe SSH networks survived',$cases,'attack',0);
-foreach($ssh['rules'] as $r)check2m(str_contains($r,'-s 192.168.50.0/24'),'SSH network not sanitized',$cases,'attack',0);
+check2m($ssh!==null && count($ssh['rules'])===4,'Unsafe SSH networks survived',$cases,'attack',0);
+foreach($ssh['rules'] as $r) {
+    if (str_contains($r,'--ctstate NEW')) check2m(str_contains($r,'-s 192.168.50.0/24'),'SSH network not sanitized',$cases,'attack',0);
+    else check2m(str_contains($r,'--ctstate ESTABLISHED,RELATED'),'Unexpected unrestricted SSH rule',$cases,'attack',0);
+}
+// Explicit management on a multi-LAN topology must not admit the other LAN.
+$explicit=S_def();$explicit['lan_nets']='192.168.50.0/24,10.77.0.0/24';
+$explicit['mgmt_nets']='192.168.50.0/24';$explicit['lockout_on']=1;
+$explicit['ssh_acc']=1;$explicit['ssh_nets']='192.168.50.0/24';
+[$explicitSections]=gen_sections($explicit);
+$explicitLock=sec2m($explicitSections,'lockout');
+$explicitSsh=sec2m($explicitSections,'ssh-acc');
+check2m($explicitLock!==null && $explicitSsh!==null && $explicitSsh['pr']<$explicitLock['pr'],'Explicit admin SSH order',$cases,'explicit',0);
+foreach($explicitLock['rules'] as $rule) {
+    check2m(str_contains($rule,'-s 192.168.50.0/24 '),'Explicit admin scope widened',$cases,'explicit',0);
+    check2m(preg_match('/--dports?\s+(\S+)/',$rule,$ports)===1 && !in_array('22',explode(',',$ports[1]),true),'SSH bypass in lockout',$cases,'explicit',0);
+}
 $al=['ports'=>['miss'=>'','db'=>'2375','range'=>'2300:2400','ssh'=>'22','safe'=>'9000']];
 $rows=[];foreach(['miss','db','range','ssh','safe'] as $p)$rows[]=['on'=>1,'proto'=>'tcp','ports'=>'@'.$p,'act'=>'ACCEPT','src'=>'192.168.50.0/24'];
 $rules=svc_rules('INPUT',$rows,$al);
@@ -130,7 +148,7 @@ foreach ([0,1] as $safe) {
     check2m(($safe && count($warn)>0)||!$safe, 'Continuity warnings not visible',$cases,'targeted',$safe);
 }
 $report=[
- 'version'=>'5.20.29', 'result'=>'PASS', 'scenarios'=>$cases,
+ 'version'=>'6.0.9', 'result'=>'PASS', 'scenarios'=>$cases,
  'assertions'=>$assertions, 'option_count'=>count($flags), 'continuity_priority_tested'=>true,
  'topologies'=>$families, 'method'=>'16 full 2^17 state spaces, exhaustive for selected flags on each selected topology',
  'coverage'=>'Selected 17 flags exhaustively crossed with 16 topologies and targeted high-risk toggles; does not prove real-client connectivity',
