@@ -23,7 +23,7 @@ import resource
 
 from network_audit import MAX_FILE_BYTES, MAX_FILES, audit, validate_dhcp
 
-VERSION = '6.0.8'
+VERSION = '6.0.9'
 ROOT = Path('/')
 SNAPSHOTS = Path('/var/lib/iptm-network-guard/snapshots')
 ID_RE = re.compile(r'^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$')

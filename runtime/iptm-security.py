@@ -32,7 +32,7 @@ def iptm_capture(argv, **options):
     if source.parent.name == 'runtime':
         module=source.parent.parent/'extensions'/'command_transport.py'
     else:
-        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.8/extensions/command_transport.py')
+        module=Path('/usr/local/lib/iptables-manager/web/releases/6.0.9/extensions/command_transport.py')
     if not module.is_file() or module.is_symlink():
         raise OSError('Trasporto IPTM assente o non sicuro')
     cached=getattr(iptm_capture,'_module',None)
@@ -341,7 +341,7 @@ def pihole_health():
             continue
         uri = f"{'https' if secure else 'http'}://{target}:{port}/admin/"
         try:
-            req = urllib.request.Request(uri, headers={'User-Agent':'IPTM-local-health/6.0.8'})
+            req = urllib.request.Request(uri, headers={'User-Agent':'IPTM-local-health/6.0.9'})
             handler = urllib.request.HTTPSHandler(context=ssl._create_unverified_context()) if secure else urllib.request.HTTPHandler()
             client = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(), handler)
             with client.open(req, timeout=2.0) as response:
@@ -450,7 +450,7 @@ def parse_oui(text):
 
 def update_oui():
     if os.geteuid()!=0: raise ValueError('aggiornamento vendor riservato a root')
-    req=urllib.request.Request(IEEE_OUI,headers={'User-Agent':'IPTM-security/6.0.8'})
+    req=urllib.request.Request(IEEE_OUI,headers={'User-Agent':'IPTM-security/6.0.9'})
     class SecureRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, request, fp, code, msg, headers, newurl):
             url=urllib.parse.urlsplit(newurl)

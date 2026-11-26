@@ -23,7 +23,7 @@ import time
 import secrets
 from datetime import datetime, timezone
 
-VERSION='6.0.8'
+VERSION='6.0.9'
 CONFIG_CANDIDATES=(Path('/etc/dnscrypt-proxy/dnscrypt-proxy.toml'),Path('/etc/dnscrypt-proxy.toml'))
 BACKUP=Path('/var/lib/iptables-manager/backups/dns-guard')
 EVE=Path('/var/log/suricata/eve.json')
