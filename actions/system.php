@@ -173,7 +173,7 @@ case 'sec_preset': {
                 }
             }
             // Changing a UI form does not apply kernel sysctl. Use Hardening → preview/apply explicitly.
-            if (!empty($_POST['apply'])) { if (apply_result(do_apply(ROLLBACK_SECS, '4', true, true))) flash('Impostazioni applicate in prova: verifica la rete e conferma.'); $back = 'p=apply'; }
+            if (!empty($_POST['apply'])) { if (apply_result(do_apply(ROLLBACK_SECS))) flash('Impostazioni applicate in prova: verifica la rete e conferma.'); $back = 'p=apply'; }
             break;
         }
         case 'settings_reset': {
